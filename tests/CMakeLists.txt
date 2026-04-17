@@ -10,3 +10,8 @@ add_executable(test_hot_buffer unit/test_hot_buffer.cpp)
 target_link_libraries(test_hot_buffer PRIVATE budyk_hot_buffer budyk_core)
 target_include_directories(test_hot_buffer PRIVATE ${CMAKE_SOURCE_DIR}/src)
 add_test(NAME test_hot_buffer COMMAND test_hot_buffer)
+
+add_executable(test_scheduler unit/test_scheduler.cpp)
+target_link_libraries(test_scheduler PRIVATE budyk_scheduler budyk_core)
+target_include_directories(test_scheduler PRIVATE ${CMAKE_SOURCE_DIR}/src)
+add_test(NAME test_scheduler COMMAND test_scheduler)
