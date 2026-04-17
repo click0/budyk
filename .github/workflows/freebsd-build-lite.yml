@@ -38,7 +38,7 @@ jobs:
             set -ex
 
             echo "::group::Install dependencies"
-            sudo pkg install -y cmake pkgconf lua54
+            sudo pkg install -y cmake pkgconf lua54 libyaml
             echo "::endgroup::"
 
             echo "::group::System info"
