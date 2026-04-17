@@ -1,0 +1,108 @@
+name: FreeBSD Build (full)
+
+# Full build + ctest on a FreeBSD matrix.
+# Runs on:
+#   * push to main       (gates mainline);
+#   * pull_request → main (gates merge);
+#   * weekly cron         (catches bit-rot from pkg / base updates);
+#   * workflow_dispatch   (manual).
+#
+# Fast smoke-check for feature branches lives in freebsd-build-lite.yml.
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.github/workflows/freebsd-build-lite.yml'
+      - '.github/workflows/linux-build.yml'
+  pull_request:
+    branches: [main]
+  schedule:
+    # Every Monday 04:00 UTC — catches regressions from pkg updates.
+    - cron: '0 4 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        freebsd-version: ['14.2', '15.0']
+    name: FreeBSD ${{ matrix.freebsd-version }} full
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build + test on FreeBSD
+        uses: cross-platform-actions/action@v0.32.0
+        timeout-minutes: 45
+        with:
+          operating_system: freebsd
+          version: ${{ matrix.freebsd-version }}
+          shell: sh
+          memory: 6G
+          cpu_count: 3
+          run: |
+            set -ex
+
+            echo "::group::Install dependencies"
+            sudo pkg install -y cmake pkgconf lua54
+            echo "::endgroup::"
+
+            echo "::group::System info"
+            uname -a
+            c++ --version
+            NCPU=$(sysctl -n hw.ncpu)
+            JOBS=$(( NCPU < 3 ? NCPU : 2 ))
+            echo "ncpu=$NCPU jobs=$JOBS"
+            df -h
+            echo "::endgroup::"
+
+            echo "::group::Configure"
+            cmake -B build \
+              -DBUDYK_PLATFORM=freebsd \
+              -DSTATIC_LINK=OFF \
+              -DBUILD_TESTS=ON
+            echo "::endgroup::"
+
+            echo "::group::Build"
+            cmake --build build -j"$JOBS"
+            ls -la build/src/budyk || true
+            file build/src/budyk || true
+            echo "::endgroup::"
+
+            echo "::group::Run ctest"
+            ctest --test-dir build --output-on-failure
+            echo "::endgroup::"
+
+            echo "::group::Disk usage"
+            df -h
+            du -sh build 2>/dev/null || true
+            echo "::endgroup::"
+
+      - name: Upload budyk binary
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: budyk-${{ matrix.freebsd-version }}
+          path: |
+            build/src/budyk
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload test logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctest-logs-${{ matrix.freebsd-version }}
+          path: build/Testing/
+          if-no-files-found: ignore
+          retention-days: 14

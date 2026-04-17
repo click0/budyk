@@ -1,0 +1,65 @@
+name: Linux Build
+
+# Fast feedback loop: configure + build + ctest on an Ubuntu runner.
+# No FreeBSD VM. Core/codec/hot_buffer/etc. are pure C++17 and compile on
+# Linux via -DBUDYK_PLATFORM=linux.
+#
+# This complements the FreeBSD workflows — it is the cheapest signal and
+# runs on every push/PR.
+
+on:
+  push:
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.github/workflows/freebsd-build.yml'
+      - '.github/workflows/freebsd-build-lite.yml'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    name: Linux build + ctest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain and dependencies
+        run: |
+          set -ex
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            cmake g++ pkg-config \
+            liblua5.4-dev libyaml-dev libargon2-dev libncurses-dev
+          cmake --version | head -1
+          g++ --version | head -1
+
+      - name: Configure
+        run: |
+          set -ex
+          cmake -B build \
+            -DBUDYK_PLATFORM=linux \
+            -DSTATIC_LINK=OFF \
+            -DBUILD_TESTS=ON
+
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
+      - name: Run ctest
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Upload test logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctest-logs-linux
+          path: build/Testing/
+          if-no-files-found: ignore
+          retention-days: 7

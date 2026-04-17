@@ -1,0 +1,66 @@
+name: FreeBSD Build (lite)
+
+# Quick compile + ctest smoke on a single FreeBSD version.
+# Runs on push to any non-main branch for fast feedback during development.
+# The full matrix + PR gate lives in freebsd-build.yml.
+
+on:
+  push:
+    branches-ignore: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.github/workflows/freebsd-build.yml'
+      - '.github/workflows/linux-build.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    name: FreeBSD 14.2 lite (build + ctest)
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build + test on FreeBSD
+        uses: cross-platform-actions/action@v0.32.0
+        timeout-minutes: 20
+        with:
+          operating_system: freebsd
+          version: '14.2'
+          shell: sh
+          run: |
+            set -ex
+
+            echo "::group::Install dependencies"
+            sudo pkg install -y cmake pkgconf lua54
+            echo "::endgroup::"
+
+            echo "::group::System info"
+            uname -a
+            c++ --version
+            NCPU=$(sysctl -n hw.ncpu)
+            # Cap parallelism to avoid VM OOM on larger objects.
+            JOBS=$(( NCPU < 3 ? NCPU : 2 ))
+            echo "ncpu=$NCPU jobs=$JOBS"
+            echo "::endgroup::"
+
+            echo "::group::Configure"
+            cmake -B build \
+              -DBUDYK_PLATFORM=freebsd \
+              -DSTATIC_LINK=OFF \
+              -DBUILD_TESTS=ON
+            echo "::endgroup::"
+
+            echo "::group::Build"
+            cmake --build build -j"$JOBS"
+            echo "::endgroup::"
+
+            echo "::group::Run ctest"
+            ctest --test-dir build --output-on-failure
+            echo "::endgroup::"
