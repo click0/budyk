@@ -1,0 +1,47 @@
+.\" SPDX-License-Identifier: BSD-3-Clause
+.TH BUDYK 8 "2026-04-17" "budyk 0.1.0"
+.SH NAME
+budyk \- lightweight server monitoring with adaptive collection
+.SH SYNOPSIS
+.B budyk
+.I command
+.RI [ options ]
+.SH COMMANDS
+.TP
+.B serve
+Start the monitoring daemon and web server.
+.TP
+.B tui
+Start the terminal UI.
+.TP
+.B hash\-password
+Generate an Argon2id password hash for web authentication.
+.TP
+.B suggest\-rules
+Generate monitoring rule suggestions from collected history.
+.TP
+.B version
+Print version and exit.
+.SH DESCRIPTION
+budyk is a self-contained server monitoring daemon. It collects system
+metrics using an adaptive 3-level model (heartbeat / watchful / active),
+stores them in tiered ring-buffer files, and serves them via a real-time
+web dashboard and terminal TUI.
+.PP
+Monitoring rules are written in Lua and evaluated on each collection tick.
+.SH FILES
+.TP
+.I /usr/local/etc/budyk/config.yaml
+Main configuration file.
+.TP
+.I /usr/local/etc/budyk/rules.lua
+Lua monitoring rules.
+.TP
+.I /var/db/budyk/
+Ring-buffer data directory.
+.SH LICENSE
+BSD-3-Clause
+.SH SEE ALSO
+.BR top (1),
+.BR sysctl (8),
+.BR monit (1)

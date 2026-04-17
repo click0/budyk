@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: BSD-3-Clause
+services:
+  budyk:
+    build: ../..
+    dockerfile: addons/docker/Dockerfile
+    pid: host
+    network_mode: host
+    volumes:
+      - ./config.yaml:/etc/budyk/config.yaml:ro
+      - budyk_data:/var/db/budyk
+    restart: unless-stopped
+
+volumes:
+  budyk_data:

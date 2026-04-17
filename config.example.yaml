@@ -1,0 +1,41 @@
+# budyk — configuration
+# See: https://github.com/USER/budyk
+
+listen: "127.0.0.1"
+port: 8080
+data_dir: "/var/db/budyk"
+
+collection:
+  mode: adaptive          # always | adaptive | on-demand
+  l1:
+    interval: 300          # seconds (heartbeat)
+    metrics: minimal
+  l2:
+    interval: 30           # seconds
+    always_on: false
+    escalation_thresholds:
+      load_1m: 4.0
+      cpu_percent: 85
+      swap_used_percent: 50
+    hysteresis: 300        # seconds before de-escalation
+  l3:
+    interval: 1            # seconds
+    metrics: full
+    grace_period: 60       # seconds after last client disconnects
+  hot_buffer:
+    capacity: 300          # records (= 5 min at 1 Hz)
+    warm_grace: 60         # seconds
+
+storage:
+  tier1_max_mb: 250
+  tier2_max_mb: 150
+  tier3_max_mb: 50
+
+rules:
+  path: "/usr/local/etc/budyk/rules.lua"
+  enable_exec: false       # set true + --enable-exec flag to allow exec()
+
+web:
+  auth:
+    enabled: false
+    # password_hash: "$argon2id$..."   # generate with: budyk hash-password

@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: BSD-3-Clause
+[Unit]
+Description=budyk — lightweight server monitoring
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/budyk serve --config /etc/budyk/config.yaml
+Restart=on-failure
+RestartSec=5
+User=budyk
+Group=budyk
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/db/budyk
+
+[Install]
+WantedBy=multi-user.target
