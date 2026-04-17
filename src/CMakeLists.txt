@@ -77,6 +77,11 @@ add_library(budyk_web STATIC
     web/auth.cpp
 )
 target_link_libraries(budyk_web PRIVATE budyk_core)
+# Argon2id for password hashing (spec §3.2). Required at v1.0.
+find_library(ARGON2_LIB argon2 REQUIRED)
+find_path(ARGON2_INCLUDE_DIR argon2.h REQUIRED)
+target_link_libraries(budyk_web PRIVATE ${ARGON2_LIB})
+target_include_directories(budyk_web PRIVATE ${ARGON2_INCLUDE_DIR})
 # TODO: link mongoose or libwebsockets
 
 # TUI
