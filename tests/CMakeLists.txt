@@ -10,3 +10,8 @@ add_executable(test_hot_buffer unit/test_hot_buffer.cpp)
 target_link_libraries(test_hot_buffer PRIVATE budyk_hot_buffer budyk_core)
 target_include_directories(test_hot_buffer PRIVATE ${CMAKE_SOURCE_DIR}/src)
 add_test(NAME test_hot_buffer COMMAND test_hot_buffer)
+
+add_executable(test_ring_file unit/test_ring_file.cpp)
+target_link_libraries(test_ring_file PRIVATE budyk_storage budyk_core)
+target_include_directories(test_ring_file PRIVATE ${CMAKE_SOURCE_DIR}/src)
+add_test(NAME test_ring_file COMMAND test_ring_file)
