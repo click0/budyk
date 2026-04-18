@@ -50,6 +50,18 @@ int budyk_collect_memory_linux(budyk_sample_c* s);
 int budyk_collect_load_linux  (budyk_sample_c* s);
 int budyk_collect_uptime_linux(budyk_sample_c* s);
 
+// CPU collection requires state across ticks — the ctx carries the
+// previous /proc/stat snapshot for delta computation. Initialise the
+// struct to all zeros before the first call. The first call records
+// a baseline and sets cpu.total_percent to 0.
+typedef struct {
+    uint64_t busy;      // user + nice + system + irq + softirq + steal
+    uint64_t total;     // busy + idle + iowait
+    int      has_prev;
+} budyk_cpu_ctx_c;
+
+int budyk_collect_cpu_linux(budyk_cpu_ctx_c* ctx, budyk_sample_c* s);
+
 #ifdef __cplusplus
 }
 #endif
