@@ -1,18 +1,45 @@
 # SPDX-License-Identifier: BSD-3-Clause
 [Unit]
-Description=budyk — lightweight server monitoring
-After=network.target
+Description=budyk — lightweight server monitoring with adaptive collection
+Documentation=man:budyk(8)
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/budyk serve --config /etc/budyk/config.yaml
 Restart=on-failure
 RestartSec=5
+
 User=budyk
 Group=budyk
+
+# Sandboxing
 NoNewPrivileges=yes
 ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+# Filesystem
 ReadWritePaths=/var/db/budyk
+ReadOnlyPaths=/etc/budyk
+
+# Resource limits
+LimitNOFILE=4096
+UMask=0027
 
 [Install]
 WantedBy=multi-user.target

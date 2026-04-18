@@ -1,5 +1,7 @@
 bin/budyk
-etc/budyk/config.example.yaml
+etc/rc.d/budyk
+@sample etc/budyk/config.example.yaml
 share/budyk/rules/examples.lua
 share/budyk/rules/freebsd-defaults.lua
 man/man8/budyk.8.gz
+@dir(%%BUDYK_USER%%,%%BUDYK_GROUP%%,0750) /var/db/budyk
