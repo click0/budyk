@@ -12,10 +12,15 @@ namespace budyk {
 
 struct LuaRule {
     std::string name;
-    int         when_ref;       // LUA_REGISTRYINDEX ref
-    int         action_ref;     // LUA_REGISTRYINDEX ref, or LUA_REFNIL
-    std::string action_tag;     // "alert" / "log" / "" if action_ref is set
+    int         when_ref;          // LUA_REGISTRYINDEX ref
+    int         action_ref;        // LUA_REGISTRYINDEX ref, or LUA_REFNIL
+    std::string action_tag;        // "alert" / "log" / "" if action_ref is set
     uint64_t    fire_count;
+
+    int         for_ticks;         // consecutive true evaluations needed to fire
+    int         cooldown_ticks;    // ticks to skip after firing (default: for_ticks)
+    int         consecutive_hits;  // runtime: current streak of true evaluations
+    int         cooldown_remaining;// runtime: ticks left before rule becomes active again
 };
 
 // Embedded Lua 5.4 rule engine (spec §3.6).
@@ -42,7 +47,8 @@ public:
     // Called by the watch() C binding. Public so the binding can reach
     // the engine via the Lua registry without any friendship gymnastics.
     void add_rule(const std::string& name, int when_ref, int action_ref,
-                  const std::string& action_tag);
+                  const std::string& action_tag,
+                  int for_ticks, int cooldown_ticks);
 
 private:
     lua_State*           L_               = nullptr;
