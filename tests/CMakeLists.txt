@@ -31,6 +31,11 @@ target_link_libraries(test_baseline PRIVATE budyk_ai budyk_core)
 target_include_directories(test_baseline PRIVATE ${CMAKE_SOURCE_DIR}/src)
 add_test(NAME test_baseline COMMAND test_baseline)
 
+add_executable(test_suggest unit/test_suggest.cpp)
+target_link_libraries(test_suggest PRIVATE budyk_ai budyk_core)
+target_include_directories(test_suggest PRIVATE ${CMAKE_SOURCE_DIR}/src)
+add_test(NAME test_suggest COMMAND test_suggest)
+
 add_executable(test_auth unit/test_auth.cpp)
 target_link_libraries(test_auth PRIVATE budyk_web budyk_core)
 target_include_directories(test_auth PRIVATE ${CMAKE_SOURCE_DIR}/src)
