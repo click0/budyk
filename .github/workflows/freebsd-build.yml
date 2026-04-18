@@ -54,7 +54,7 @@ jobs:
             set -ex
 
             echo "::group::Install dependencies"
-            sudo pkg install -y cmake pkgconf lua54 libyaml
+            sudo pkg install -y cmake pkgconf lua54 libyaml libargon2
             echo "::endgroup::"
 
             echo "::group::System info"
