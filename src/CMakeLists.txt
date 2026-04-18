@@ -45,6 +45,7 @@ target_link_libraries(budyk_hot_buffer PRIVATE budyk_core)
 add_library(budyk_storage STATIC
     storage/ring_file.cpp
     storage/tier_manager.cpp
+    storage/tier_aggregator.cpp
     storage/codec.cpp
 )
 target_link_libraries(budyk_storage PRIVATE budyk_core)
