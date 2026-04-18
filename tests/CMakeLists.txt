@@ -21,6 +21,11 @@ target_link_libraries(test_ring_file PRIVATE budyk_storage budyk_core)
 target_include_directories(test_ring_file PRIVATE ${CMAKE_SOURCE_DIR}/src)
 add_test(NAME test_ring_file COMMAND test_ring_file)
 
+add_executable(test_tier_aggregator unit/test_tier_aggregator.cpp)
+target_link_libraries(test_tier_aggregator PRIVATE budyk_storage budyk_core)
+target_include_directories(test_tier_aggregator PRIVATE ${CMAKE_SOURCE_DIR}/src)
+add_test(NAME test_tier_aggregator COMMAND test_tier_aggregator)
+
 add_executable(test_baseline unit/test_baseline.cpp)
 target_link_libraries(test_baseline PRIVATE budyk_ai budyk_core)
 target_include_directories(test_baseline PRIVATE ${CMAKE_SOURCE_DIR}/src)
@@ -30,6 +35,11 @@ add_executable(test_suggest unit/test_suggest.cpp)
 target_link_libraries(test_suggest PRIVATE budyk_ai budyk_core)
 target_include_directories(test_suggest PRIVATE ${CMAKE_SOURCE_DIR}/src)
 add_test(NAME test_suggest COMMAND test_suggest)
+
+add_executable(test_auth unit/test_auth.cpp)
+target_link_libraries(test_auth PRIVATE budyk_web budyk_core)
+target_include_directories(test_auth PRIVATE ${CMAKE_SOURCE_DIR}/src)
+add_test(NAME test_auth COMMAND test_auth)
 
 if(BUDYK_PLATFORM STREQUAL "linux")
     add_executable(test_linux_collector unit/test_linux_collector.cpp)
