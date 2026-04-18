@@ -36,12 +36,26 @@ typedef struct {
 } budyk_load_c;
 
 typedef struct {
+    uint64_t read_bytes_per_sec;
+    uint64_t write_bytes_per_sec;
+    uint32_t device_count;
+} budyk_disk_c;
+
+typedef struct {
+    uint64_t rx_bytes_per_sec;
+    uint64_t tx_bytes_per_sec;
+    uint32_t interface_count;
+} budyk_net_c;
+
+typedef struct {
     uint64_t     timestamp_nanos;
     uint8_t      level;
     budyk_cpu_c  cpu;
     budyk_mem_c  mem;
     budyk_swap_c swap;
     budyk_load_c load;
+    budyk_disk_c disk;
+    budyk_net_c  net;
     double       uptime_seconds;
 } budyk_sample_c;
 
@@ -61,6 +75,28 @@ typedef struct {
 } budyk_cpu_ctx_c;
 
 int budyk_collect_cpu_linux(budyk_cpu_ctx_c* ctx, budyk_sample_c* s);
+
+// Disk / network collection also needs across-tick state — both accumulate
+// monotonic byte counters and compute per-second rates from the delta.
+// Caller must set s->timestamp_nanos before the call; collector uses the
+// elapsed wall-clock since the previous call to divide the byte delta.
+// First call records the baseline and sets rates to 0.
+typedef struct {
+    uint64_t prev_read_sectors;   // summed across whole-disk devices
+    uint64_t prev_write_sectors;
+    uint64_t prev_ns;
+    int      has_prev;
+} budyk_disk_ctx_c;
+
+typedef struct {
+    uint64_t prev_rx_bytes;       // summed across non-loopback interfaces
+    uint64_t prev_tx_bytes;
+    uint64_t prev_ns;
+    int      has_prev;
+} budyk_net_ctx_c;
+
+int budyk_collect_disk_linux   (budyk_disk_ctx_c* ctx, budyk_sample_c* s);
+int budyk_collect_network_linux(budyk_net_ctx_c*  ctx, budyk_sample_c* s);
 
 #ifdef __cplusplus
 }
