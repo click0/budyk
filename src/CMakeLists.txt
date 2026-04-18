@@ -45,6 +45,7 @@ target_link_libraries(budyk_hot_buffer PRIVATE budyk_core)
 add_library(budyk_storage STATIC
     storage/ring_file.cpp
     storage/tier_manager.cpp
+    storage/tier_aggregator.cpp
     storage/codec.cpp
 )
 target_link_libraries(budyk_storage PRIVATE budyk_core)
@@ -77,6 +78,11 @@ add_library(budyk_web STATIC
     web/auth.cpp
 )
 target_link_libraries(budyk_web PRIVATE budyk_core)
+# Argon2id for password hashing (spec §3.2). Required at v1.0.
+find_library(ARGON2_LIB argon2 REQUIRED)
+find_path(ARGON2_INCLUDE_DIR argon2.h REQUIRED)
+target_link_libraries(budyk_web PRIVATE ${ARGON2_LIB})
+target_include_directories(budyk_web PRIVATE ${ARGON2_INCLUDE_DIR})
 # TODO: link mongoose or libwebsockets
 
 # TUI
@@ -95,6 +101,10 @@ add_library(budyk_config STATIC
     config/config.cpp
 )
 target_link_libraries(budyk_config PRIVATE budyk_core)
+find_library(YAML_LIB yaml REQUIRED)
+find_path(YAML_INCLUDE_DIR yaml.h REQUIRED)
+target_link_libraries(budyk_config PRIVATE ${YAML_LIB})
+target_include_directories(budyk_config PRIVATE ${YAML_INCLUDE_DIR})
 
 # Main binary
 add_executable(budyk main.cpp)
