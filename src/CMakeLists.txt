@@ -101,6 +101,10 @@ add_library(budyk_config STATIC
     config/config.cpp
 )
 target_link_libraries(budyk_config PRIVATE budyk_core)
+find_library(YAML_LIB yaml REQUIRED)
+find_path(YAML_INCLUDE_DIR yaml.h REQUIRED)
+target_link_libraries(budyk_config PRIVATE ${YAML_LIB})
+target_include_directories(budyk_config PRIVATE ${YAML_INCLUDE_DIR})
 
 # Main binary
 add_executable(budyk main.cpp)
