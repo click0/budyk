@@ -3,15 +3,18 @@ name: Release binaries
 # Builds release tarballs for Linux (x86_64) and FreeBSD (14.2, 15.0 — amd64)
 # when a semver tag is pushed, or on manual workflow_dispatch.
 #
-# Outputs per platform, uploaded as workflow artefacts:
-#   budyk-<version>-<platform>.tar.gz — contains:
-#     budyk                — the daemon binary
-#     README, LICENSE,
-#     docs/budyk.8         — man page
-#     CHANGELOG.md         — release notes
+# Two variants per platform:
+#   budyk-<version>-<platform>.tar.gz          Release, stripped (distribution).
+#   budyk-<version>-<platform>-debug.tar.gz    RelWithDebInfo, unstripped —
+#                                              same code-gen, full DWARF for gdb(1)
+#                                              / lldb(1) post-mortem / crash-dump
+#                                              analysis.
 #
-# When the trigger is a tag, the tarballs and their SHA256 sums are also
-# attached to the GitHub Release named after the tag.
+# Each tarball contains budyk + LICENSE + README.md + CHANGELOG.md +
+# docs/budyk.8 and is accompanied by a .sha256 sidecar.
+#
+# When the trigger is a tag, all tarballs and their SHA256 sums are attached
+# to the GitHub Release named after the tag.
 
 on:
   push:
@@ -58,12 +61,12 @@ jobs:
           echo "Resolved version: ${VER}"
 
   # ----------------------------------------------------------------------
-  # 2. Linux x86_64 build.
+  # 2. Linux x86_64 build — Release + RelWithDebInfo.
   # ----------------------------------------------------------------------
   linux:
     needs: meta
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     name: Linux amd64
     steps:
       - uses: actions/checkout@v4
@@ -78,52 +81,76 @@ jobs:
             cmake g++ pkg-config \
             liblua5.4-dev libyaml-dev libargon2-dev libncurses-dev
 
-      - name: Configure + build
+      - name: Build Release (stripped)
         run: |
           set -ex
-          cmake -B build \
+          cmake -B build-release \
             -DBUDYK_PLATFORM=linux \
             -DSTATIC_LINK=OFF \
             -DBUILD_TESTS=OFF \
             -DCMAKE_BUILD_TYPE=Release
-          cmake --build build -j"$(nproc)"
-          strip build/src/budyk || true
-          file build/src/budyk
+          cmake --build build-release -j"$(nproc)"
+          strip build-release/src/budyk || true
+          file build-release/src/budyk
 
-      - name: Stage tarball
+      - name: Build RelWithDebInfo (debug symbols kept)
+        run: |
+          set -ex
+          cmake -B build-debug \
+            -DBUDYK_PLATFORM=linux \
+            -DSTATIC_LINK=OFF \
+            -DBUILD_TESTS=OFF \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          cmake --build build-debug -j"$(nproc)"
+          # Do NOT strip — the debug tarball is for post-mortem / gdb.
+          file build-debug/src/budyk
+
+      - name: Stage tarballs
         env:
           VER: ${{ needs.meta.outputs.version }}
         run: |
           set -ex
-          STAGE="budyk-${VER}-linux-amd64"
-          mkdir -p "$STAGE"
-          cp build/src/budyk   "$STAGE/"
-          cp LICENSE           "$STAGE/"
-          [ -f README.md    ] && cp README.md    "$STAGE/" || true
-          [ -f CHANGELOG.md ] && cp CHANGELOG.md "$STAGE/" || true
-          mkdir -p "$STAGE/docs"
-          [ -f docs/budyk.8 ] && cp docs/budyk.8 "$STAGE/docs/" || true
-          tar -czf "${STAGE}.tar.gz" "$STAGE"
-          sha256sum "${STAGE}.tar.gz" > "${STAGE}.tar.gz.sha256"
-          ls -la "${STAGE}.tar.gz"*
+          for variant in release debug; do
+            if [ "$variant" = "release" ]; then
+              SRC=build-release/src/budyk
+              STAGE="budyk-${VER}-linux-amd64"
+            else
+              SRC=build-debug/src/budyk
+              STAGE="budyk-${VER}-linux-amd64-debug"
+            fi
+            mkdir -p "$STAGE"
+            cp "$SRC" "$STAGE/"
+            cp LICENSE "$STAGE/"
+            [ -f README.md    ] && cp README.md    "$STAGE/" || true
+            [ -f CHANGELOG.md ] && cp CHANGELOG.md "$STAGE/" || true
+            mkdir -p "$STAGE/docs"
+            [ -f docs/budyk.8 ] && cp docs/budyk.8 "$STAGE/docs/" || true
+            tar -czf "${STAGE}.tar.gz" "$STAGE"
+            sha256sum "${STAGE}.tar.gz" > "${STAGE}.tar.gz.sha256"
+          done
+          ls -la budyk-*.tar.gz*
 
-      - name: Upload artefact
+      - name: Upload artefacts
         uses: actions/upload-artifact@v4
         with:
           name: budyk-linux-amd64
           path: |
             budyk-*-linux-amd64.tar.gz
             budyk-*-linux-amd64.tar.gz.sha256
+            budyk-*-linux-amd64-debug.tar.gz
+            budyk-*-linux-amd64-debug.tar.gz.sha256
           if-no-files-found: error
           retention-days: 14
 
   # ----------------------------------------------------------------------
-  # 3. FreeBSD amd64 matrix (14.2 / 15.0).
+  # 3. FreeBSD amd64 matrix (14.2 / 15.0) — Release + RelWithDebInfo.
+  #    Both variants built inside the same VM run to avoid paying the
+  #    cross-platform-actions boot cost twice.
   # ----------------------------------------------------------------------
   freebsd:
     needs: meta
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 70
     strategy:
       fail-fast: false
       matrix:
@@ -136,7 +163,7 @@ jobs:
 
       - name: Build on FreeBSD
         uses: cross-platform-actions/action@v0.32.0
-        timeout-minutes: 45
+        timeout-minutes: 65
         env:
           VER: ${{ needs.meta.outputs.version }}
           FBSD: ${{ matrix.freebsd-version }}
@@ -154,40 +181,62 @@ jobs:
             sudo pkg install -y cmake pkgconf lua54 libyaml libargon2
             echo "::endgroup::"
 
-            echo "::group::Configure + build"
             NCPU=$(sysctl -n hw.ncpu)
             JOBS=$(( NCPU < 3 ? NCPU : 2 ))
-            cmake -B build \
+
+            echo "::group::Build Release (stripped)"
+            cmake -B build-release \
               -DBUDYK_PLATFORM=freebsd \
               -DSTATIC_LINK=OFF \
               -DBUILD_TESTS=OFF \
               -DCMAKE_BUILD_TYPE=Release
-            cmake --build build -j"$JOBS"
-            strip build/src/budyk || true
-            file build/src/budyk
+            cmake --build build-release -j"$JOBS"
+            strip build-release/src/budyk || true
+            file build-release/src/budyk
             echo "::endgroup::"
 
-            echo "::group::Stage tarball"
-            STAGE="budyk-${VER}-freebsd${FBSD}-amd64"
-            mkdir -p "$STAGE"
-            cp build/src/budyk "$STAGE/"
-            cp LICENSE         "$STAGE/"
-            [ -f README.md    ] && cp README.md    "$STAGE/" || true
-            [ -f CHANGELOG.md ] && cp CHANGELOG.md "$STAGE/" || true
-            mkdir -p "$STAGE/docs"
-            [ -f docs/budyk.8 ] && cp docs/budyk.8 "$STAGE/docs/" || true
-            tar -czf "${STAGE}.tar.gz" "$STAGE"
-            sha256 -r "${STAGE}.tar.gz" > "${STAGE}.tar.gz.sha256"
-            ls -la "${STAGE}.tar.gz"*
+            echo "::group::Build RelWithDebInfo (debug symbols kept)"
+            cmake -B build-debug \
+              -DBUDYK_PLATFORM=freebsd \
+              -DSTATIC_LINK=OFF \
+              -DBUILD_TESTS=OFF \
+              -DCMAKE_BUILD_TYPE=RelWithDebInfo
+            cmake --build build-debug -j"$JOBS"
+            # Do NOT strip.
+            file build-debug/src/budyk
             echo "::endgroup::"
 
-      - name: Upload artefact
+            echo "::group::Stage tarballs"
+            for variant in release debug; do
+              if [ "$variant" = "release" ]; then
+                SRC=build-release/src/budyk
+                STAGE="budyk-${VER}-freebsd${FBSD}-amd64"
+              else
+                SRC=build-debug/src/budyk
+                STAGE="budyk-${VER}-freebsd${FBSD}-amd64-debug"
+              fi
+              mkdir -p "$STAGE"
+              cp "$SRC" "$STAGE/"
+              cp LICENSE "$STAGE/"
+              [ -f README.md    ] && cp README.md    "$STAGE/" || true
+              [ -f CHANGELOG.md ] && cp CHANGELOG.md "$STAGE/" || true
+              mkdir -p "$STAGE/docs"
+              [ -f docs/budyk.8 ] && cp docs/budyk.8 "$STAGE/docs/" || true
+              tar -czf "${STAGE}.tar.gz" "$STAGE"
+              sha256 -r "${STAGE}.tar.gz" > "${STAGE}.tar.gz.sha256"
+            done
+            ls -la budyk-*.tar.gz*
+            echo "::endgroup::"
+
+      - name: Upload artefacts
         uses: actions/upload-artifact@v4
         with:
           name: budyk-freebsd-${{ matrix.freebsd-version }}-amd64
           path: |
             budyk-*-freebsd${{ matrix.freebsd-version }}-amd64.tar.gz
             budyk-*-freebsd${{ matrix.freebsd-version }}-amd64.tar.gz.sha256
+            budyk-*-freebsd${{ matrix.freebsd-version }}-amd64-debug.tar.gz
+            budyk-*-freebsd${{ matrix.freebsd-version }}-amd64-debug.tar.gz.sha256
           if-no-files-found: error
           retention-days: 14
 
