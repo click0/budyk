@@ -21,6 +21,11 @@ target_link_libraries(test_ring_file PRIVATE budyk_storage budyk_core)
 target_include_directories(test_ring_file PRIVATE ${CMAKE_SOURCE_DIR}/src)
 add_test(NAME test_ring_file COMMAND test_ring_file)
 
+add_executable(test_tier_aggregator unit/test_tier_aggregator.cpp)
+target_link_libraries(test_tier_aggregator PRIVATE budyk_storage budyk_core)
+target_include_directories(test_tier_aggregator PRIVATE ${CMAKE_SOURCE_DIR}/src)
+add_test(NAME test_tier_aggregator COMMAND test_tier_aggregator)
+
 if(BUDYK_PLATFORM STREQUAL "linux")
     add_executable(test_linux_collector unit/test_linux_collector.cpp)
     target_link_libraries(test_linux_collector PRIVATE budyk_collector)
