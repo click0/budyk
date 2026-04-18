@@ -1,0 +1,14 @@
+budyk (Ukrainian "будик" — alarm clock) is a lightweight, self-contained
+server monitoring daemon. Single static binary, no external dependencies,
+no database.
+
+Key features:
+  * 3-level adaptive collection (L1 heartbeat / L2 watchful / L3 active) —
+    the daemon truly sleeps when not needed and wakes up instantly.
+  * Tiered ring-buffer storage with CRC32C-protected records.
+  * Embedded Lua 5.4 rule engine with sandbox (no io/os/require).
+  * Real-time web dashboard with WebSocket catch-up.
+  * ncurses-based terminal UI.
+  * Argon2id password hashing per OWASP 2024.
+
+See %%DOCSDIR%%/config.example.yaml for a complete configuration schema.
