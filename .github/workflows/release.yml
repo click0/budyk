@@ -1,0 +1,228 @@
+name: Release binaries
+
+# Builds release tarballs for Linux (x86_64) and FreeBSD (14.2, 15.0 — amd64)
+# when a semver tag is pushed, or on manual workflow_dispatch.
+#
+# Outputs per platform, uploaded as workflow artefacts:
+#   budyk-<version>-<platform>.tar.gz — contains:
+#     budyk                — the daemon binary
+#     README, LICENSE,
+#     docs/budyk.8         — man page
+#     CHANGELOG.md         — release notes
+#
+# When the trigger is a tag, the tarballs and their SHA256 sums are also
+# attached to the GitHub Release named after the tag.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git ref to build (branch, tag, sha)'
+        required: false
+        default: ''
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write   # needed by softprops/action-gh-release
+
+jobs:
+  # ----------------------------------------------------------------------
+  # 1. Compute version string used in tarball names.
+  # ----------------------------------------------------------------------
+  meta:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      is_tag:  ${{ steps.v.outputs.is_tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - id: v
+        run: |
+          set -ex
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            VER="${GITHUB_REF_NAME#v}"
+            echo "is_tag=true" >> "$GITHUB_OUTPUT"
+          else
+            VER=$(sed -nE 's/.*project\(budyk VERSION ([0-9.]+).*/\1/p' CMakeLists.txt | head -1)
+            VER="${VER}-${GITHUB_SHA::8}"
+            echo "is_tag=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "version=${VER}" >> "$GITHUB_OUTPUT"
+          echo "Resolved version: ${VER}"
+
+  # ----------------------------------------------------------------------
+  # 2. Linux x86_64 build.
+  # ----------------------------------------------------------------------
+  linux:
+    needs: meta
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    name: Linux amd64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Install toolchain and dependencies
+        run: |
+          set -ex
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            cmake g++ pkg-config \
+            liblua5.4-dev libyaml-dev libargon2-dev libncurses-dev
+
+      - name: Configure + build
+        run: |
+          set -ex
+          cmake -B build \
+            -DBUDYK_PLATFORM=linux \
+            -DSTATIC_LINK=OFF \
+            -DBUILD_TESTS=OFF \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j"$(nproc)"
+          strip build/src/budyk || true
+          file build/src/budyk
+
+      - name: Stage tarball
+        env:
+          VER: ${{ needs.meta.outputs.version }}
+        run: |
+          set -ex
+          STAGE="budyk-${VER}-linux-amd64"
+          mkdir -p "$STAGE"
+          cp build/src/budyk   "$STAGE/"
+          cp LICENSE           "$STAGE/"
+          [ -f README.md    ] && cp README.md    "$STAGE/" || true
+          [ -f CHANGELOG.md ] && cp CHANGELOG.md "$STAGE/" || true
+          mkdir -p "$STAGE/docs"
+          [ -f docs/budyk.8 ] && cp docs/budyk.8 "$STAGE/docs/" || true
+          tar -czf "${STAGE}.tar.gz" "$STAGE"
+          sha256sum "${STAGE}.tar.gz" > "${STAGE}.tar.gz.sha256"
+          ls -la "${STAGE}.tar.gz"*
+
+      - name: Upload artefact
+        uses: actions/upload-artifact@v4
+        with:
+          name: budyk-linux-amd64
+          path: |
+            budyk-*-linux-amd64.tar.gz
+            budyk-*-linux-amd64.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  # ----------------------------------------------------------------------
+  # 3. FreeBSD amd64 matrix (14.2 / 15.0).
+  # ----------------------------------------------------------------------
+  freebsd:
+    needs: meta
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        freebsd-version: ['14.2', '15.0']
+    name: FreeBSD ${{ matrix.freebsd-version }} amd64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Build on FreeBSD
+        uses: cross-platform-actions/action@v0.32.0
+        timeout-minutes: 45
+        env:
+          VER: ${{ needs.meta.outputs.version }}
+          FBSD: ${{ matrix.freebsd-version }}
+        with:
+          operating_system: freebsd
+          version: ${{ matrix.freebsd-version }}
+          environment_variables: VER FBSD
+          shell: sh
+          memory: 6G
+          cpu_count: 3
+          run: |
+            set -ex
+
+            echo "::group::Install dependencies"
+            sudo pkg install -y cmake pkgconf lua54 libyaml libargon2
+            echo "::endgroup::"
+
+            echo "::group::Configure + build"
+            NCPU=$(sysctl -n hw.ncpu)
+            JOBS=$(( NCPU < 3 ? NCPU : 2 ))
+            cmake -B build \
+              -DBUDYK_PLATFORM=freebsd \
+              -DSTATIC_LINK=OFF \
+              -DBUILD_TESTS=OFF \
+              -DCMAKE_BUILD_TYPE=Release
+            cmake --build build -j"$JOBS"
+            strip build/src/budyk || true
+            file build/src/budyk
+            echo "::endgroup::"
+
+            echo "::group::Stage tarball"
+            STAGE="budyk-${VER}-freebsd${FBSD}-amd64"
+            mkdir -p "$STAGE"
+            cp build/src/budyk "$STAGE/"
+            cp LICENSE         "$STAGE/"
+            [ -f README.md    ] && cp README.md    "$STAGE/" || true
+            [ -f CHANGELOG.md ] && cp CHANGELOG.md "$STAGE/" || true
+            mkdir -p "$STAGE/docs"
+            [ -f docs/budyk.8 ] && cp docs/budyk.8 "$STAGE/docs/" || true
+            tar -czf "${STAGE}.tar.gz" "$STAGE"
+            sha256 -r "${STAGE}.tar.gz" > "${STAGE}.tar.gz.sha256"
+            ls -la "${STAGE}.tar.gz"*
+            echo "::endgroup::"
+
+      - name: Upload artefact
+        uses: actions/upload-artifact@v4
+        with:
+          name: budyk-freebsd-${{ matrix.freebsd-version }}-amd64
+          path: |
+            budyk-*-freebsd${{ matrix.freebsd-version }}-amd64.tar.gz
+            budyk-*-freebsd${{ matrix.freebsd-version }}-amd64.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  # ----------------------------------------------------------------------
+  # 4. Publish to GitHub Release when triggered by a tag push.
+  # ----------------------------------------------------------------------
+  publish:
+    needs: [meta, linux, freebsd]
+    if: needs.meta.outputs.is_tag == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: budyk-*
+          merge-multiple: true
+
+      - name: Show collected assets
+        run: |
+          set -ex
+          ls -la dist/
+          cat dist/*.sha256 || true
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: budyk ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          body_path: ${{ github.workspace }}/CHANGELOG.md
+          files: |
+            dist/*.tar.gz
+            dist/*.tar.gz.sha256
+          fail_on_unmatched_files: true
