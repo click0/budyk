@@ -90,18 +90,32 @@ int LuaEngine::eval_tick(const Sample& s) {
     last_fire_count_ = 0;
 
     for (auto& r : rules_) {
+        if (r.cooldown_remaining > 0) {
+            --r.cooldown_remaining;
+            continue;
+        }
+
         lua_rawgeti(L_, LUA_REGISTRYINDEX, r.when_ref);
         if (lua_pcall(L_, 0, 1, 0) != LUA_OK) {
             lua_pop(L_, 1);
+            r.consecutive_hits = 0;
             continue;
         }
-        const bool fired = lua_toboolean(L_, -1) != 0;
+        const bool hit = lua_toboolean(L_, -1) != 0;
         lua_pop(L_, 1);
 
-        if (!fired) continue;
+        if (!hit) {
+            r.consecutive_hits = 0;
+            continue;
+        }
+
+        ++r.consecutive_hits;
+        if (r.consecutive_hits < r.for_ticks) continue;
 
         ++last_fire_count_;
         ++r.fire_count;
+        r.consecutive_hits   = 0;
+        r.cooldown_remaining = r.cooldown_ticks;
 
         if (r.action_ref != LUA_REFNIL) {
             lua_rawgeti(L_, LUA_REGISTRYINDEX, r.action_ref);
@@ -120,8 +134,16 @@ bool LuaEngine::exec_enabled()    const { return exec_enabled_; }
 const std::vector<LuaRule>& LuaEngine::rules() const { return rules_; }
 
 void LuaEngine::add_rule(const std::string& name, int when_ref, int action_ref,
-                         const std::string& action_tag) {
-    rules_.push_back(LuaRule{name, when_ref, action_ref, action_tag, 0});
+                         const std::string& action_tag,
+                         int for_ticks, int cooldown_ticks) {
+    if (for_ticks      < 1) for_ticks      = 1;
+    if (cooldown_ticks < 0) cooldown_ticks = 0;   // default: no cooldown
+    rules_.push_back(LuaRule{
+        name, when_ref, action_ref, action_tag,
+        /*fire_count*/ 0,
+        for_ticks, cooldown_ticks,
+        /*consecutive_hits*/ 0, /*cooldown_remaining*/ 0
+    });
 }
 
 } // namespace budyk

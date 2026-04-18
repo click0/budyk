@@ -21,6 +21,14 @@ budyk::LuaEngine* engine_from(lua_State* L) {
     return eng;
 }
 
+int opt_int_field(lua_State* L, int tbl, const char* key, int fallback) {
+    lua_getfield(L, tbl, key);
+    int v = fallback;
+    if (lua_isnumber(L, -1)) v = static_cast<int>(lua_tointeger(L, -1));
+    lua_pop(L, 1);
+    return v;
+}
+
 int l_watch(lua_State* L) {
     const char* name = luaL_checkstring(L, 1);
     luaL_checktype(L, 2, LUA_TTABLE);
@@ -46,14 +54,19 @@ int l_watch(lua_State* L) {
         action_tag = "alert";
     }
 
+    // opts.for_ticks + opts.cooldown — optional integers. for_ticks
+    // defaults to 1 (fire immediately). cooldown defaults to for_ticks.
+    const int for_ticks      = opt_int_field(L, 2, "for_ticks", 1);
+    const int cooldown_ticks = opt_int_field(L, 2, "cooldown",  -1);
+
     auto* eng = engine_from(L);
     if (eng == nullptr) {
-        if (when_ref != LUA_REFNIL)   luaL_unref(L, LUA_REGISTRYINDEX, when_ref);
+        if (when_ref   != LUA_REFNIL) luaL_unref(L, LUA_REGISTRYINDEX, when_ref);
         if (action_ref != LUA_REFNIL) luaL_unref(L, LUA_REGISTRYINDEX, action_ref);
         return luaL_error(L, "watch: engine not bound");
     }
 
-    eng->add_rule(name, when_ref, action_ref, action_tag);
+    eng->add_rule(name, when_ref, action_ref, action_tag, for_ticks, cooldown_ticks);
     return 0;
 }
 
