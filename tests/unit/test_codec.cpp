@@ -25,6 +25,12 @@ static Sample make_sample() {
     s.load.avg_1m            = 0.75;
     s.load.avg_5m            = 1.25;
     s.load.avg_15m           = 2.5;
+    s.disk.read_bytes_per_sec  = 123ULL * 1024 * 1024;
+    s.disk.write_bytes_per_sec =  45ULL * 1024 * 1024;
+    s.disk.device_count        = 3;
+    s.net.rx_bytes_per_sec     = 987654321ULL;
+    s.net.tx_bytes_per_sec     = 123456789ULL;
+    s.net.interface_count      = 2;
     s.uptime_seconds         = 123456.789;
     return s;
 }
@@ -47,6 +53,12 @@ static void assert_samples_equal(const Sample& a, const Sample& b) {
     assert(bitwise_eq(a.load.avg_1m,  b.load.avg_1m));
     assert(bitwise_eq(a.load.avg_5m,  b.load.avg_5m));
     assert(bitwise_eq(a.load.avg_15m, b.load.avg_15m));
+    assert(a.disk.read_bytes_per_sec  == b.disk.read_bytes_per_sec);
+    assert(a.disk.write_bytes_per_sec == b.disk.write_bytes_per_sec);
+    assert(a.disk.device_count        == b.disk.device_count);
+    assert(a.net.rx_bytes_per_sec     == b.net.rx_bytes_per_sec);
+    assert(a.net.tx_bytes_per_sec     == b.net.tx_bytes_per_sec);
+    assert(a.net.interface_count      == b.net.interface_count);
     assert(bitwise_eq(a.uptime_seconds, b.uptime_seconds));
 }
 
@@ -174,6 +186,59 @@ int main() {
         assert(sample_encode(&in, b, sizeof(b), &lb) == 0);
         assert(la == lb);
         assert(std::memcmp(a, b, la) == 0);
+    }
+
+    // 11. v1 backward compat — a hand-rolled v1 record (128 bytes, version=1)
+    //     decodes successfully, with disk/net fields zeroed out.
+    {
+        constexpr size_t kV1Size = 128;
+        uint8_t buf[kV1Size] = {0};
+        uint8_t* p = buf;
+        const uint8_t magic[8] = {'B','D','Y','K','S','M','P','L'};
+        std::memcpy(p, magic, 8); p += 8;
+        uint32_t ver = 1; std::memcpy(p, &ver, 4); p += 4;     // version = 1
+        p += 4;                                                 // flags
+        uint64_t ts = 0x0102030405060708ULL; std::memcpy(p, &ts, 8); p += 8;
+        *p++ = 2;                                               // level = L2
+        p += 7;                                                 // pad
+        double cpu_pct = 55.5; std::memcpy(p, &cpu_pct, 8); p += 8;
+        uint32_t cpu_ct = 4; std::memcpy(p, &cpu_ct, 4); p += 4;
+        p += 4;                                                 // pad
+        uint64_t mt = 1ULL << 30; std::memcpy(p, &mt, 8); p += 8;
+        uint64_t ma = 1ULL << 29; std::memcpy(p, &ma, 8); p += 8;
+        double mp = 50.0; std::memcpy(p, &mp, 8); p += 8;
+        // Swap + load + uptime — leave zeros, they're valid.
+        (void)p;
+
+        Sample out{};
+        int rc = sample_decode(buf, kV1Size, &out);
+        assert(rc == 0);
+        assert(out.timestamp_nanos == 0x0102030405060708ULL);
+        assert(out.level == Level::L2);
+        assert(out.cpu.count == 4);
+        assert(bitwise_eq(out.cpu.total_percent, 55.5));
+        assert(out.mem.total     == (1ULL << 30));
+        assert(out.mem.available == (1ULL << 29));
+        // Disk + net must be zeroed — v1 carried no such data.
+        assert(out.disk.read_bytes_per_sec  == 0);
+        assert(out.disk.write_bytes_per_sec == 0);
+        assert(out.disk.device_count        == 0);
+        assert(out.net.rx_bytes_per_sec     == 0);
+        assert(out.net.tx_bytes_per_sec     == 0);
+        assert(out.net.interface_count      == 0);
+    }
+
+    // 12. v2 with length that truncates the disk/net tail — rejected.
+    {
+        Sample in = make_sample();
+        uint8_t buf[512] = {0};
+        size_t  len = 0;
+        assert(sample_encode(&in, buf, sizeof(buf), &len) == 0);
+        // Feed decode a length that's smaller than the v2 encoded size
+        // but bigger than the v1 floor — the version byte says v2, so
+        // the tail must be present.
+        Sample out{};
+        assert(sample_decode(buf, len - 1, &out) != 0);
     }
 
     std::printf("test_codec: PASS (%zu bytes/record)\n", enc_size);
