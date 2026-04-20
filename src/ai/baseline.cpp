@@ -83,4 +83,28 @@ MetricBaseline compute_load_1m_stats(const Sample* s, size_t n) {
     return extract_and_compute(s, n, [](const Sample& x) { return x.load.avg_1m; });
 }
 
+MetricBaseline compute_disk_read_bytes_per_sec_stats(const Sample* s, size_t n) {
+    return extract_and_compute(s, n, [](const Sample& x) {
+        return static_cast<double>(x.disk.read_bytes_per_sec);
+    });
+}
+
+MetricBaseline compute_disk_write_bytes_per_sec_stats(const Sample* s, size_t n) {
+    return extract_and_compute(s, n, [](const Sample& x) {
+        return static_cast<double>(x.disk.write_bytes_per_sec);
+    });
+}
+
+MetricBaseline compute_net_rx_bytes_per_sec_stats(const Sample* s, size_t n) {
+    return extract_and_compute(s, n, [](const Sample& x) {
+        return static_cast<double>(x.net.rx_bytes_per_sec);
+    });
+}
+
+MetricBaseline compute_net_tx_bytes_per_sec_stats(const Sample* s, size_t n) {
+    return extract_and_compute(s, n, [](const Sample& x) {
+        return static_cast<double>(x.net.tx_bytes_per_sec);
+    });
+}
+
 } // namespace budyk

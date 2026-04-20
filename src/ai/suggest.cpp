@@ -106,6 +106,86 @@ std::string suggest_rule_load_1m(const MetricBaseline& b, double cpu_count) {
     return fmt_rule("load_high", rat.str().c_str(), "warning", cond.str());
 }
 
+// ---------------------------------------------------------------------------
+// Throughput (bytes/sec) suggestions — shared shape for disk + net.
+// ---------------------------------------------------------------------------
+namespace {
+
+std::string fmt_bps(double bps) {
+    char buf[64];
+    if (bps >= 1024.0 * 1024.0 * 1024.0) {
+        std::snprintf(buf, sizeof(buf), "%.1f GiB/s", bps / (1024.0 * 1024.0 * 1024.0));
+    } else if (bps >= 1024.0 * 1024.0) {
+        std::snprintf(buf, sizeof(buf), "%.1f MiB/s", bps / (1024.0 * 1024.0));
+    } else if (bps >= 1024.0) {
+        std::snprintf(buf, sizeof(buf), "%.1f KiB/s", bps / 1024.0);
+    } else {
+        std::snprintf(buf, sizeof(buf), "%.0f B/s", bps);
+    }
+    return buf;
+}
+
+// Threshold for throughput: ceil(p99 * 1.5), floored at min_floor_mb MiB/s.
+// Metric only produces a rule if max ≥ min_activity_mb MiB/s — otherwise
+// the metric is effectively idle and a rule would false-positive on noise.
+std::string suggest_throughput_rule(const MetricBaseline& b,
+                                    const char* rule_name,
+                                    const char* metric_expr,
+                                    double min_activity_mb,
+                                    double min_floor_mb) {
+    if (b.n == 0)                          return {};
+    const double mib = 1024.0 * 1024.0;
+    if (b.max < min_activity_mb * mib)     return {};   // quiet — no rule
+
+    double t    = std::ceil(b.p99 * 1.5);
+    double floor_bytes = min_floor_mb * mib;
+    if (t < floor_bytes) t = floor_bytes;
+
+    std::ostringstream rat;
+    rat << "Tier A: " << metric_expr
+        << " p99=" << fmt_bps(b.p99)
+        << ", max=" << fmt_bps(b.max)
+        << " over " << b.n << " samples";
+    std::ostringstream cond;
+    cond << metric_expr << " > " << fmt_num(t, 0)
+         << "  -- " << fmt_bps(t);
+    return fmt_rule(rule_name, rat.str().c_str(), "warning", cond.str());
+}
+
+} // namespace
+
+std::string suggest_rule_disk_read_bytes_per_sec(const MetricBaseline& b) {
+    return suggest_throughput_rule(b,
+                                   "disk_read_high",
+                                   "disk.read_bytes_per_sec",
+                                   /*min_activity_mb*/ 1.0,
+                                   /*min_floor_mb*/    50.0);
+}
+
+std::string suggest_rule_disk_write_bytes_per_sec(const MetricBaseline& b) {
+    return suggest_throughput_rule(b,
+                                   "disk_write_high",
+                                   "disk.write_bytes_per_sec",
+                                   /*min_activity_mb*/ 1.0,
+                                   /*min_floor_mb*/    50.0);
+}
+
+std::string suggest_rule_net_rx_bytes_per_sec(const MetricBaseline& b) {
+    return suggest_throughput_rule(b,
+                                   "net_rx_high",
+                                   "net.rx_bytes_per_sec",
+                                   /*min_activity_mb*/ 0.1,
+                                   /*min_floor_mb*/    5.0);
+}
+
+std::string suggest_rule_net_tx_bytes_per_sec(const MetricBaseline& b) {
+    return suggest_throughput_rule(b,
+                                   "net_tx_high",
+                                   "net.tx_bytes_per_sec",
+                                   /*min_activity_mb*/ 0.1,
+                                   /*min_floor_mb*/    5.0);
+}
+
 std::string suggest_rules_for_samples(const Sample* s, size_t n) {
     std::ostringstream os;
     os << "-- AI-suggested rules (Tier A, local heuristics). Review before using.\n"
@@ -115,10 +195,14 @@ std::string suggest_rules_for_samples(const Sample* s, size_t n) {
 
     const double cpu_count_est = static_cast<double>(s[n - 1].cpu.count);
 
-    os << suggest_rule_cpu_total_percent    (compute_cpu_total_percent_stats    (s, n));
-    os << suggest_rule_mem_available_percent(compute_mem_available_percent_stats(s, n));
-    os << suggest_rule_swap_used_percent    (compute_swap_used_percent_stats    (s, n));
-    os << suggest_rule_load_1m              (compute_load_1m_stats              (s, n), cpu_count_est);
+    os << suggest_rule_cpu_total_percent       (compute_cpu_total_percent_stats       (s, n));
+    os << suggest_rule_mem_available_percent   (compute_mem_available_percent_stats   (s, n));
+    os << suggest_rule_swap_used_percent       (compute_swap_used_percent_stats       (s, n));
+    os << suggest_rule_load_1m                 (compute_load_1m_stats                 (s, n), cpu_count_est);
+    os << suggest_rule_disk_read_bytes_per_sec (compute_disk_read_bytes_per_sec_stats (s, n));
+    os << suggest_rule_disk_write_bytes_per_sec(compute_disk_write_bytes_per_sec_stats(s, n));
+    os << suggest_rule_net_rx_bytes_per_sec    (compute_net_rx_bytes_per_sec_stats    (s, n));
+    os << suggest_rule_net_tx_bytes_per_sec    (compute_net_tx_bytes_per_sec_stats    (s, n));
     return os.str();
 }
 

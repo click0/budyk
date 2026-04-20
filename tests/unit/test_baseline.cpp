@@ -100,6 +100,28 @@ int main() {
         assert(b.n == 0);
     }
 
+    // 8. Disk + net extractors — uint64 throughput pulled into double stats.
+    {
+        Sample s[5]{};
+        for (int i = 0; i < 5; ++i) {
+            s[i].disk.read_bytes_per_sec  = static_cast<uint64_t>(1'000'000ULL * (i + 1));
+            s[i].disk.write_bytes_per_sec = static_cast<uint64_t>(  500'000ULL * (i + 1));
+            s[i].net.rx_bytes_per_sec     = static_cast<uint64_t>(2'000'000ULL * (i + 1));
+            s[i].net.tx_bytes_per_sec     = static_cast<uint64_t>(  750'000ULL * (i + 1));
+        }
+        MetricBaseline dr = compute_disk_read_bytes_per_sec_stats (s, 5);
+        MetricBaseline dw = compute_disk_write_bytes_per_sec_stats(s, 5);
+        MetricBaseline nr = compute_net_rx_bytes_per_sec_stats    (s, 5);
+        MetricBaseline nt = compute_net_tx_bytes_per_sec_stats    (s, 5);
+
+        assert(dr.n == 5 && near(dr.mean, 3'000'000.0));  // 1M..5M mean = 3M
+        assert(near(dw.mean, 1'500'000.0));
+        assert(near(nr.mean, 6'000'000.0));
+        assert(near(nt.mean, 2'250'000.0));
+        assert(near(dr.max, 5'000'000.0));
+        assert(near(nr.min, 2'000'000.0));
+    }
+
     std::printf("test_baseline: PASS\n");
     return 0;
 }

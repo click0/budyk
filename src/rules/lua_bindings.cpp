@@ -50,6 +50,20 @@ void budyk_lua_bind_sample(lua_State* L, const budyk::Sample& s) {
     set_number(L, "avg_15m", s.load.avg_15m);
     lua_setglobal(L, "load");
 
+    // disk — aggregate throughput across whole block devices.
+    lua_newtable(L);
+    set_integer(L, "read_bytes_per_sec",  static_cast<lua_Integer>(s.disk.read_bytes_per_sec));
+    set_integer(L, "write_bytes_per_sec", static_cast<lua_Integer>(s.disk.write_bytes_per_sec));
+    set_integer(L, "device_count",        static_cast<lua_Integer>(s.disk.device_count));
+    lua_setglobal(L, "disk");
+
+    // net — aggregate throughput across non-loopback interfaces.
+    lua_newtable(L);
+    set_integer(L, "rx_bytes_per_sec",   static_cast<lua_Integer>(s.net.rx_bytes_per_sec));
+    set_integer(L, "tx_bytes_per_sec",   static_cast<lua_Integer>(s.net.tx_bytes_per_sec));
+    set_integer(L, "interface_count",    static_cast<lua_Integer>(s.net.interface_count));
+    lua_setglobal(L, "net");
+
     lua_pushnumber(L, s.uptime_seconds);
     lua_setglobal(L, "uptime_seconds");
 }
