@@ -23,9 +23,13 @@ struct MetricBaseline {
 MetricBaseline compute_stats(const double* values, size_t n);
 
 // Extract a scalar metric from a Sample array and compute its stats.
-MetricBaseline compute_cpu_total_percent_stats    (const Sample* s, size_t n);
-MetricBaseline compute_mem_available_percent_stats(const Sample* s, size_t n);
-MetricBaseline compute_swap_used_percent_stats    (const Sample* s, size_t n);
-MetricBaseline compute_load_1m_stats              (const Sample* s, size_t n);
+MetricBaseline compute_cpu_total_percent_stats       (const Sample* s, size_t n);
+MetricBaseline compute_mem_available_percent_stats   (const Sample* s, size_t n);
+MetricBaseline compute_swap_used_percent_stats       (const Sample* s, size_t n);
+MetricBaseline compute_load_1m_stats                 (const Sample* s, size_t n);
+MetricBaseline compute_disk_read_bytes_per_sec_stats (const Sample* s, size_t n);
+MetricBaseline compute_disk_write_bytes_per_sec_stats(const Sample* s, size_t n);
+MetricBaseline compute_net_rx_bytes_per_sec_stats    (const Sample* s, size_t n);
+MetricBaseline compute_net_tx_bytes_per_sec_stats    (const Sample* s, size_t n);
 
 } // namespace budyk

@@ -23,6 +23,18 @@ static Sample mk(double cpu_pct, double mem_avail_pct, double load1, double swap
     return s;
 }
 
+static Sample mk_io(uint64_t disk_read, uint64_t disk_write,
+                    uint64_t net_rx,    uint64_t net_tx) {
+    Sample s                   = mk(0, 0, 0, 0);
+    s.disk.read_bytes_per_sec  = disk_read;
+    s.disk.write_bytes_per_sec = disk_write;
+    s.disk.device_count        = 2;
+    s.net.rx_bytes_per_sec     = net_rx;
+    s.net.tx_bytes_per_sec     = net_tx;
+    s.net.interface_count      = 3;
+    return s;
+}
+
 int main() {
     // 1. Init / shutdown idempotent + rule_count starts at 0.
     {
@@ -233,6 +245,30 @@ int main() {
             "watch('default', { when = function() return true end, for_ticks = 0 })\n") == 0);
         assert(e.rules()[0].for_ticks == 1);
         assert(e.eval_tick(mk(0, 0, 0, 0)) == 1);
+        e.shutdown();
+    }
+
+    // 12. Disk + net bindings — rules reference `disk.*` and `net.*` tables.
+    {
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        const char* script =
+            "watch('disk_hot', { when = function() return disk.read_bytes_per_sec > 10000000 end })\n"
+            "watch('net_hot',  { when = function() return net.tx_bytes_per_sec  > 1000000  end })\n"
+            "watch('iface_ok', { when = function() return net.interface_count   >= 2       end })\n"
+            "watch('devs_ok',  { when = function() return disk.device_count     >= 2       end })\n";
+        assert(e.load_string(script) == 0);
+        assert(e.rule_count() == 4);
+
+        // Idle — only iface_ok + devs_ok fire (2 IFs ≥ 2, 2 devs ≥ 2).
+        assert(e.eval_tick(mk_io(0, 0, 0, 0)) == 2);
+
+        // Disk hot + net hot also fire.
+        assert(e.eval_tick(mk_io(20ULL*1024*1024, 0, 0, 5ULL*1024*1024)) == 4);
+
+        // Only net_hot — disk quiet.
+        assert(e.eval_tick(mk_io(0, 0, 0, 5ULL*1024*1024)) == 3);
+
         e.shutdown();
     }
 

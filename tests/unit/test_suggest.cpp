@@ -121,6 +121,72 @@ int main() {
         assert(!contains(doc, "watch("));
     }
 
+    // 11. Disk / net — idle metric → no rule.
+    {
+        MetricBaseline b{};
+        b.n = 100; b.max = 512.0 * 1024; b.p99 = 256.0 * 1024;  // KiB-scale
+        assert(suggest_rule_disk_read_bytes_per_sec(b) == "");   // < 1 MiB/s
+        assert(suggest_rule_net_rx_bytes_per_sec    (b) != "");  // ≥ 0.1 MiB/s
+    }
+
+    // 12. Disk read — active, threshold comes from p99 * 1.5, floored at 50 MiB/s.
+    {
+        MetricBaseline b{};
+        b.n = 100;
+        b.max = 200.0 * 1024 * 1024;   // 200 MiB/s
+        b.p99 = 150.0 * 1024 * 1024;   // 150 MiB/s → t = ceil(225 MiB/s)
+        std::string r = suggest_rule_disk_read_bytes_per_sec(b);
+        assert(!r.empty());
+        assert(contains(r, "watch(\"disk_read_high\""));
+        assert(contains(r, "disk.read_bytes_per_sec >"));
+        assert(contains(r, "MiB/s"));   // pretty-printed rationale
+    }
+
+    // 13. Disk write — low but active; p99*1.5 below floor → floor wins.
+    {
+        MetricBaseline b{};
+        b.n = 100;
+        b.max = 5.0  * 1024 * 1024;    // 5 MiB/s
+        b.p99 = 2.0  * 1024 * 1024;    // p99*1.5 = 3 MiB/s  << 50 MiB/s floor
+        std::string r = suggest_rule_disk_write_bytes_per_sec(b);
+        assert(!r.empty());
+        assert(contains(r, "watch(\"disk_write_high\""));
+        assert(contains(r, "50.0 MiB/s"));
+    }
+
+    // 14. Net rx — active; threshold = max(ceil(p99 * 1.5), 5 MiB/s).
+    {
+        MetricBaseline b{};
+        b.n = 100;
+        b.max = 50.0 * 1024 * 1024;
+        b.p99 = 20.0 * 1024 * 1024;    // p99*1.5 = 30 MiB/s > 5 MiB/s floor
+        std::string r = suggest_rule_net_rx_bytes_per_sec(b);
+        assert(!r.empty());
+        assert(contains(r, "watch(\"net_rx_high\""));
+        assert(contains(r, "net.rx_bytes_per_sec >"));
+    }
+
+    // 15. Full document from Sample array covers disk + net rules too.
+    {
+        Sample s[10]{};
+        for (int i = 0; i < 10; ++i) {
+            s[i].cpu.total_percent     = 40.0 + i;
+            s[i].cpu.count             = 4;
+            s[i].mem.available_percent = 30.0 - i;
+            s[i].swap.used_percent     = 10.0 + i;
+            s[i].load.avg_1m           = 0.5 + 0.1 * i;
+            s[i].disk.read_bytes_per_sec  = (uint64_t)(100ULL*1024*1024 + i*1024*1024);
+            s[i].disk.write_bytes_per_sec = (uint64_t)( 60ULL*1024*1024 + i*1024*1024);
+            s[i].net.rx_bytes_per_sec     = (uint64_t)( 20ULL*1024*1024 + i*1024*1024);
+            s[i].net.tx_bytes_per_sec     = (uint64_t)( 10ULL*1024*1024 + i*1024*1024);
+        }
+        std::string doc = suggest_rules_for_samples(s, 10);
+        assert(contains(doc, "disk_read_high"));
+        assert(contains(doc, "disk_write_high"));
+        assert(contains(doc, "net_rx_high"));
+        assert(contains(doc, "net_tx_high"));
+    }
+
     std::printf("test_suggest: PASS\n");
     return 0;
 }
