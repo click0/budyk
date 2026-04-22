@@ -113,6 +113,45 @@ int l_exec(lua_State* L) {
         return luaL_error(L, "exec: expected string or argv table");
     }
 
+    // --- Hardening -----------------------------------------------------
+    // Three layers of defence against an adversary turning exec() into
+    // arbitrary-binary launch:
+    //   1. argv[0] must be an absolute path (no PATH lookup, no relative
+    //      references resolved against the daemon's cwd).
+    //   2. argv[0] must not contain any '..' path segment — prevents
+    //      /usr/bin/../../bin/sh-style escapes from inside a chroot.
+    //   3. If the engine has a non-empty exec allowlist configured,
+    //      argv[0] must exactly match one of its entries. An empty
+    //      allowlist means "any absolute path under rules 1 and 2" and
+    //      is the default for backwards compatibility.
+    // -------------------------------------------------------------------
+    const std::string& cmd = argv_storage.front();
+    if (cmd.empty() || cmd.front() != '/') {
+        return luaL_error(L, "exec: argv[0] must be an absolute path");
+    }
+    // A '/..' substring is only a traversal if it sits on a path-segment
+    // boundary — i.e. it's followed by '/' (middle of path) or end of string.
+    auto contains_traversal = [](const std::string& s) {
+        size_t pos = 0;
+        while ((pos = s.find("/..", pos)) != std::string::npos) {
+            const size_t end = pos + 3;
+            if (end == s.size() || s[end] == '/') return true;
+            pos = end;
+        }
+        return false;
+    };
+    if (contains_traversal(cmd)) {
+        return luaL_error(L, "exec: path traversal (..) forbidden in argv[0]");
+    }
+    const auto& allow = eng->exec_allowlist();
+    if (!allow.empty()) {
+        bool found = false;
+        for (const auto& a : allow) if (a == cmd) { found = true; break; }
+        if (!found) {
+            return luaL_error(L, "exec: '%s' not in allowlist", cmd.c_str());
+        }
+    }
+
     std::vector<const char*> argv_ptrs;
     argv_ptrs.reserve(argv_storage.size() + 1);
     for (const auto& s : argv_storage) argv_ptrs.push_back(s.c_str());

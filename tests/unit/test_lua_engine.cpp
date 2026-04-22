@@ -297,6 +297,57 @@ int main() {
         }
     }
 
+    // 11d. Hardening — exec('true') without absolute path is rejected.
+    {
+        LuaEngine e;
+        assert(e.init(/*enable_exec*/ true) == 0);
+        assert(e.load_string(
+            "ok, err = pcall(exec, 'true', 5)\n"
+            "blocked = (ok == false and tostring(err):find('absolute') ~= nil)\n"
+            "watch('no_relative', { when = function() return blocked end })\n") == 0);
+        assert(e.eval_tick(mk(0, 0, 0, 0)) == 1);
+        e.shutdown();
+    }
+
+    // 11e. Hardening — path traversal rejected ("/bin/../bin/true").
+    {
+        LuaEngine e;
+        assert(e.init(/*enable_exec*/ true) == 0);
+        assert(e.load_string(
+            "ok, err = pcall(exec, '/bin/../bin/true', 5)\n"
+            "blocked = (ok == false and tostring(err):find('traversal') ~= nil)\n"
+            "watch('no_dotdot', { when = function() return blocked end })\n") == 0);
+        assert(e.eval_tick(mk(0, 0, 0, 0)) == 1);
+        e.shutdown();
+    }
+
+    // 11f. Hardening — allowlist denies /bin/true when only /bin/echo listed.
+    {
+        LuaEngine e;
+        assert(e.init(/*enable_exec*/ true) == 0);
+        e.set_exec_allowlist({"/bin/echo"});
+        assert(e.load_string(
+            "ok, err = pcall(exec, '/bin/true', 5)\n"
+            "blocked = (ok == false and tostring(err):find('allowlist') ~= nil)\n"
+            "watch('denied', { when = function() return blocked end })\n") == 0);
+        assert(e.eval_tick(mk(0, 0, 0, 0)) == 1);
+        e.shutdown();
+    }
+
+    // 11g. Hardening — allowlist permits exactly-matching path.
+    if (access("/bin/true", X_OK) == 0) {
+        LuaEngine e;
+        assert(e.init(/*enable_exec*/ true) == 0);
+        e.set_exec_allowlist({"/bin/true", "/bin/echo"});
+        assert(e.load_string(
+            "r = exec('/bin/true', 5)\n"
+            "watch('allowed', { when = function()\n"
+            "  return r and r.ok == true and r.exit_status == 0\n"
+            "end })\n") == 0);
+        assert(e.eval_tick(mk(0, 0, 0, 0)) == 1);
+        e.shutdown();
+    }
+
     // 12. Disk + net bindings — rules reference `disk.*` and `net.*` tables.
     {
         LuaEngine e;

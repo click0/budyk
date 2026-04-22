@@ -42,6 +42,13 @@ public:
     int  last_fire_count() const;
     bool exec_enabled()    const;
 
+    // exec() hardening: when the allowlist is non-empty, exec() rejects
+    // any argv[0] that is not exactly one of the listed absolute paths.
+    // An empty allowlist allows any absolute-path command (still subject
+    // to the no-traversal / must-be-absolute checks in l_exec).
+    void set_exec_allowlist(std::vector<std::string> paths);
+    const std::vector<std::string>& exec_allowlist() const;
+
     const std::vector<LuaRule>& rules() const;
 
     // Called by the watch() C binding. Public so the binding can reach
@@ -51,10 +58,11 @@ public:
                   int for_ticks, int cooldown_ticks);
 
 private:
-    lua_State*           L_               = nullptr;
-    std::vector<LuaRule> rules_;
-    bool                 exec_enabled_    = false;
-    int                  last_fire_count_ = 0;
+    lua_State*               L_               = nullptr;
+    std::vector<LuaRule>     rules_;
+    bool                     exec_enabled_    = false;
+    int                      last_fire_count_ = 0;
+    std::vector<std::string> exec_allowlist_;
 };
 
 } // namespace budyk
