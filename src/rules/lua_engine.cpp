@@ -133,6 +133,14 @@ bool LuaEngine::exec_enabled()    const { return exec_enabled_; }
 
 const std::vector<LuaRule>& LuaEngine::rules() const { return rules_; }
 
+void LuaEngine::set_exec_allowlist(std::vector<std::string> paths) {
+    exec_allowlist_ = std::move(paths);
+}
+
+const std::vector<std::string>& LuaEngine::exec_allowlist() const {
+    return exec_allowlist_;
+}
+
 void LuaEngine::add_rule(const std::string& name, int when_ref, int action_ref,
                          const std::string& action_tag,
                          int for_ticks, int cooldown_ticks) {

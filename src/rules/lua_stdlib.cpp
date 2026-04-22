@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #include "rules/lua_stdlib.h"
 
+#include "rules/exec_action.h"
 #include "rules/lua_engine.h"
 
 extern "C" {
@@ -9,6 +10,7 @@ extern "C" {
 }
 
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -89,9 +91,96 @@ int l_exec(lua_State* L) {
     if (eng == nullptr || !eng->exec_enabled()) {
         return luaL_error(L, "exec is disabled (enable with --enable-exec)");
     }
-    // Actual fork+exec deferred to a follow-up block (spec §3.6.3 — timeout,
-    // setrlimit). The engine merely records that it was called here.
-    return 0;
+
+    // Accept either exec("/path/to/cmd")          (single-arg form)
+    //            or exec({"/bin/sh", "-c", "..."}) (argv table form).
+    std::vector<std::string> argv_storage;
+    if (lua_isstring(L, 1)) {
+        argv_storage.emplace_back(lua_tostring(L, 1));
+    } else if (lua_istable(L, 1)) {
+        const lua_Integer n = luaL_len(L, 1);
+        if (n <= 0) return luaL_error(L, "exec: empty argv table");
+        for (lua_Integer i = 1; i <= n; ++i) {
+            lua_geti(L, 1, i);
+            if (!lua_isstring(L, -1)) {
+                return luaL_error(L, "exec: argv[%d] is not a string",
+                                  static_cast<int>(i));
+            }
+            argv_storage.emplace_back(lua_tostring(L, -1));
+            lua_pop(L, 1);
+        }
+    } else {
+        return luaL_error(L, "exec: expected string or argv table");
+    }
+
+    // --- Hardening -----------------------------------------------------
+    // Three layers of defence against an adversary turning exec() into
+    // arbitrary-binary launch:
+    //   1. argv[0] must be an absolute path (no PATH lookup, no relative
+    //      references resolved against the daemon's cwd).
+    //   2. argv[0] must not contain any '..' path segment — prevents
+    //      /usr/bin/../../bin/sh-style escapes from inside a chroot.
+    //   3. If the engine has a non-empty exec allowlist configured,
+    //      argv[0] must exactly match one of its entries. An empty
+    //      allowlist means "any absolute path under rules 1 and 2" and
+    //      is the default for backwards compatibility.
+    // -------------------------------------------------------------------
+    const std::string& cmd = argv_storage.front();
+    if (cmd.empty() || cmd.front() != '/') {
+        return luaL_error(L, "exec: argv[0] must be an absolute path");
+    }
+    // A '/..' substring is only a traversal if it sits on a path-segment
+    // boundary — i.e. it's followed by '/' (middle of path) or end of string.
+    auto contains_traversal = [](const std::string& s) {
+        size_t pos = 0;
+        while ((pos = s.find("/..", pos)) != std::string::npos) {
+            const size_t end = pos + 3;
+            if (end == s.size() || s[end] == '/') return true;
+            pos = end;
+        }
+        return false;
+    };
+    if (contains_traversal(cmd)) {
+        return luaL_error(L, "exec: path traversal (..) forbidden in argv[0]");
+    }
+    const auto& allow = eng->exec_allowlist();
+    if (!allow.empty()) {
+        bool found = false;
+        for (const auto& a : allow) if (a == cmd) { found = true; break; }
+        if (!found) {
+            return luaL_error(L, "exec: '%s' not in allowlist", cmd.c_str());
+        }
+    }
+
+    std::vector<const char*> argv_ptrs;
+    argv_ptrs.reserve(argv_storage.size() + 1);
+    for (const auto& s : argv_storage) argv_ptrs.push_back(s.c_str());
+    argv_ptrs.push_back(nullptr);
+
+    // Optional second argument: timeout in seconds (default 30).
+    int timeout_s = 30;
+    if (lua_isnumber(L, 2)) {
+        const lua_Integer t = lua_tointeger(L, 2);
+        if (t > 0) timeout_s = static_cast<int>(t);
+    }
+
+    budyk::ExecResult res{};
+    const int rc = budyk::exec_command(argv_ptrs.data(), timeout_s, &res);
+
+    // Push result table regardless of rc — rc < 0 just means fork/setup
+    // failed before the child could run; surface that via `error`.
+    lua_newtable(L);
+    lua_pushinteger(L, res.exit_status);     lua_setfield(L, -2, "exit_status");
+    lua_pushinteger(L, res.signal);          lua_setfield(L, -2, "signal");
+    lua_pushboolean(L, res.timed_out);       lua_setfield(L, -2, "timed_out");
+    lua_pushnumber (L, res.elapsed_seconds); lua_setfield(L, -2, "elapsed_seconds");
+    lua_pushboolean(L, rc == 0 && res.exit_status == 0 &&
+                       res.signal == 0 && !res.timed_out);
+    lua_setfield(L, -2, "ok");
+    if (rc != 0) {
+        lua_pushinteger(L, rc); lua_setfield(L, -2, "error");
+    }
+    return 1;
 }
 
 } // namespace

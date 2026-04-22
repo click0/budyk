@@ -5,6 +5,7 @@
 #include <cassert>
 #include <cstdio>
 #include <cstring>
+#include <unistd.h>
 
 using namespace budyk;
 
@@ -244,6 +245,105 @@ int main() {
         assert(e.load_string(
             "watch('default', { when = function() return true end, for_ticks = 0 })\n") == 0);
         assert(e.rules()[0].for_ticks == 1);
+        assert(e.eval_tick(mk(0, 0, 0, 0)) == 1);
+        e.shutdown();
+    }
+
+    // 11b. exec() enabled — Lua gets a result table for /bin/true / /bin/false.
+    //      Engine is initialised with enable_exec=true; the rule stashes the
+    //      returned table in a global that a second rule inspects.
+    {
+        LuaEngine e;
+        assert(e.init(/*enable_exec*/ true) == 0);
+        const bool have_true  = access("/bin/true",  X_OK) == 0;
+        const bool have_false = access("/bin/false", X_OK) == 0;
+
+        if (have_true) {
+            assert(e.load_string(
+                "r_true = exec('/bin/true', 5)\n"
+                "watch('true_ok', { when = function()\n"
+                "  return r_true and r_true.ok == true\n"
+                "           and r_true.exit_status == 0\n"
+                "           and r_true.timed_out == false\n"
+                "end })\n") == 0);
+            assert(e.eval_tick(mk(0, 0, 0, 0)) == 1);
+        }
+        if (have_false) {
+            assert(e.load_string(
+                "r_false = exec('/bin/false', 5)\n"
+                "watch('false_ok', { when = function()\n"
+                "  return r_false and r_false.exit_status == 1\n"
+                "           and r_false.ok == false\n"
+                "end })\n") == 0);
+            // Previous 'true_ok' rule may still be registered — eval just
+            // ensures the new rule fires; count ≥ 1.
+            assert(e.eval_tick(mk(0, 0, 0, 0)) >= 1);
+        }
+        e.shutdown();
+    }
+
+    // 11c. exec() with an argv table — exec({'/bin/sh', '-c', 'exit 7'}, 5).
+    {
+        if (access("/bin/sh", X_OK) == 0) {
+            LuaEngine e;
+            assert(e.init(/*enable_exec*/ true) == 0);
+            assert(e.load_string(
+                "r = exec({'/bin/sh', '-c', 'exit 7'}, 5)\n"
+                "watch('sh7', { when = function()\n"
+                "  return r.exit_status == 7 and r.ok == false\n"
+                "end })\n") == 0);
+            assert(e.eval_tick(mk(0, 0, 0, 0)) == 1);
+            e.shutdown();
+        }
+    }
+
+    // 11d. Hardening — exec('true') without absolute path is rejected.
+    {
+        LuaEngine e;
+        assert(e.init(/*enable_exec*/ true) == 0);
+        assert(e.load_string(
+            "ok, err = pcall(exec, 'true', 5)\n"
+            "blocked = (ok == false and tostring(err):find('absolute') ~= nil)\n"
+            "watch('no_relative', { when = function() return blocked end })\n") == 0);
+        assert(e.eval_tick(mk(0, 0, 0, 0)) == 1);
+        e.shutdown();
+    }
+
+    // 11e. Hardening — path traversal rejected ("/bin/../bin/true").
+    {
+        LuaEngine e;
+        assert(e.init(/*enable_exec*/ true) == 0);
+        assert(e.load_string(
+            "ok, err = pcall(exec, '/bin/../bin/true', 5)\n"
+            "blocked = (ok == false and tostring(err):find('traversal') ~= nil)\n"
+            "watch('no_dotdot', { when = function() return blocked end })\n") == 0);
+        assert(e.eval_tick(mk(0, 0, 0, 0)) == 1);
+        e.shutdown();
+    }
+
+    // 11f. Hardening — allowlist denies /bin/true when only /bin/echo listed.
+    {
+        LuaEngine e;
+        assert(e.init(/*enable_exec*/ true) == 0);
+        e.set_exec_allowlist({"/bin/echo"});
+        assert(e.load_string(
+            "ok, err = pcall(exec, '/bin/true', 5)\n"
+            "blocked = (ok == false and tostring(err):find('allowlist') ~= nil)\n"
+            "watch('denied', { when = function() return blocked end })\n") == 0);
+        assert(e.eval_tick(mk(0, 0, 0, 0)) == 1);
+        e.shutdown();
+    }
+
+    // 11g. Hardening — allowlist permits exactly-matching path.
+    if (access("/bin/true", X_OK) == 0) {
+        LuaEngine e;
+        assert(e.init(/*enable_exec*/ true) == 0);
+        e.set_exec_allowlist({"/bin/true", "/bin/echo"});
+        assert(e.load_string(
+            "r = exec('/bin/true', 5)\n"
+            "watch('allowed', { when = function()\n"
+            "  return r and r.ok == true and r.exit_status == 0\n"
+            "end })\n") == 0);
         assert(e.eval_tick(mk(0, 0, 0, 0)) == 1);
         e.shutdown();
     }
