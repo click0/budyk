@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #include "rules/lua_stdlib.h"
 
+#include "rules/exec_action.h"
 #include "rules/lua_engine.h"
 
 extern "C" {
@@ -9,6 +10,7 @@ extern "C" {
 }
 
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -89,9 +91,57 @@ int l_exec(lua_State* L) {
     if (eng == nullptr || !eng->exec_enabled()) {
         return luaL_error(L, "exec is disabled (enable with --enable-exec)");
     }
-    // Actual fork+exec deferred to a follow-up block (spec §3.6.3 — timeout,
-    // setrlimit). The engine merely records that it was called here.
-    return 0;
+
+    // Accept either exec("/path/to/cmd")          (single-arg form)
+    //            or exec({"/bin/sh", "-c", "..."}) (argv table form).
+    std::vector<std::string> argv_storage;
+    if (lua_isstring(L, 1)) {
+        argv_storage.emplace_back(lua_tostring(L, 1));
+    } else if (lua_istable(L, 1)) {
+        const lua_Integer n = luaL_len(L, 1);
+        if (n <= 0) return luaL_error(L, "exec: empty argv table");
+        for (lua_Integer i = 1; i <= n; ++i) {
+            lua_geti(L, 1, i);
+            if (!lua_isstring(L, -1)) {
+                return luaL_error(L, "exec: argv[%d] is not a string",
+                                  static_cast<int>(i));
+            }
+            argv_storage.emplace_back(lua_tostring(L, -1));
+            lua_pop(L, 1);
+        }
+    } else {
+        return luaL_error(L, "exec: expected string or argv table");
+    }
+
+    std::vector<const char*> argv_ptrs;
+    argv_ptrs.reserve(argv_storage.size() + 1);
+    for (const auto& s : argv_storage) argv_ptrs.push_back(s.c_str());
+    argv_ptrs.push_back(nullptr);
+
+    // Optional second argument: timeout in seconds (default 30).
+    int timeout_s = 30;
+    if (lua_isnumber(L, 2)) {
+        const lua_Integer t = lua_tointeger(L, 2);
+        if (t > 0) timeout_s = static_cast<int>(t);
+    }
+
+    budyk::ExecResult res{};
+    const int rc = budyk::exec_command(argv_ptrs.data(), timeout_s, &res);
+
+    // Push result table regardless of rc — rc < 0 just means fork/setup
+    // failed before the child could run; surface that via `error`.
+    lua_newtable(L);
+    lua_pushinteger(L, res.exit_status);     lua_setfield(L, -2, "exit_status");
+    lua_pushinteger(L, res.signal);          lua_setfield(L, -2, "signal");
+    lua_pushboolean(L, res.timed_out);       lua_setfield(L, -2, "timed_out");
+    lua_pushnumber (L, res.elapsed_seconds); lua_setfield(L, -2, "elapsed_seconds");
+    lua_pushboolean(L, rc == 0 && res.exit_status == 0 &&
+                       res.signal == 0 && !res.timed_out);
+    lua_setfield(L, -2, "ok");
+    if (rc != 0) {
+        lua_pushinteger(L, rc); lua_setfield(L, -2, "error");
+    }
+    return 1;
 }
 
 } // namespace
