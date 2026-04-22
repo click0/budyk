@@ -106,6 +106,62 @@ int main() {
         assert(config_load(nullptr, &c)          != 0);
     }
 
+    // 7a. Nested rules.exec block — preferred spelling with an allowlist.
+    {
+        Config c;
+        const char* y =
+            "rules:\n"
+            "  path: /etc/budyk/rules.lua\n"
+            "  exec:\n"
+            "    enabled: true\n"
+            "    allow:\n"
+            "      - /usr/local/bin/my-alerter\n"
+            "      - /usr/bin/systemctl\n";
+        assert(config_load_string(y, &c) == 0);
+        assert(c.rules_enable_exec == true);
+        assert(c.rules_exec_allow.size() == 2);
+        assert(c.rules_exec_allow[0] == "/usr/local/bin/my-alerter");
+        assert(c.rules_exec_allow[1] == "/usr/bin/systemctl");
+    }
+
+    // 7b. Missing allow key leaves the vector at default (empty).
+    {
+        Config c;
+        const char* y =
+            "rules:\n"
+            "  exec:\n"
+            "    enabled: true\n";
+        assert(config_load_string(y, &c) == 0);
+        assert(c.rules_enable_exec == true);
+        assert(c.rules_exec_allow.empty());
+    }
+
+    // 7c. Empty allow list is respected (explicit reset).
+    {
+        Config c;
+        const char* y =
+            "rules:\n"
+            "  exec:\n"
+            "    allow: []\n";
+        assert(config_load_string(y, &c) == 0);
+        assert(c.rules_exec_allow.empty());
+    }
+
+    // 7d. Legacy flat `enable_exec` still works alongside nested allow list.
+    {
+        Config c;
+        const char* y =
+            "rules:\n"
+            "  enable_exec: true\n"
+            "  exec:\n"
+            "    allow:\n"
+            "      - /bin/true\n";
+        assert(config_load_string(y, &c) == 0);
+        assert(c.rules_enable_exec == true);
+        assert(c.rules_exec_allow.size() == 1);
+        assert(c.rules_exec_allow[0] == "/bin/true");
+    }
+
     // 7. File load path: write a small YAML and parse it.
     {
         char tmpl[] = "/tmp/budyk_cfg_XXXXXX";
