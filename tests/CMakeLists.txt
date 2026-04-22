@@ -59,3 +59,8 @@ if(LUA_FOUND)
     target_include_directories(test_lua_engine PRIVATE ${CMAKE_SOURCE_DIR}/src ${LUA_INCLUDE_DIR})
     add_test(NAME test_lua_engine COMMAND test_lua_engine)
 endif()
+
+add_executable(test_exec_action unit/test_exec_action.cpp)
+target_link_libraries(test_exec_action PRIVATE budyk_rules budyk_core)
+target_include_directories(test_exec_action PRIVATE ${CMAKE_SOURCE_DIR}/src)
+add_test(NAME test_exec_action COMMAND test_exec_action)
