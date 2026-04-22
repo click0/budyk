@@ -2,6 +2,9 @@
 #pragma once
 #include "scheduler/scheduler.h"
 
+#include <string>
+#include <vector>
+
 namespace budyk {
 
 struct Config {
@@ -22,7 +25,10 @@ struct Config {
     int   hot_buffer_capacity    = 300;
     int   hot_buffer_warm_grace  = 60;
 
-    bool  rules_enable_exec      = false;
+    bool                     rules_enable_exec = false;
+    // Absolute paths that `exec()` is permitted to launch. Empty = any
+    // absolute path allowed (still subject to path-traversal guard).
+    std::vector<std::string> rules_exec_allow;
 };
 
 // Load a YAML config into `out`, starting from defaults. Missing

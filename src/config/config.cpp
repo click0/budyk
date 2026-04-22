@@ -66,6 +66,22 @@ void apply_bool(yaml_document_t* d, const yaml_node_t* m, const char* key, bool*
         *dst = false;
 }
 
+// Walks a YAML sequence of scalars under `key` into dst. A non-sequence
+// node (or missing key) leaves dst untouched. Empty sequences clear dst
+// — useful for admins explicitly resetting an inherited allowlist.
+void apply_str_list(yaml_document_t* d, const yaml_node_t* m, const char* key,
+                    std::vector<std::string>* dst) {
+    const yaml_node_t* seq = find_key(d, m, key);
+    if (seq == nullptr || seq->type != YAML_SEQUENCE_NODE) return;
+    dst->clear();
+    for (auto* item = seq->data.sequence.items.start;
+         item     != seq->data.sequence.items.top; ++item) {
+        const yaml_node_t* n = yaml_document_get_node(d, *item);
+        const char* s = scalar_str(n);
+        if (s != nullptr) dst->emplace_back(s);
+    }
+}
+
 // --- Section walkers --------------------------------------------------------
 
 void apply_collection(yaml_document_t* d, const yaml_node_t* col, Config* out) {
@@ -118,7 +134,22 @@ int parse_document(yaml_parser_t* parser, Config* out) {
 
     if (auto* rules = find_key(&doc, root, "rules")) {
         apply_str (&doc, rules, "path",        out->rules_path, sizeof(out->rules_path));
-        apply_bool(&doc, rules, "enable_exec", &out->rules_enable_exec);
+        apply_bool(&doc, rules, "enable_exec", &out->rules_enable_exec);   // legacy flat key
+
+        // Nested `rules.exec` block — preferred spelling. Its `enabled`
+        // also maps to rules_enable_exec, so either syntax works:
+        //   rules:
+        //     enable_exec: true        # flat (legacy)
+        //   rules:
+        //     exec:
+        //       enabled: true          # nested (preferred)
+        //       allow:
+        //         - /usr/local/bin/alerter
+        //         - /usr/bin/systemctl
+        if (auto* exec = find_key(&doc, rules, "exec")) {
+            apply_bool    (&doc, exec, "enabled", &out->rules_enable_exec);
+            apply_str_list(&doc, exec, "allow",   &out->rules_exec_allow);
+        }
     }
 
     if (auto* web = find_key(&doc, root, "web")) {
