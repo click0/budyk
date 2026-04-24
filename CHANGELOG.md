@@ -5,6 +5,49 @@ All notable changes to budyk will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] — 2026-04-22
+
+### Added
+
+- **Linux disk throughput** via `/proc/diskstats`: aggregated
+  read/write bytes per second across whole block devices only.
+  Filters out `loop*`, `ram*`, `zram*`, `dm-*`, `md*`, `fd*`, `sr*`,
+  `nbd*` and partitions (`sdX<N>`, `nvme<N>n<M>p<K>`, `mmcblk<N>p<K>`,
+  …).
+- **Linux network throughput** via `/proc/net/dev`: aggregated
+  rx/tx bytes per second across non-loopback interfaces.
+- **Sample codec v2** — 176-byte record layout now serialises the
+  disk + net aggregates. v1 records (128 B) remain decodable; the
+  codec falls back to zeroed disk/net fields for them.
+- **Lua bindings for `disk` and `net`** — rule `when()` bodies can
+  reference `disk.read_bytes_per_sec`, `disk.write_bytes_per_sec`,
+  `disk.device_count`, `net.rx_bytes_per_sec`, `net.tx_bytes_per_sec`,
+  `net.interface_count`.
+- **AI Tier A rule suggestions** for the four new throughput metrics
+  — `disk_read_high`, `disk_write_high`, `net_rx_high`, `net_tx_high`
+  — with idle-metric skip, p99-scaled threshold, per-metric MiB/s
+  floor, and B/KiB/MiB/GiB pretty-printing in rationale comments.
+- **`exec()` rule action** — `fork`/`execvp` helper with a hard
+  `timeout_seconds` deadline, `SIGKILL` on overrun, `RLIMIT_CPU` and
+  `RLIMIT_AS` caps, and stdio redirected to `/dev/null`. Wired into
+  the Lua stdlib as both `exec("/path")` and
+  `exec({"/bin/sh", "-c", "..."})`; returns an `{exit_status, signal,
+  timed_out, elapsed_seconds, ok, error?}` result table.
+- **`exec()` hardening** — three layers of defence against adversarial
+  rules: argv[0] must be an absolute path, no `..` path-segment
+  traversal, and an optional `LuaEngine::set_exec_allowlist()` that
+  restricts argv[0] to an exact match against the configured list.
+- **YAML `rules.exec.{enabled,allow}`** block — admins can declare
+  the allowlist in `config.yaml`. Legacy `rules.enable_exec` flat key
+  still honoured.
+
+### Changed
+
+- `docs/budyk.8` dated 2026-04-22; `main.cpp` `version` command prints
+  `budyk 0.2.0`.
+
+[0.2.0]: https://github.com/click0/budyk/releases/tag/v0.2.0
+
 ## [0.1.0] — 2026-04-18
 
 First milestone release.
