@@ -29,7 +29,7 @@ int main(int argc, char* argv[]) {
     const char* cmd = argv[1];
 
     if (std::strcmp(cmd, "version") == 0) {
-        std::printf("budyk 0.1.0\n");
+        std::printf("budyk 0.2.0\n");
         return 0;
     }
 

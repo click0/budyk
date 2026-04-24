@@ -2,7 +2,7 @@
 # Copyright (c) 2026 budyk contributors
 
 cmake_minimum_required(VERSION 3.22)
-project(budyk VERSION 0.1.0 LANGUAGES C CXX)
+project(budyk VERSION 0.2.0 LANGUAGES C CXX)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 17)
