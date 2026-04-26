@@ -58,6 +58,13 @@ if(BUDYK_PLATFORM STREQUAL "linux")
     add_test(NAME test_linux_collector COMMAND test_linux_collector)
 endif()
 
+if(BUDYK_PLATFORM STREQUAL "freebsd")
+    add_executable(test_freebsd_collector unit/test_freebsd_collector.cpp)
+    target_link_libraries(test_freebsd_collector PRIVATE budyk_collector)
+    target_include_directories(test_freebsd_collector PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    add_test(NAME test_freebsd_collector COMMAND test_freebsd_collector)
+endif()
+
 if(LUA_FOUND)
     add_executable(test_lua_engine unit/test_lua_engine.cpp)
     target_link_libraries(test_lua_engine PRIVATE budyk_rules budyk_core ${LUA_LIBRARIES})
