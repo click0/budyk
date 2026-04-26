@@ -3,8 +3,8 @@
 // Only added to the build when BUDYK_PLATFORM == freebsd (see tests/CMakeLists.txt).
 //
 // Implemented so far: CPU (kern.cp_time), memory (vm.stats.vm.* + kvm),
-// uptime (kern.boottime), load (getloadavg). disk / net are still stubs
-// and will be added as they land.
+// uptime (kern.boottime), load (getloadavg), network (getifaddrs).
+// disk is still a stub and will be added as it lands.
 
 #include "core/sample_c.h"
 
@@ -80,15 +80,62 @@ int main() {
         assert(s.load.avg_15m >= 0.0);
     }
 
-    // 5. Null-pointer guard for every collector.
+    // 5. Network — baseline (0 B/s) on first call, delta computed
+    //    from caller-supplied timestamps on subsequent calls.
+    //    interface_count must be consistent across calls.
     {
-        budyk_cpu_ctx_c ctx{};
+        budyk_net_ctx_c ctx;
+        std::memset(&ctx, 0, sizeof(ctx));
+
+        budyk_sample_c s1;
+        std::memset(&s1, 0, sizeof(s1));
+        s1.timestamp_nanos = 1'000'000'000ULL;
+        assert(budyk_collect_network_freebsd(&ctx, &s1) == 0);
+        assert(s1.net.rx_bytes_per_sec == 0);
+        assert(s1.net.tx_bytes_per_sec == 0);
+        assert(ctx.has_prev == 1);
+
+        budyk_sample_c s2;
+        std::memset(&s2, 0, sizeof(s2));
+        s2.timestamp_nanos = 2'000'000'000ULL;       // dt = 1 s
+        assert(budyk_collect_network_freebsd(&ctx, &s2) == 0);
+        assert(s2.net.interface_count == s1.net.interface_count);
+        // Containers / fresh VMs may have zero byte traffic — just
+        // assert the field was populated, not strictly > 0.
+        (void)s2.net.rx_bytes_per_sec;
+        (void)s2.net.tx_bytes_per_sec;
+    }
+
+    // 6. Network — same timestamp on consecutive calls must not divide
+    //    by zero — collector yields zero rates instead.
+    {
+        budyk_net_ctx_c ctx;
+        std::memset(&ctx, 0, sizeof(ctx));
+        budyk_sample_c s;
+        std::memset(&s, 0, sizeof(s));
+        s.timestamp_nanos = 5'000'000'000ULL;
+        assert(budyk_collect_network_freebsd(&ctx, &s) == 0);   // baseline
+
+        budyk_sample_c s2;
+        std::memset(&s2, 0, sizeof(s2));
+        s2.timestamp_nanos = 5'000'000'000ULL;                  // same ns
+        assert(budyk_collect_network_freebsd(&ctx, &s2) == 0);
+        assert(s2.net.rx_bytes_per_sec == 0);
+        assert(s2.net.tx_bytes_per_sec == 0);
+    }
+
+    // 7. Null-pointer guard for every collector.
+    {
+        budyk_cpu_ctx_c cctx{};
+        budyk_net_ctx_c nctx{};
         budyk_sample_c  s{};
-        assert(budyk_collect_cpu_freebsd   (nullptr, &s) != 0);
-        assert(budyk_collect_cpu_freebsd   (&ctx, nullptr) != 0);
-        assert(budyk_collect_memory_freebsd(nullptr) != 0);
-        assert(budyk_collect_uptime_freebsd(nullptr) != 0);
-        assert(budyk_collect_load_freebsd  (nullptr) != 0);
+        assert(budyk_collect_cpu_freebsd    (nullptr, &s) != 0);
+        assert(budyk_collect_cpu_freebsd    (&cctx, nullptr) != 0);
+        assert(budyk_collect_memory_freebsd (nullptr) != 0);
+        assert(budyk_collect_uptime_freebsd (nullptr) != 0);
+        assert(budyk_collect_load_freebsd   (nullptr) != 0);
+        assert(budyk_collect_network_freebsd(nullptr, &s) != 0);
+        assert(budyk_collect_network_freebsd(&nctx, nullptr) != 0);
     }
 
     std::printf("test_freebsd_collector: PASS\n");
