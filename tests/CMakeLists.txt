@@ -6,6 +6,11 @@ target_link_libraries(test_codec PRIVATE budyk_core)
 target_include_directories(test_codec PRIVATE ${CMAKE_SOURCE_DIR}/src)
 add_test(NAME test_codec COMMAND test_codec)
 
+add_executable(test_storage_codec unit/test_storage_codec.cpp)
+target_link_libraries(test_storage_codec PRIVATE budyk_storage budyk_core)
+target_include_directories(test_storage_codec PRIVATE ${CMAKE_SOURCE_DIR}/src)
+add_test(NAME test_storage_codec COMMAND test_storage_codec)
+
 add_executable(test_hot_buffer unit/test_hot_buffer.cpp)
 target_link_libraries(test_hot_buffer PRIVATE budyk_hot_buffer budyk_core)
 target_include_directories(test_hot_buffer PRIVATE ${CMAKE_SOURCE_DIR}/src)
