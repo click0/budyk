@@ -2,8 +2,9 @@
 // Exercises the FreeBSD collector C functions against the running host.
 // Only added to the build when BUDYK_PLATFORM == freebsd (see tests/CMakeLists.txt).
 //
-// Implemented so far: CPU (kern.cp_time), memory (vm.stats.vm.* + kvm).
-// load / uptime / disk / net are still stubs and will be added as they land.
+// Implemented so far: CPU (kern.cp_time), memory (vm.stats.vm.* + kvm),
+// uptime (kern.boottime), load (getloadavg). disk / net are still stubs
+// and will be added as they land.
 
 #include "core/sample_c.h"
 
@@ -58,13 +59,36 @@ int main() {
         }
     }
 
-    // 3. Null-pointer guard.
+    // 3. Uptime — must be a positive number; modulo wall-clock skew, it
+    //    should be at least a fraction of a second on a running system.
+    {
+        budyk_sample_c s;
+        std::memset(&s, 0, sizeof(s));
+        int rc = budyk_collect_uptime_freebsd(&s);
+        assert(rc == 0);
+        assert(s.uptime_seconds > 0.0);
+    }
+
+    // 4. Load — three non-negative averages.
+    {
+        budyk_sample_c s;
+        std::memset(&s, 0, sizeof(s));
+        int rc = budyk_collect_load_freebsd(&s);
+        assert(rc == 0);
+        assert(s.load.avg_1m  >= 0.0);
+        assert(s.load.avg_5m  >= 0.0);
+        assert(s.load.avg_15m >= 0.0);
+    }
+
+    // 5. Null-pointer guard for every collector.
     {
         budyk_cpu_ctx_c ctx{};
         budyk_sample_c  s{};
-        assert(budyk_collect_cpu_freebsd(nullptr, &s) != 0);
-        assert(budyk_collect_cpu_freebsd(&ctx, nullptr) != 0);
+        assert(budyk_collect_cpu_freebsd   (nullptr, &s) != 0);
+        assert(budyk_collect_cpu_freebsd   (&ctx, nullptr) != 0);
         assert(budyk_collect_memory_freebsd(nullptr) != 0);
+        assert(budyk_collect_uptime_freebsd(nullptr) != 0);
+        assert(budyk_collect_load_freebsd  (nullptr) != 0);
     }
 
     std::printf("test_freebsd_collector: PASS\n");
