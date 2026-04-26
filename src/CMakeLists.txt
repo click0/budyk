@@ -16,6 +16,8 @@ if(BUDYK_PLATFORM STREQUAL "freebsd")
         collector/freebsd/disk.c
         collector/freebsd/system.c
     )
+    # libkvm is in base — needed by memory collector for swap accounting.
+    target_link_libraries(budyk_collector PUBLIC kvm)
 elseif(BUDYK_PLATFORM STREQUAL "linux")
     add_library(budyk_collector STATIC
         collector/linux/cpu.c

@@ -2,8 +2,8 @@
 // Exercises the FreeBSD collector C functions against the running host.
 // Only added to the build when BUDYK_PLATFORM == freebsd (see tests/CMakeLists.txt).
 //
-// At present only the CPU collector is implemented; memory / load /
-// uptime / disk / net are still stubs and will be added as they land.
+// Implemented so far: CPU (kern.cp_time), memory (vm.stats.vm.* + kvm).
+// load / uptime / disk / net are still stubs and will be added as they land.
 
 #include "core/sample_c.h"
 
@@ -40,12 +40,31 @@ int main() {
         assert(s2.cpu.total_percent <= 100.0);
     }
 
-    // 2. Null-pointer guard.
+    // 2. Memory — total > 0, available <= total, percent in [0, 100].
+    //    Swap is optional (containers / jails may have it disabled).
+    {
+        budyk_sample_c s;
+        std::memset(&s, 0, sizeof(s));
+        int rc = budyk_collect_memory_freebsd(&s);
+        assert(rc == 0);
+        assert(s.mem.total     > 0);
+        assert(s.mem.available <= s.mem.total);
+        assert(s.mem.available_percent >= 0.0);
+        assert(s.mem.available_percent <= 100.0);
+        if (s.swap.total > 0) {
+            assert(s.swap.used <= s.swap.total);
+            assert(s.swap.used_percent >= 0.0);
+            assert(s.swap.used_percent <= 100.0);
+        }
+    }
+
+    // 3. Null-pointer guard.
     {
         budyk_cpu_ctx_c ctx{};
         budyk_sample_c  s{};
         assert(budyk_collect_cpu_freebsd(nullptr, &s) != 0);
         assert(budyk_collect_cpu_freebsd(&ctx, nullptr) != 0);
+        assert(budyk_collect_memory_freebsd(nullptr) != 0);
     }
 
     std::printf("test_freebsd_collector: PASS\n");
