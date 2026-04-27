@@ -31,6 +31,11 @@ target_link_libraries(test_tier_aggregator PRIVATE budyk_storage budyk_core)
 target_include_directories(test_tier_aggregator PRIVATE ${CMAKE_SOURCE_DIR}/src)
 add_test(NAME test_tier_aggregator COMMAND test_tier_aggregator)
 
+add_executable(test_tier_manager unit/test_tier_manager.cpp)
+target_link_libraries(test_tier_manager PRIVATE budyk_storage budyk_core)
+target_include_directories(test_tier_manager PRIVATE ${CMAKE_SOURCE_DIR}/src)
+add_test(NAME test_tier_manager COMMAND test_tier_manager)
+
 add_executable(test_baseline unit/test_baseline.cpp)
 target_link_libraries(test_baseline PRIVATE budyk_ai budyk_core)
 target_include_directories(test_baseline PRIVATE ${CMAKE_SOURCE_DIR}/src)
