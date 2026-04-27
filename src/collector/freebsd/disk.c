@@ -3,9 +3,12 @@
 
 #include "core/sample_c.h"
 
+#include <sys/types.h>
+
 #include <devstat.h>
 
 #include <errno.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -15,9 +18,13 @@
  * the caller-supplied timestamp drive the bytes-per-second rate.
  *
  * Filtering: skip cd*/pass*/fd* (optical / SCSI passthrough / floppy).
- * Everything else — ada*, da*, nvd*, nvme*, mmcsd*, vtbd*, gpt/zvol — is
- * counted. Whole-disk vs slice/partition distinction is moot here:
- * GEOM exposes byte counters at the leaf nodes.
+ *
+ * Memory pattern matches iostat(8): a stack-resident struct devinfo
+ * pre-zeroed, then handed to devstat_getdevs() which fills it in. The
+ * library owns dinfo->mem_ptr across calls — for our one-shot per
+ * sample tick we deliberately don't free it; the libdevstat pool is
+ * reused on the next call and released only when libdevstat tears
+ * itself down at process exit.
  */
 
 static int is_skipped(const char* dev_name) {
@@ -30,36 +37,25 @@ static int is_skipped(const char* dev_name) {
 int budyk_collect_disk_freebsd(budyk_disk_ctx_c* ctx, budyk_sample_c* s) {
     if (ctx == NULL || s == NULL) return -EINVAL;
 
-    if (devstat_checkversion(NULL) < 0) return -EIO;
-
+    struct devinfo  dinfo;
     struct statinfo cur;
-    memset(&cur, 0, sizeof(cur));
-    cur.dinfo = (struct devinfo*)calloc(1, sizeof(struct devinfo));
-    if (cur.dinfo == NULL) return -ENOMEM;
+    memset(&dinfo, 0, sizeof(dinfo));
+    memset(&cur,   0, sizeof(cur));
+    cur.dinfo = &dinfo;
 
-    if (devstat_getdevs(NULL, &cur) < 0) {
-        free(cur.dinfo);
-        return -EIO;
-    }
+    if (devstat_getdevs(NULL, &cur) < 0) return -EIO;
 
     uint64_t read_bytes  = 0;
     uint64_t write_bytes = 0;
     uint32_t device_count = 0;
 
-    for (int i = 0; i < cur.dinfo->numdevs; ++i) {
-        const struct devstat* ds = &cur.dinfo->devices[i];
+    for (int i = 0; i < dinfo.numdevs; ++i) {
+        const struct devstat* ds = &dinfo.devices[i];
         if (is_skipped(ds->device_name)) continue;
-
         read_bytes  += (uint64_t)ds->bytes[DEVSTAT_READ];
         write_bytes += (uint64_t)ds->bytes[DEVSTAT_WRITE];
         ++device_count;
     }
-
-    /* devstat_getdevs allocates an internal block referenced by
-     * dinfo->mem_ptr — release it before freeing dinfo itself.
-     */
-    if (cur.dinfo->mem_ptr != NULL) free(cur.dinfo->mem_ptr);
-    free(cur.dinfo);
 
     s->disk.device_count = device_count;
 
