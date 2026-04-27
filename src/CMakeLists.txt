@@ -7,6 +7,14 @@ add_library(budyk_core STATIC
 )
 target_include_directories(budyk_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
+# Platform compile-time guard. Source files (notably src/main.cpp) use
+# BUDYK_LINUX / BUDYK_FREEBSD to pick the right collector ABI.
+if(BUDYK_PLATFORM STREQUAL "linux")
+    target_compile_definitions(budyk_core PUBLIC BUDYK_LINUX)
+elseif(BUDYK_PLATFORM STREQUAL "freebsd")
+    target_compile_definitions(budyk_core PUBLIC BUDYK_FREEBSD)
+endif()
+
 # Platform collector (C)
 if(BUDYK_PLATFORM STREQUAL "freebsd")
     add_library(budyk_collector STATIC
