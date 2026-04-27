@@ -2,9 +2,9 @@
 // Exercises the FreeBSD collector C functions against the running host.
 // Only added to the build when BUDYK_PLATFORM == freebsd (see tests/CMakeLists.txt).
 //
-// Implemented so far: CPU (kern.cp_time), memory (vm.stats.vm.* + kvm),
-// uptime (kern.boottime), load (getloadavg), network (getifaddrs).
-// disk is still a stub and will be added as it lands.
+// Full FreeBSD collector suite: CPU (kern.cp_time), memory
+// (vm.stats.vm.* + kvm), uptime (kern.boottime), load (getloadavg),
+// network (getifaddrs), disk (devstat).
 
 #include "core/sample_c.h"
 
@@ -124,11 +124,54 @@ int main() {
         assert(s2.net.tx_bytes_per_sec == 0);
     }
 
-    // 7. Null-pointer guard for every collector.
+    // 7. Disk — baseline (0 B/s) on first call, delta computed from
+    //    caller-supplied timestamps on subsequent calls. device_count
+    //    must be consistent across calls.
     {
-        budyk_cpu_ctx_c cctx{};
-        budyk_net_ctx_c nctx{};
-        budyk_sample_c  s{};
+        budyk_disk_ctx_c ctx;
+        std::memset(&ctx, 0, sizeof(ctx));
+
+        budyk_sample_c s1;
+        std::memset(&s1, 0, sizeof(s1));
+        s1.timestamp_nanos = 1'000'000'000ULL;
+        assert(budyk_collect_disk_freebsd(&ctx, &s1) == 0);
+        assert(s1.disk.read_bytes_per_sec  == 0);
+        assert(s1.disk.write_bytes_per_sec == 0);
+        assert(ctx.has_prev == 1);
+
+        budyk_sample_c s2;
+        std::memset(&s2, 0, sizeof(s2));
+        s2.timestamp_nanos = 2'000'000'000ULL;       // dt = 1 s
+        assert(budyk_collect_disk_freebsd(&ctx, &s2) == 0);
+        assert(s2.disk.device_count == s1.disk.device_count);
+        (void)s2.disk.read_bytes_per_sec;
+        (void)s2.disk.write_bytes_per_sec;
+    }
+
+    // 8. Disk — same timestamp on consecutive calls must not divide
+    //    by zero — collector yields zero rates instead.
+    {
+        budyk_disk_ctx_c ctx;
+        std::memset(&ctx, 0, sizeof(ctx));
+        budyk_sample_c s;
+        std::memset(&s, 0, sizeof(s));
+        s.timestamp_nanos = 5'000'000'000ULL;
+        assert(budyk_collect_disk_freebsd(&ctx, &s) == 0);  // baseline
+
+        budyk_sample_c s2;
+        std::memset(&s2, 0, sizeof(s2));
+        s2.timestamp_nanos = 5'000'000'000ULL;              // same ns
+        assert(budyk_collect_disk_freebsd(&ctx, &s2) == 0);
+        assert(s2.disk.read_bytes_per_sec  == 0);
+        assert(s2.disk.write_bytes_per_sec == 0);
+    }
+
+    // 9. Null-pointer guard for every collector.
+    {
+        budyk_cpu_ctx_c  cctx{};
+        budyk_net_ctx_c  nctx{};
+        budyk_disk_ctx_c dctx{};
+        budyk_sample_c   s{};
         assert(budyk_collect_cpu_freebsd    (nullptr, &s) != 0);
         assert(budyk_collect_cpu_freebsd    (&cctx, nullptr) != 0);
         assert(budyk_collect_memory_freebsd (nullptr) != 0);
@@ -136,6 +179,8 @@ int main() {
         assert(budyk_collect_load_freebsd   (nullptr) != 0);
         assert(budyk_collect_network_freebsd(nullptr, &s) != 0);
         assert(budyk_collect_network_freebsd(&nctx, nullptr) != 0);
+        assert(budyk_collect_disk_freebsd   (nullptr, &s) != 0);
+        assert(budyk_collect_disk_freebsd   (&dctx, nullptr) != 0);
     }
 
     std::printf("test_freebsd_collector: PASS\n");
