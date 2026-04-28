@@ -111,6 +111,8 @@ target_link_libraries(budyk_tui PRIVATE budyk_core)
 find_package(Curses QUIET)
 if(CURSES_FOUND)
     target_link_libraries(budyk_tui PRIVATE ${CURSES_LIBRARIES})
+    target_include_directories(budyk_tui PRIVATE ${CURSES_INCLUDE_DIRS})
+    target_compile_definitions(budyk_tui PRIVATE BUDYK_HAVE_CURSES)
 endif()
 
 # Config
