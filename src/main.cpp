@@ -12,11 +12,18 @@
 #include "config/config.h"
 #include "core/codec.h"
 #include "core/sample.h"
+#include "core/sample_c.h"
+#include "hot_buffer/hot_buffer.h"
+#include "rules/lua_engine.h"
+#include "scheduler/scheduler.h"
 #include "storage/codec.h"
 #include "storage/ring_file.h"
+#include "storage/tier_manager.h"
 #include "web/auth.h"
 
+#include <atomic>
 #include <cerrno>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -232,6 +239,184 @@ int cmd_suggest_rules(int argc, char* argv[]) {
     return 0;
 }
 
+// ----------------------------------------------------------------------------
+// `budyk serve` — main daemon loop.
+// ----------------------------------------------------------------------------
+// The collector runs in the foreground thread (fits the spec MVP — a real
+// thread-pool wakes up later when the WS hub joins the picture). Each tick:
+//   1. resolve the cadence from the scheduler's current Level,
+//   2. nanosleep until the next deadline (interruptible by SIGINT/SIGTERM),
+//   3. populate a Sample from the platform collectors,
+//   4. push it through Scheduler.tick() to update the level,
+//   5. store via TierManager + push to HotBuffer + eval_tick on LuaEngine.
+//
+// Platform collectors are gated on BUDYK_PLATFORM via the budyk_collector
+// static lib. We use the C-shim Sample type for collector calls and copy
+// the relevant fields back into budyk::Sample for the rest of the pipeline.
+
+static volatile std::sig_atomic_t g_stop = 0;
+
+extern "C" void serve_signal_handler(int /*sig*/) { g_stop = 1; }
+
+void install_signal_handlers() {
+    struct sigaction sa{};
+    sa.sa_handler = serve_signal_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;                      // no SA_RESTART — let nanosleep return
+    ::sigaction(SIGINT,  &sa, nullptr);
+    ::sigaction(SIGTERM, &sa, nullptr);
+
+    struct sigaction ign{};
+    ign.sa_handler = SIG_IGN;
+    ::sigaction(SIGPIPE, &ign, nullptr);
+}
+
+int level_interval_sec(budyk::Level lv, const budyk::SchedulerConfig& sc) {
+    switch (lv) {
+        case budyk::Level::L1: return sc.l1_interval_sec;
+        case budyk::Level::L2: return sc.l2_interval_sec;
+        case budyk::Level::L3: return sc.l3_interval_sec;
+    }
+    return sc.l3_interval_sec;
+}
+
+// Collect one tick into `s`. Stateful collectors (CPU / disk / net) keep
+// their delta context across ticks via the budyk_*_ctx_c args.
+void collect_one(budyk::Sample* s,
+                 budyk_cpu_ctx_c*  cpu_ctx,
+                 budyk_disk_ctx_c* disk_ctx,
+                 budyk_net_ctx_c*  net_ctx) {
+    budyk_sample_c c{};
+    c.timestamp_nanos = s->timestamp_nanos;
+
+#if defined(BUDYK_LINUX)
+    budyk_collect_cpu_linux    (cpu_ctx, &c);
+    budyk_collect_memory_linux (&c);
+    budyk_collect_uptime_linux (&c);
+    budyk_collect_load_linux   (&c);
+    budyk_collect_disk_linux   (disk_ctx, &c);
+    budyk_collect_network_linux(net_ctx,  &c);
+#elif defined(BUDYK_FREEBSD)
+    budyk_collect_cpu_freebsd    (cpu_ctx, &c);
+    budyk_collect_memory_freebsd (&c);
+    budyk_collect_uptime_freebsd (&c);
+    budyk_collect_load_freebsd   (&c);
+    budyk_collect_disk_freebsd   (disk_ctx, &c);
+    budyk_collect_network_freebsd(net_ctx,  &c);
+#else
+    (void)cpu_ctx; (void)disk_ctx; (void)net_ctx;
+#endif
+
+    // Copy the C-shim back into the C++ Sample (same field names, scalar
+    // types match by construction in core/sample_c.h).
+    s->cpu.total_percent      = c.cpu.total_percent;
+    s->cpu.count              = c.cpu.count;
+    s->mem.total              = c.mem.total;
+    s->mem.available          = c.mem.available;
+    s->mem.available_percent  = c.mem.available_percent;
+    s->swap.total             = c.swap.total;
+    s->swap.used              = c.swap.used;
+    s->swap.used_percent      = c.swap.used_percent;
+    s->load.avg_1m            = c.load.avg_1m;
+    s->load.avg_5m            = c.load.avg_5m;
+    s->load.avg_15m           = c.load.avg_15m;
+    s->disk.read_bytes_per_sec  = c.disk.read_bytes_per_sec;
+    s->disk.write_bytes_per_sec = c.disk.write_bytes_per_sec;
+    s->disk.device_count        = c.disk.device_count;
+    s->net.rx_bytes_per_sec     = c.net.rx_bytes_per_sec;
+    s->net.tx_bytes_per_sec     = c.net.tx_bytes_per_sec;
+    s->net.interface_count      = c.net.interface_count;
+    s->uptime_seconds         = c.uptime_seconds;
+}
+
+// Sleep for at most `seconds` real-time, returning early if a signal sets
+// g_stop. Safe to call with seconds <= 0 (no-op).
+void interruptible_sleep(int seconds) {
+    if (seconds <= 0 || g_stop) return;
+    struct timespec req{seconds, 0}, rem{};
+    while (::nanosleep(&req, &rem) != 0) {
+        if (errno != EINTR || g_stop) return;
+        req = rem;
+    }
+}
+
+int cmd_serve(int argc, char* argv[]) {
+    const char* config_path = "/usr/local/etc/budyk/config.yaml";
+    for (int i = 2; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--config") == 0 && i + 1 < argc) {
+            config_path = argv[++i];
+        } else {
+            std::fprintf(stderr, "budyk serve: unknown arg '%s'\n", argv[i]);
+            return 1;
+        }
+    }
+
+    budyk::Config cfg;
+    if (budyk::config_load(config_path, &cfg) != 0) {
+        std::fprintf(stderr,
+            "budyk serve: failed to load config '%s'\n", config_path);
+        return 1;
+    }
+
+    install_signal_handlers();
+
+    budyk::TierManager tm;
+    if (tm.init(cfg.data_dir,
+                cfg.tier1_max_mb, cfg.tier2_max_mb, cfg.tier3_max_mb) != 0) {
+        std::fprintf(stderr,
+            "budyk serve: TierManager.init('%s') failed\n", cfg.data_dir);
+        return 1;
+    }
+
+    budyk::HotBuffer hot(static_cast<size_t>(cfg.hot_buffer_capacity));
+
+    budyk::Scheduler sched(cfg.scheduler);
+
+    budyk::LuaEngine engine;
+    if (engine.init(cfg.rules_enable_exec) != 0) {
+        std::fprintf(stderr, "budyk serve: LuaEngine.init failed\n");
+        tm.close();
+        return 1;
+    }
+    if (!cfg.rules_exec_allow.empty()) {
+        engine.set_exec_allowlist(cfg.rules_exec_allow);
+    }
+    if (cfg.rules_path[0] != '\0') {
+        if (engine.load_file(cfg.rules_path) != 0) {
+            std::fprintf(stderr,
+                "budyk serve: rules file '%s' failed to load — continuing without rules\n",
+                cfg.rules_path);
+        }
+    }
+
+    std::fprintf(stderr,
+        "budyk serve: started (config=%s, data_dir=%s, rules=%d)\n",
+        config_path, cfg.data_dir, engine.rule_count());
+
+    budyk_cpu_ctx_c  cpu_ctx{};
+    budyk_disk_ctx_c disk_ctx{};
+    budyk_net_ctx_c  net_ctx{};
+
+    while (!g_stop) {
+        budyk::Sample s{};
+        s.timestamp_nanos = now_realtime_ns();
+
+        collect_one(&s, &cpu_ctx, &disk_ctx, &net_ctx);
+
+        s.level = sched.tick(s);
+        tm.store(s);
+        hot.push(s);
+        engine.eval_tick(s);
+
+        interruptible_sleep(level_interval_sec(s.level, cfg.scheduler));
+    }
+
+    std::fprintf(stderr, "budyk serve: shutting down\n");
+    engine.shutdown();
+    tm.close();
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char* argv[]) {
@@ -257,9 +442,7 @@ int main(int argc, char* argv[]) {
     }
 
     if (std::strcmp(cmd, "serve") == 0) {
-        // TODO: load config, init collector, scheduler, storage, rules, web
-        std::fprintf(stderr, "budyk serve: not yet implemented\n");
-        return 1;
+        return cmd_serve(argc, argv);
     }
 
     if (std::strcmp(cmd, "tui") == 0) {
