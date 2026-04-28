@@ -20,6 +20,7 @@
 #include "storage/ring_file.h"
 #include "storage/tier_manager.h"
 #include "web/auth.h"
+#include "web/server.h"
 
 #include <atomic>
 #include <cerrno>
@@ -389,9 +390,30 @@ int cmd_serve(int argc, char* argv[]) {
         }
     }
 
+    budyk::HttpServer http;
+    if (http.start(cfg.listen_addr, cfg.listen_port,
+                   [&cfg](const budyk::HttpRequest& req) {
+                       if (req.method == "GET" && req.path == "/api/health") {
+                           budyk::HttpResponse r;
+                           r.status       = 200;
+                           r.content_type = "application/json";
+                           r.body =
+                               "{\"status\":\"ok\","
+                               "\"version\":\"0.2.0\","
+                               "\"data_dir\":\"" + std::string(cfg.data_dir) + "\"}\n";
+                           return r;
+                       }
+                       return budyk::HttpResponse{404, "text/plain", "not found\n"};
+                   }) != 0) {
+        std::fprintf(stderr,
+            "budyk serve: HttpServer.start(%s:%d) failed — continuing without HTTP\n",
+            cfg.listen_addr, cfg.listen_port);
+    }
+
     std::fprintf(stderr,
-        "budyk serve: started (config=%s, data_dir=%s, rules=%d)\n",
-        config_path, cfg.data_dir, engine.rule_count());
+        "budyk serve: started (config=%s, data_dir=%s, rules=%d, listen=%s:%d)\n",
+        config_path, cfg.data_dir, engine.rule_count(),
+        cfg.listen_addr, http.bound_port());
 
     budyk_cpu_ctx_c  cpu_ctx{};
     budyk_disk_ctx_c disk_ctx{};
@@ -412,6 +434,7 @@ int cmd_serve(int argc, char* argv[]) {
     }
 
     std::fprintf(stderr, "budyk serve: shutting down\n");
+    http.stop();
     engine.shutdown();
     tm.close();
     return 0;
