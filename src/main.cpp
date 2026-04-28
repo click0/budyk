@@ -19,6 +19,7 @@
 #include "storage/codec.h"
 #include "storage/ring_file.h"
 #include "storage/tier_manager.h"
+#include "tui/tui.h"
 #include "web/auth.h"
 #include "web/json.h"
 #include "web/server.h"
@@ -639,9 +640,19 @@ int main(int argc, char* argv[]) {
     }
 
     if (std::strcmp(cmd, "tui") == 0) {
-        // TODO: tui_run()
-        std::fprintf(stderr, "budyk tui: not yet implemented\n");
-        return 1;
+        const char* host = nullptr;
+        int         port = 0;
+        for (int i = 2; i < argc; ++i) {
+            if (std::strcmp(argv[i], "--host") == 0 && i + 1 < argc) {
+                host = argv[++i];
+            } else if (std::strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+                port = std::atoi(argv[++i]);
+            } else {
+                std::fprintf(stderr, "budyk tui: unknown arg '%s'\n", argv[i]);
+                return 1;
+            }
+        }
+        return budyk::tui_run(host, port) == 0 ? 0 : 1;
     }
 
     if (std::strcmp(cmd, "hash-password") == 0) {
