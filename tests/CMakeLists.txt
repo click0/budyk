@@ -66,6 +66,11 @@ target_link_libraries(test_session PRIVATE budyk_web budyk_core)
 target_include_directories(test_session PRIVATE ${CMAKE_SOURCE_DIR}/src)
 add_test(NAME test_session COMMAND test_session)
 
+add_executable(test_ws unit/test_ws.cpp)
+target_link_libraries(test_ws PRIVATE budyk_web budyk_core)
+target_include_directories(test_ws PRIVATE ${CMAKE_SOURCE_DIR}/src)
+add_test(NAME test_ws COMMAND test_ws)
+
 add_executable(test_config unit/test_config.cpp)
 target_link_libraries(test_config PRIVATE budyk_config budyk_scheduler budyk_core)
 target_include_directories(test_config PRIVATE ${CMAKE_SOURCE_DIR}/src)

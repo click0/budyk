@@ -23,6 +23,7 @@
 #include "web/json.h"
 #include "web/server.h"
 #include "web/session.h"
+#include "web/ws_hub.h"
 
 #include <atomic>
 #include <cerrno>
@@ -36,6 +37,7 @@
 #include <string>
 #include <vector>
 
+#include <sys/socket.h>
 #include <termios.h>
 #include <unistd.h>
 
@@ -437,8 +439,9 @@ int cmd_serve(int argc, char* argv[]) {
         }
     }
 
-    budyk::HttpServer http;
-    budyk::SessionStore sessions;       // 24-h default TTL
+    budyk::HttpServer    http;
+    budyk::SessionStore  sessions;       // 24-h default TTL
+    budyk::WebSocketHub  ws;
 
     auto authed = [&cfg, &sessions](const budyk::HttpRequest& req) -> bool {
         if (!cfg.auth_enabled) return true;
@@ -448,7 +451,7 @@ int cmd_serve(int argc, char* argv[]) {
         return !tok.empty() && sessions.verify(tok);
     };
 
-    auto router = [&cfg, &hot, &hot_mtx, &sessions, &authed](const budyk::HttpRequest& req) {
+    auto router = [&cfg, &hot, &hot_mtx, &sessions, &ws, &authed](const budyk::HttpRequest& req) {
         // Health is always public so liveness probes work pre-auth.
         if (req.method == "GET" && req.path == "/api/health") {
             budyk::HttpResponse r;
@@ -507,7 +510,7 @@ int cmd_serve(int argc, char* argv[]) {
         if (req.method == "GET" && req.path == "/api/samples") {
             if (!authed(req)) {
                 return budyk::HttpResponse{
-                    401, "application/json", "{\"error\":\"unauthenticated\"}\n", {}};
+                    401, "application/json", "{\"error\":\"unauthenticated\"}\n", {}, {}};
             }
             std::vector<budyk::Sample> snap;
             {
@@ -521,7 +524,47 @@ int cmd_serve(int argc, char* argv[]) {
             r.body         = budyk::samples_to_json(snap.data(), snap.size());
             return r;
         }
-        return budyk::HttpResponse{404, "text/plain", "not found\n", {}};
+
+        if (req.path == "/api/ws") {
+            if (!budyk::is_websocket_upgrade(req)) {
+                return budyk::HttpResponse{
+                    400, "text/plain", "expected websocket upgrade\n", {}, {}};
+            }
+            if (!authed(req)) {
+                return budyk::HttpResponse{
+                    401, "text/plain", "unauthenticated\n", {}, {}};
+            }
+            const std::string key = req.header("Sec-WebSocket-Key");
+            const std::string handshake = budyk::ws_handshake_response(key);
+
+            // Snapshot the hot buffer right now so the new client gets
+            // history immediately on connect (catch-up frame).
+            std::vector<budyk::Sample> snap;
+            {
+                std::lock_guard<std::mutex> g(hot_mtx);
+                snap.resize(hot.size());
+                if (!snap.empty()) hot.dump(snap.data(), snap.size());
+            }
+            std::string catchup = budyk::ws_text_frame(
+                budyk::samples_to_json(snap.data(), snap.size()));
+
+            budyk::HttpResponse r;
+            r.hijack = [handshake, catchup, &ws](int fd) {
+                ssize_t n1 = ::send(fd, handshake.data(), handshake.size(), MSG_NOSIGNAL);
+                if (n1 != static_cast<ssize_t>(handshake.size())) {
+                    ::close(fd);
+                    return;
+                }
+                ssize_t n2 = ::send(fd, catchup.data(), catchup.size(), MSG_NOSIGNAL);
+                if (n2 != static_cast<ssize_t>(catchup.size())) {
+                    ::close(fd);
+                    return;
+                }
+                ws.add(fd);
+            };
+            return r;
+        }
+        return budyk::HttpResponse{404, "text/plain", "not found\n", {}, {}};
     };
     if (http.start(cfg.listen_addr, cfg.listen_port, router) != 0) {
         std::fprintf(stderr,
@@ -552,11 +595,16 @@ int cmd_serve(int argc, char* argv[]) {
         }
         engine.eval_tick(s);
 
+        // Push the freshly-collected sample to every connected WS client.
+        // Failed sends are evicted by the hub itself.
+        ws.broadcast(budyk::samples_to_json(&s, 1));
+
         interruptible_sleep(level_interval_sec(s.level, cfg.scheduler));
     }
 
     std::fprintf(stderr, "budyk serve: shutting down\n");
     http.stop();
+    ws.close_all();
     engine.shutdown();
     tm.close();
     return 0;

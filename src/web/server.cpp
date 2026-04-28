@@ -239,20 +239,20 @@ void HttpServer::run_loop() {
             if (errno == EINTR) continue;
             break;
         }
-        handle_client(cfd);
-        ::close(cfd);
+        const bool hijacked = handle_client(cfd);
+        if (!hijacked) ::close(cfd);
     }
 }
 
-void HttpServer::handle_client(int client_fd) {
+bool HttpServer::handle_client(int client_fd) {
     std::vector<char> buf;
     ssize_t hdr_end = read_until_headers(client_fd, &buf);
-    if (hdr_end <= 0) return;
+    if (hdr_end <= 0) return false;
 
     HttpRequest req;
     if (!parse_headers(buf.data(), static_cast<size_t>(hdr_end), &req)) {
-        send_response(client_fd, HttpResponse{400, "text/plain", "bad request\n", {}});
-        return;
+        send_response(client_fd, HttpResponse{400, "text/plain", "bad request\n", {}, {}});
+        return false;
     }
 
     // Prefix bytes already in `buf` past the headers belong to the body.
@@ -266,8 +266,8 @@ void HttpServer::handle_client(int client_fd) {
         char* endp = nullptr;
         unsigned long want = std::strtoul(cl.c_str(), &endp, 10);
         if (endp == cl.c_str() || want > kMaxBodyBytes) {
-            send_response(client_fd, HttpResponse{413, "text/plain", "body too large\n", {}});
-            return;
+            send_response(client_fd, HttpResponse{413, "text/plain", "body too large\n", {}, {}});
+            return false;
         }
         if (req.body.size() < want) {
             const size_t need = want - req.body.size();
@@ -280,7 +280,13 @@ void HttpServer::handle_client(int client_fd) {
     }
 
     HttpResponse resp = handler_(req);
+    if (resp.hijack) {
+        // The handler owns the fd from here on — typically a WS upgrade.
+        resp.hijack(client_fd);
+        return true;
+    }
     send_response(client_fd, resp);
+    return false;
 }
 
 } // namespace budyk
