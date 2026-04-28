@@ -88,6 +88,7 @@ add_library(budyk_web STATIC
     web/ws_hub.cpp
     web/auth.cpp
     web/json.cpp
+    web/session.cpp
 )
 target_link_libraries(budyk_web PRIVATE budyk_core)
 # pthreads — HttpServer runs an accept loop on a worker std::thread.

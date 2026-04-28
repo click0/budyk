@@ -4,6 +4,8 @@
 #include <functional>
 #include <string>
 #include <thread>
+#include <utility>
+#include <vector>
 
 namespace budyk {
 
@@ -20,12 +22,21 @@ namespace budyk {
 struct HttpRequest {
     std::string method;       // "GET", "POST", ...
     std::string path;         // "/api/health"
+    std::vector<std::pair<std::string, std::string>> headers;
+    std::string body;
+
+    // Case-insensitive header lookup. Returns "" if missing. Header
+    // names follow RFC 7230 ASCII conventions.
+    std::string header(const std::string& name) const;
 };
 
 struct HttpResponse {
     int         status;       // 200, 404, ...
     std::string content_type; // "application/json", "text/plain"
     std::string body;
+    // Extra response headers — written verbatim after Content-Length.
+    // Use for things like Set-Cookie, Cache-Control, etc.
+    std::vector<std::pair<std::string, std::string>> extra_headers;
 };
 
 using HttpHandler = std::function<HttpResponse(const HttpRequest&)>;

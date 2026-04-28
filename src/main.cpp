@@ -22,6 +22,7 @@
 #include "web/auth.h"
 #include "web/json.h"
 #include "web/server.h"
+#include "web/session.h"
 
 #include <atomic>
 #include <cerrno>
@@ -332,6 +333,45 @@ void collect_one(budyk::Sample* s,
     s->uptime_seconds         = c.uptime_seconds;
 }
 
+// Pull the value of a top-level string field out of a tiny JSON object.
+// Looks for `"<key>"<ws>:<ws>"<value>"`. Doesn't handle escapes — the
+// daemon's only JSON input today is a password from the login form,
+// which is rejected at length cap; anything fancy fails closed.
+bool json_get_string(const std::string& body, const char* key, std::string* out) {
+    std::string needle = "\"";
+    needle.append(key);
+    needle.append("\"");
+    auto kpos = body.find(needle);
+    if (kpos == std::string::npos) return false;
+    auto colon = body.find(':', kpos + needle.size());
+    if (colon == std::string::npos) return false;
+    auto open = body.find('"', colon + 1);
+    if (open == std::string::npos) return false;
+    auto close = body.find('"', open + 1);
+    if (close == std::string::npos) return false;
+    out->assign(body, open + 1, close - open - 1);
+    return true;
+}
+
+// Extract the value of a single cookie name from a Cookie header line
+// like "a=1; b=2". Returns empty string if missing.
+std::string cookie_value(const std::string& cookie_header, const char* name) {
+    const std::string needle = std::string(name) + "=";
+    size_t p = 0;
+    while (p < cookie_header.size()) {
+        size_t end = cookie_header.find(';', p);
+        if (end == std::string::npos) end = cookie_header.size();
+        size_t start = p;
+        while (start < end && (cookie_header[start] == ' ' || cookie_header[start] == '\t'))
+            ++start;
+        if (cookie_header.compare(start, needle.size(), needle) == 0) {
+            return cookie_header.substr(start + needle.size(), end - start - needle.size());
+        }
+        p = end + 1;
+    }
+    return {};
+}
+
 // Sleep for at most `seconds` real-time, returning early if a signal sets
 // g_stop. Safe to call with seconds <= 0 (no-op).
 void interruptible_sleep(int seconds) {
@@ -398,7 +438,18 @@ int cmd_serve(int argc, char* argv[]) {
     }
 
     budyk::HttpServer http;
-    auto router = [&cfg, &hot, &hot_mtx](const budyk::HttpRequest& req) {
+    budyk::SessionStore sessions;       // 24-h default TTL
+
+    auto authed = [&cfg, &sessions](const budyk::HttpRequest& req) -> bool {
+        if (!cfg.auth_enabled) return true;
+        const std::string c = req.header("Cookie");
+        if (c.empty())        return false;
+        const std::string tok = cookie_value(c, "budyk_session");
+        return !tok.empty() && sessions.verify(tok);
+    };
+
+    auto router = [&cfg, &hot, &hot_mtx, &sessions, &authed](const budyk::HttpRequest& req) {
+        // Health is always public so liveness probes work pre-auth.
         if (req.method == "GET" && req.path == "/api/health") {
             budyk::HttpResponse r;
             r.status       = 200;
@@ -409,9 +460,55 @@ int cmd_serve(int argc, char* argv[]) {
                 "\"data_dir\":\"" + std::string(cfg.data_dir) + "\"}\n";
             return r;
         }
+
+        if (req.method == "POST" && req.path == "/api/auth/login") {
+            if (!cfg.auth_enabled || cfg.password_hash[0] == '\0') {
+                return budyk::HttpResponse{
+                    403, "text/plain", "auth disabled\n", {}};
+            }
+            std::string pw;
+            if (!json_get_string(req.body, "password", &pw) || pw.empty()) {
+                return budyk::HttpResponse{
+                    400, "application/json",
+                    "{\"error\":\"missing password\"}\n", {}};
+            }
+            if (budyk::argon2_verify(pw, cfg.password_hash) != 0) {
+                return budyk::HttpResponse{
+                    401, "application/json",
+                    "{\"error\":\"invalid credentials\"}\n", {}};
+            }
+            const std::string tok = sessions.create();
+            if (tok.empty()) {
+                return budyk::HttpResponse{
+                    500, "application/json",
+                    "{\"error\":\"entropy unavailable\"}\n", {}};
+            }
+            budyk::HttpResponse r;
+            r.status       = 200;
+            r.content_type = "application/json";
+            r.body         = "{\"ok\":true}\n";
+            r.extra_headers.push_back({"Set-Cookie",
+                "budyk_session=" + tok + "; HttpOnly; Path=/; SameSite=Strict"});
+            return r;
+        }
+
+        if (req.method == "POST" && req.path == "/api/auth/logout") {
+            const std::string c = req.header("Cookie");
+            if (!c.empty()) {
+                const std::string tok = cookie_value(c, "budyk_session");
+                if (!tok.empty()) sessions.revoke(tok);
+            }
+            budyk::HttpResponse r{200, "application/json", "{\"ok\":true}\n", {}};
+            r.extra_headers.push_back({"Set-Cookie",
+                "budyk_session=; HttpOnly; Path=/; Max-Age=0"});
+            return r;
+        }
+
         if (req.method == "GET" && req.path == "/api/samples") {
-            // Snapshot the hot buffer under the mutex, then format
-            // outside the lock to keep the collector's push() unblocked.
+            if (!authed(req)) {
+                return budyk::HttpResponse{
+                    401, "application/json", "{\"error\":\"unauthenticated\"}\n", {}};
+            }
             std::vector<budyk::Sample> snap;
             {
                 std::lock_guard<std::mutex> g(hot_mtx);
@@ -424,7 +521,7 @@ int cmd_serve(int argc, char* argv[]) {
             r.body         = budyk::samples_to_json(snap.data(), snap.size());
             return r;
         }
-        return budyk::HttpResponse{404, "text/plain", "not found\n"};
+        return budyk::HttpResponse{404, "text/plain", "not found\n", {}};
     };
     if (http.start(cfg.listen_addr, cfg.listen_port, router) != 0) {
         std::fprintf(stderr,
