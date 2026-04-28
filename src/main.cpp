@@ -20,6 +20,7 @@
 #include "storage/ring_file.h"
 #include "storage/tier_manager.h"
 #include "web/auth.h"
+#include "web/json.h"
 #include "web/server.h"
 
 #include <atomic>
@@ -30,6 +31,7 @@
 #include <cstring>
 #include <ctime>
 #include <iostream>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -370,6 +372,11 @@ int cmd_serve(int argc, char* argv[]) {
     }
 
     budyk::HotBuffer hot(static_cast<size_t>(cfg.hot_buffer_capacity));
+    // hot is read by the HTTP thread (/api/samples) and written by this
+    // collector thread; HotBuffer itself isn't synchronised, so wrap
+    // both sides in a mutex. Single-admin traffic + one push per tick
+    // means contention is essentially zero.
+    std::mutex hot_mtx;
 
     budyk::Scheduler sched(cfg.scheduler);
 
@@ -391,20 +398,35 @@ int cmd_serve(int argc, char* argv[]) {
     }
 
     budyk::HttpServer http;
-    if (http.start(cfg.listen_addr, cfg.listen_port,
-                   [&cfg](const budyk::HttpRequest& req) {
-                       if (req.method == "GET" && req.path == "/api/health") {
-                           budyk::HttpResponse r;
-                           r.status       = 200;
-                           r.content_type = "application/json";
-                           r.body =
-                               "{\"status\":\"ok\","
-                               "\"version\":\"0.2.0\","
-                               "\"data_dir\":\"" + std::string(cfg.data_dir) + "\"}\n";
-                           return r;
-                       }
-                       return budyk::HttpResponse{404, "text/plain", "not found\n"};
-                   }) != 0) {
+    auto router = [&cfg, &hot, &hot_mtx](const budyk::HttpRequest& req) {
+        if (req.method == "GET" && req.path == "/api/health") {
+            budyk::HttpResponse r;
+            r.status       = 200;
+            r.content_type = "application/json";
+            r.body =
+                "{\"status\":\"ok\","
+                "\"version\":\"0.2.0\","
+                "\"data_dir\":\"" + std::string(cfg.data_dir) + "\"}\n";
+            return r;
+        }
+        if (req.method == "GET" && req.path == "/api/samples") {
+            // Snapshot the hot buffer under the mutex, then format
+            // outside the lock to keep the collector's push() unblocked.
+            std::vector<budyk::Sample> snap;
+            {
+                std::lock_guard<std::mutex> g(hot_mtx);
+                snap.resize(hot.size());
+                if (!snap.empty()) hot.dump(snap.data(), snap.size());
+            }
+            budyk::HttpResponse r;
+            r.status       = 200;
+            r.content_type = "application/json";
+            r.body         = budyk::samples_to_json(snap.data(), snap.size());
+            return r;
+        }
+        return budyk::HttpResponse{404, "text/plain", "not found\n"};
+    };
+    if (http.start(cfg.listen_addr, cfg.listen_port, router) != 0) {
         std::fprintf(stderr,
             "budyk serve: HttpServer.start(%s:%d) failed — continuing without HTTP\n",
             cfg.listen_addr, cfg.listen_port);
@@ -427,7 +449,10 @@ int cmd_serve(int argc, char* argv[]) {
 
         s.level = sched.tick(s);
         tm.store(s);
-        hot.push(s);
+        {
+            std::lock_guard<std::mutex> g(hot_mtx);
+            hot.push(s);
+        }
         engine.eval_tick(s);
 
         interruptible_sleep(level_interval_sec(s.level, cfg.scheduler));
