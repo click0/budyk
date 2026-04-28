@@ -134,6 +134,74 @@ int main() {
         s.stop();
     }
 
+    // 7. Headers — case-insensitive lookup and multi-header support.
+    {
+        HttpServer s;
+        assert(s.start("127.0.0.1", 0,
+                       [](const HttpRequest& req) {
+                           HttpResponse r;
+                           r.status       = 200;
+                           r.content_type = "text/plain";
+                           r.body         = req.header("X-Foo") + "|" +
+                                            req.header("Cookie");
+                           return r;
+                       }) == 0);
+        std::string resp = http_round_trip(s.bound_port(),
+            "GET / HTTP/1.1\r\nHost: x\r\nx-foo: bar\r\nCookie: a=1; b=2\r\n\r\n");
+        assert(resp.find("\r\n\r\nbar|a=1; b=2") != std::string::npos);
+        s.stop();
+    }
+
+    // 8. Body — Content-Length-driven, exact byte count delivered to handler.
+    {
+        HttpServer s;
+        assert(s.start("127.0.0.1", 0,
+                       [](const HttpRequest& req) {
+                           HttpResponse r;
+                           r.status       = 200;
+                           r.content_type = "application/json";
+                           r.body         = "got=" + req.body;
+                           return r;
+                       }) == 0);
+        std::string resp = http_round_trip(s.bound_port(),
+            "POST /x HTTP/1.1\r\nHost: x\r\nContent-Length: 13\r\n\r\nhello, server");
+        assert(resp.find("\r\n\r\ngot=hello, server") != std::string::npos);
+        s.stop();
+    }
+
+    // 9. Extra response headers — Set-Cookie shows up verbatim.
+    {
+        HttpServer s;
+        assert(s.start("127.0.0.1", 0,
+                       [](const HttpRequest&) {
+                           HttpResponse r;
+                           r.status       = 200;
+                           r.content_type = "text/plain";
+                           r.body         = "ok";
+                           r.extra_headers.push_back({"Set-Cookie",
+                               "budyk_session=deadbeef; HttpOnly; Path=/"});
+                           return r;
+                       }) == 0);
+        std::string resp = http_round_trip(s.bound_port(),
+            "GET / HTTP/1.1\r\nHost: x\r\n\r\n");
+        assert(resp.find("Set-Cookie: budyk_session=deadbeef; HttpOnly; Path=/") !=
+               std::string::npos);
+        s.stop();
+    }
+
+    // 10. Oversized body rejected with 413.
+    {
+        HttpServer s;
+        assert(s.start("127.0.0.1", 0,
+                       [](const HttpRequest&) {
+                           return HttpResponse{200, "text/plain", "ok"};
+                       }) == 0);
+        std::string resp = http_round_trip(s.bound_port(),
+            "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 1000000\r\n\r\n");
+        assert(resp.find("HTTP/1.1 413 Payload Too Large") != std::string::npos);
+        s.stop();
+    }
+
     std::printf("test_http_server: PASS\n");
     return 0;
 }
