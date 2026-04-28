@@ -8,6 +8,8 @@
 //   budyk suggest-rules [--config PATH] [--window 7d] [--output rules.lua] [--ai --api-key KEY]
 //   budyk version
 
+#include "ai/baseline.h"
+#include "ai/llm_client.h"
 #include "ai/suggest.h"
 #include "config/config.h"
 #include "core/codec.h"
@@ -159,10 +161,45 @@ int load_samples_for_suggest(const char* ring_path,
     return 0;
 }
 
+// Format a MetricBaseline as a one-line digest for the LLM prompt.
+std::string fmt_baseline_line(const char* name, const budyk::MetricBaseline& b) {
+    if (b.n == 0) return {};
+    char buf[256];
+    std::snprintf(buf, sizeof(buf),
+        "%s n=%zu min=%.2f max=%.2f mean=%.2f stddev=%.2f p95=%.2f p99=%.2f\n",
+        name, b.n, b.min, b.max, b.mean, b.stddev, b.p95, b.p99);
+    return buf;
+}
+
+std::string build_llm_summary(const budyk::Sample* s, size_t n) {
+    if (s == nullptr || n == 0) return "no samples available\n";
+    std::string out;
+    out += "samples=" + std::to_string(n) + "\n";
+    out += "cpu_count=" + std::to_string(s[n - 1].cpu.count) + "\n";
+    out += fmt_baseline_line("cpu.total_percent",
+                             budyk::compute_cpu_total_percent_stats(s, n));
+    out += fmt_baseline_line("mem.available_percent",
+                             budyk::compute_mem_available_percent_stats(s, n));
+    out += fmt_baseline_line("swap.used_percent",
+                             budyk::compute_swap_used_percent_stats(s, n));
+    out += fmt_baseline_line("load.avg_1m",
+                             budyk::compute_load_1m_stats(s, n));
+    out += fmt_baseline_line("disk.read_bytes_per_sec",
+                             budyk::compute_disk_read_bytes_per_sec_stats(s, n));
+    out += fmt_baseline_line("disk.write_bytes_per_sec",
+                             budyk::compute_disk_write_bytes_per_sec_stats(s, n));
+    out += fmt_baseline_line("net.rx_bytes_per_sec",
+                             budyk::compute_net_rx_bytes_per_sec_stats(s, n));
+    out += fmt_baseline_line("net.tx_bytes_per_sec",
+                             budyk::compute_net_tx_bytes_per_sec_stats(s, n));
+    return out;
+}
+
 int cmd_suggest_rules(int argc, char* argv[]) {
     const char* config_path = "/usr/local/etc/budyk/config.yaml";
     const char* window_arg  = "7d";
     const char* output_path = nullptr;       // nullptr → stdout
+    const char* api_key     = nullptr;
     bool ai = false;
 
     for (int i = 2; i < argc; ++i) {
@@ -175,18 +212,23 @@ int cmd_suggest_rules(int argc, char* argv[]) {
         } else if (std::strcmp(argv[i], "--ai") == 0) {
             ai = true;
         } else if (std::strcmp(argv[i], "--api-key") == 0 && i + 1 < argc) {
-            ++i;                              // accept but ignore for now
+            api_key = argv[++i];
         } else {
             std::fprintf(stderr, "budyk suggest-rules: unknown arg '%s'\n", argv[i]);
             return 1;
         }
     }
 
-    if (ai) {
-        std::fprintf(stderr,
-            "budyk suggest-rules: --ai (Tier B / LLM) is not implemented yet; "
-            "use Tier A (no --ai) for now.\n");
-        return 1;
+    if (ai && (api_key == nullptr || *api_key == '\0')) {
+        const char* env = std::getenv("ANTHROPIC_API_KEY");
+        if (env != nullptr && *env != '\0') {
+            api_key = env;
+        } else {
+            std::fprintf(stderr,
+                "budyk suggest-rules: --ai requires --api-key or "
+                "ANTHROPIC_API_KEY env var\n");
+            return 1;
+        }
     }
 
     const uint64_t window_ns = parse_window_ns(window_arg);
@@ -223,8 +265,23 @@ int cmd_suggest_rules(int argc, char* argv[]) {
         return 1;
     }
 
-    const std::string doc = budyk::suggest_rules_for_samples(
-        samples.data(), samples.size());
+    std::string doc;
+    if (ai) {
+        const std::string summary = build_llm_summary(samples.data(), samples.size());
+        const int rc = budyk::suggest_rules_llm(api_key, summary, &doc);
+        if (rc != 0) {
+            std::fprintf(stderr,
+                "budyk suggest-rules: LLM call failed (rc=%d). "
+                "Check the API key, network, and that curl(1) is on PATH.\n", rc);
+            return 1;
+        }
+        // Prefix the doc with a header so the user knows it's Tier B.
+        doc = "-- AI-suggested rules (Tier B, LLM-generated). Review before using.\n"
+              "-- Generated from " + std::to_string(samples.size()) +
+              " samples in window " + window_arg + ".\n\n" + doc;
+    } else {
+        doc = budyk::suggest_rules_for_samples(samples.data(), samples.size());
+    }
 
     if (output_path != nullptr) {
         std::FILE* f = std::fopen(output_path, "w");
