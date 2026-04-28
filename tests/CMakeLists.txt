@@ -56,6 +56,11 @@ target_link_libraries(test_http_server PRIVATE budyk_web budyk_core)
 target_include_directories(test_http_server PRIVATE ${CMAKE_SOURCE_DIR}/src)
 add_test(NAME test_http_server COMMAND test_http_server)
 
+add_executable(test_json unit/test_json.cpp)
+target_link_libraries(test_json PRIVATE budyk_web budyk_core)
+target_include_directories(test_json PRIVATE ${CMAKE_SOURCE_DIR}/src)
+add_test(NAME test_json COMMAND test_json)
+
 add_executable(test_config unit/test_config.cpp)
 target_link_libraries(test_config PRIVATE budyk_config budyk_scheduler budyk_core)
 target_include_directories(test_config PRIVATE ${CMAKE_SOURCE_DIR}/src)
