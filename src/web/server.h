@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #pragma once
 #include <atomic>
+#include <cstddef>
 #include <functional>
 #include <string>
 #include <thread>
@@ -37,6 +38,11 @@ struct HttpResponse {
     // Extra response headers — written verbatim after Content-Length.
     // Use for things like Set-Cookie, Cache-Control, etc.
     std::vector<std::pair<std::string, std::string>> extra_headers;
+    // If set, the server hands the live socket fd to this callback
+    // INSTEAD of writing a normal response. The callback owns the fd
+    // (must close it eventually) — used for the WebSocket upgrade and
+    // other long-lived connection takeovers.
+    std::function<void(int fd)> hijack;
 };
 
 using HttpHandler = std::function<HttpResponse(const HttpRequest&)>;
@@ -67,7 +73,9 @@ private:
     HttpHandler            handler_;
 
     void run_loop();
-    void handle_client(int client_fd);
+    // Returns true if the handler set HttpResponse::hijack and the fd
+    // ownership has moved out — the run loop must NOT close it.
+    bool handle_client(int client_fd);
 };
 
 } // namespace budyk
