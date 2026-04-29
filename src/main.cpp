@@ -26,6 +26,7 @@
 #include "web/json.h"
 #include "web/server.h"
 #include "web/session.h"
+#include "web/spa.h"
 #include "web/ws_hub.h"
 
 #include <atomic>
@@ -510,6 +511,18 @@ int cmd_serve(int argc, char* argv[]) {
     };
 
     auto router = [&cfg, &hot, &hot_mtx, &sessions, &ws, &authed](const budyk::HttpRequest& req) {
+        // Static SPA — served at /, /index.html and /budyk for the
+        // browser-friendly entry. Always public; the JS itself does
+        // the auth-probe + login round-trip.
+        if (req.method == "GET" &&
+            (req.path == "/" || req.path == "/index.html")) {
+            budyk::HttpResponse r;
+            r.status       = 200;
+            r.content_type = "text/html; charset=utf-8";
+            r.body.assign(budyk::kSpaIndexHtml, budyk::kSpaIndexHtmlLen);
+            return r;
+        }
+
         // Health is always public so liveness probes work pre-auth.
         if (req.method == "GET" && req.path == "/api/health") {
             budyk::HttpResponse r;
