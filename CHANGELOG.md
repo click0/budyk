@@ -5,6 +5,81 @@ All notable changes to budyk will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] — 2026-04-29
+
+### Added
+
+- **Live daemon: `budyk serve`** — single-thread main loop wires
+  `Config` → platform collectors → `Scheduler` → `TierManager` →
+  `HotBuffer` → `LuaEngine`. SIGINT/SIGTERM trigger a graceful
+  shutdown; SIGPIPE ignored.
+- **`TierManager`** — routes encoded samples by `Sample::level` to
+  three on-disk ring buffers (250/150/50 MiB defaults).
+  `init()` / `store()` / `close()` / `tier{1,2,3}_count()`.
+- **CLI completion**:
+  - `budyk hash-password` — interactive (TTY echo-off) or piped
+    Argon2id hash, ready for `password_hash:` in `config.yaml`.
+  - `budyk suggest-rules` — reads from `tier1.ring` and runs
+    `ai::suggest_rules_for_samples()`. Window arg
+    (`<N>{s,m,h,d}`), `--config`, `--output`, and `--ai`.
+  - `budyk tui` — ncurses dashboard polling `/api/samples` once a
+    second. Gauge bars for CPU / Memory / Swap / Load, text panels
+    for Disk / Net / Uptime. `q` / ESC to exit.
+- **Embedded HTTP/1.1 server** (`src/web/server.{h,cpp}`):
+  accept-loop on a worker thread, full header + body parsing
+  (`Content-Length` capped at 64 KiB → 413), `extra_headers` on the
+  response (Set-Cookie / Cache-Control), `hijack` callback for
+  long-lived connections.
+- **Endpoints**:
+  - `GET  /api/health` — public liveness JSON.
+  - `GET  /api/samples` — JSON dump of the hot-buffer.
+  - `POST /api/auth/login` — Argon2id verify against
+    `cfg.password_hash`, sets `Set-Cookie: budyk_session=...; HttpOnly;
+    SameSite=Strict`.
+  - `POST /api/auth/logout` — revokes the cookie.
+  - `GET  /api/ws` — RFC 6455 WebSocket upgrade. Handshake produces
+    `Sec-WebSocket-Accept = base64(SHA1(key + magic))` from a
+    pure-C in-tree implementation. Catch-up frame on connect; one
+    text frame per collector tick.
+- **`SessionStore`** — in-process token table, 24-h TTL default,
+  lazy-evicting on `verify()`. Tokens are 32-byte hex from
+  `web::auth::new_session_token()`.
+- **AI Tier B** — `budyk suggest-rules --ai` calls Anthropic's
+  `/v1/messages` via `popen("curl …")`. API key passed in a temp-file
+  header bundle so it never lands on `ps`. Default model
+  `claude-haiku-4-5-20251001`.
+- **Single-page web UI** — self-contained HTML/CSS/JS in
+  `src/web/spa.cpp` (one raw-string literal). `GET /` serves it
+  verbatim. JS probes `/api/samples`, falls into a login form on 401,
+  then opens `/api/ws` and live-updates with a 2 s reconnect backoff.
+- **FreeBSD collector suite** — five real implementations replacing
+  the ENOSYS stubs:
+  - `freebsd/cpu.c`        — `kern.cp_time` deltas + `hw.ncpu`.
+  - `freebsd/memory.c`     — `vm.stats.vm.*` for RAM and
+    `kvm_getswapinfo` for swap (soft-fail in jails).
+  - `freebsd/system.c`     — `kern.boottime` for uptime, `getloadavg(3)`.
+  - `freebsd/network.c`    — `getifaddrs(3)` + `AF_LINK` byte
+    counters, loopback excluded.
+  - `freebsd/disk.c`       — written but not yet enabled (FreeBSD CI
+    infra regression in cross-platform-actions, tracked separately).
+- **CMake `BUDYK_LINUX` / `BUDYK_FREEBSD` macros** wired through
+  `target_compile_definitions(budyk_core PUBLIC ...)` so source files
+  can `#ifdef`-dispatch on the configured platform.
+- **`tier_manager` + `storage_codec` direct test coverage** (the
+  CRC32C path was previously only exercised indirectly through
+  `test_ring_file`).
+
+### Changed
+
+- `docs/budyk.8` dated 2026-04-29; `main.cpp` `version` command and
+  `/api/health` JSON both report `0.3.0`.
+- `tests/CMakeLists.txt` grew six new suites:
+  `test_tier_manager`, `test_storage_codec`, `test_freebsd_collector`
+  (gated), `test_session`, `test_ws`, `test_http_server`,
+  `test_json`, `test_llm_client`. Total ctest count: **19**.
+
+[0.3.0]: https://github.com/click0/budyk/releases/tag/v0.3.0
+
 ## [0.2.0] — 2026-04-22
 
 ### Added
