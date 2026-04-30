@@ -5,6 +5,35 @@ All notable changes to budyk will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] — 2026-04-30
+
+Patch release — paper cuts surfaced while smoke-testing the v0.3.0
+release binary end-to-end.
+
+### Fixed
+
+- **`budyk serve`** no longer prints a misleading
+  *"rules file '/usr/local/etc/budyk/rules.lua' failed to load"*
+  warning on every fresh-install start. The path is now
+  `::access(R_OK)`-probed first; the warning fires only when a rules
+  file is present **and** `LuaEngine::load_file` fails to parse it.
+
+### Changed
+
+- `config.example.yaml`:
+  - Real GitHub URL instead of the `USER/budyk` placeholder.
+  - Added the nested `rules.exec.{enabled,allow}` block (PR #24)
+    with two realistic allowlist entries.
+  - Explicit comment on `web.auth.password_hash`: wrap it in quotes
+    because the PHC string contains `$` / `,` / `=`, which YAML's
+    flow style treats as separators / map keys.
+  - Section dividers so the file scans cleanly when copied into
+    `/etc`.
+- `docs/budyk.8` dated 2026-04-30; `main.cpp` `version` command and
+  `/api/health` JSON both report `0.3.1`.
+
+[0.3.1]: https://github.com/click0/budyk/releases/tag/v0.3.1
+
 ## [0.3.0] — 2026-04-29
 
 ### Added

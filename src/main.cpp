@@ -535,7 +535,7 @@ int cmd_serve(int argc, char* argv[]) {
             r.content_type = "application/json";
             r.body =
                 "{\"status\":\"ok\","
-                "\"version\":\"0.3.0\","
+                "\"version\":\"0.3.1\","
                 "\"data_dir\":\"" + std::string(cfg.data_dir) + "\"}\n";
             return r;
         }
@@ -706,7 +706,7 @@ int main(int argc, char* argv[]) {
     const char* cmd = argv[1];
 
     if (std::strcmp(cmd, "version") == 0) {
-        std::printf("budyk 0.3.0\n");
+        std::printf("budyk 0.3.1\n");
         return 0;
     }
 
