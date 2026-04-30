@@ -491,10 +491,15 @@ int cmd_serve(int argc, char* argv[]) {
         engine.set_exec_allowlist(cfg.rules_exec_allow);
     }
     if (cfg.rules_path[0] != '\0') {
-        if (engine.load_file(cfg.rules_path) != 0) {
-            std::fprintf(stderr,
-                "budyk serve: rules file '%s' failed to load — continuing without rules\n",
-                cfg.rules_path);
+        // Distinguish "file just doesn't exist on a fresh install" from
+        // "file is present but won't parse" — only the second is worth
+        // a warning. ::access(R_OK) is the cheapest probe.
+        if (::access(cfg.rules_path, R_OK) == 0) {
+            if (engine.load_file(cfg.rules_path) != 0) {
+                std::fprintf(stderr,
+                    "budyk serve: rules file '%s' failed to load — continuing without rules\n",
+                    cfg.rules_path);
+            }
         }
     }
 

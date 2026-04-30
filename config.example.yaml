@@ -1,41 +1,62 @@
-# budyk — configuration
-# See: https://github.com/USER/budyk
+# budyk — example configuration
+# https://github.com/click0/budyk
+#
+# Copy to /usr/local/etc/budyk/config.yaml (FreeBSD) or
+# /etc/budyk/config.yaml (Linux) and edit. Pass an alternative
+# path via `budyk serve --config /path/to/config.yaml`.
 
-listen: "127.0.0.1"
+# ---- Server ---------------------------------------------------------------
+listen: "127.0.0.1"        # 0.0.0.0 to bind every interface
 port: 8080
-data_dir: "/var/db/budyk"
+data_dir: "/var/db/budyk"  # ring files + (future) exports
 
+# ---- Collection cadence (spec §3.3) --------------------------------------
 collection:
-  mode: adaptive          # always | adaptive | on-demand
   l1:
-    interval: 300          # seconds (heartbeat)
-    metrics: minimal
+    interval: 300          # heartbeat — seconds
   l2:
-    interval: 30           # seconds
-    always_on: false
+    interval: 30
+    always_on: false       # `true` keeps the watchful tier alive without
+                           # an active client / anomaly
+    hysteresis: 300        # seconds before stepping down a level
     escalation_thresholds:
       load_1m: 4.0
       cpu_percent: 85
       swap_used_percent: 50
-    hysteresis: 300        # seconds before de-escalation
   l3:
-    interval: 1            # seconds
-    metrics: full
-    grace_period: 60       # seconds after last client disconnects
+    interval: 1            # active — seconds
+    grace_period: 60       # how long to keep L3 after the last client
+                           # disconnects
   hot_buffer:
-    capacity: 300          # records (= 5 min at 1 Hz)
+    capacity: 300          # records held in RAM for WS catch-up
     warm_grace: 60         # seconds
 
+# ---- Storage rings -------------------------------------------------------
 storage:
-  tier1_max_mb: 250
-  tier2_max_mb: 150
-  tier3_max_mb: 50
+  tier1_max_mb: 250        # raw L3 samples
+  tier2_max_mb: 150        # 1-minute aggregates
+  tier3_max_mb: 50         # 5-minute aggregates
 
+# ---- Rules engine --------------------------------------------------------
 rules:
   path: "/usr/local/etc/budyk/rules.lua"
-  enable_exec: false       # set true + --enable-exec flag to allow exec()
+  exec:
+    enabled: false         # `true` lets watch() actions invoke external
+                           # programs; otherwise exec() is rejected
+    # When enabled, exec() will only spawn programs whose absolute path
+    # is in this list. Empty list ⇒ any absolute path under the no-`..`
+    # traversal guard.
+    allow:
+      - /usr/local/bin/budyk-alerter
+      - /usr/bin/systemctl
 
+# ---- Web server / SPA ----------------------------------------------------
 web:
   auth:
     enabled: false
-    # password_hash: "$argon2id$..."   # generate with: budyk hash-password
+    # IMPORTANT — wrap the hash in quotes. The PHC string contains
+    # `$`, `,` and `=`, which YAML's flow style would treat as
+    # separators / map keys. Block style (no `{}`) handles it without
+    # quotes too, but quoting is the safe form.
+    # Generate via:  budyk hash-password
+    # password_hash: "$argon2id$v=19$m=65536,t=3,p=4$<salt>$<hash>"
