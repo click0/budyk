@@ -3,6 +3,10 @@
 
 #include "core/sample_c.h"
 
+#include <sys/resource.h>
+#include <sys/time.h>
+#include <unistd.h>
+
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -82,5 +86,48 @@ int budyk_collect_proc_linux(budyk_sample_c* s) {
 
     s->proc.running = running;
     s->proc.total   = total;
+    return 0;
+}
+
+/* Self-metrics — the daemon's own resource consumption.
+ * Linux:
+ *   * /proc/self/statm field 1 ("size" in pages) → vsz, but we surface
+ *     RSS instead via field 2 ("resident" in pages); multiply by
+ *     sysconf(_SC_PAGESIZE).
+ *   * getrusage(RUSAGE_SELF) for ru_maxrss (peak, KiB) and the
+ *     user/system CPU time accumulators.
+ * The fields are best-effort — soft-fail to 0 on any failure.
+ */
+int budyk_collect_self_linux(budyk_sample_c* s) {
+    if (s == NULL) return -EINVAL;
+
+    s->self_.rss_bytes          = 0;
+    s->self_.peak_rss_bytes     = 0;
+    s->self_.cpu_user_seconds   = 0.0;
+    s->self_.cpu_system_seconds = 0.0;
+
+    /* Current RSS. */
+    FILE* f = fopen("/proc/self/statm", "r");
+    if (f != NULL) {
+        unsigned long long sz_pages = 0, rss_pages = 0;
+        if (fscanf(f, "%llu %llu", &sz_pages, &rss_pages) == 2) {
+            const long page = sysconf(_SC_PAGESIZE);
+            if (page > 0) {
+                s->self_.rss_bytes = (uint64_t)rss_pages * (uint64_t)page;
+            }
+        }
+        fclose(f);
+    }
+
+    /* Peak RSS + CPU time. */
+    struct rusage ru;
+    if (getrusage(RUSAGE_SELF, &ru) == 0) {
+        /* ru_maxrss: KiB on Linux. */
+        s->self_.peak_rss_bytes     = (uint64_t)ru.ru_maxrss * 1024ULL;
+        s->self_.cpu_user_seconds   =
+            (double)ru.ru_utime.tv_sec + (double)ru.ru_utime.tv_usec / 1.0e6;
+        s->self_.cpu_system_seconds =
+            (double)ru.ru_stime.tv_sec + (double)ru.ru_stime.tv_usec / 1.0e6;
+    }
     return 0;
 }

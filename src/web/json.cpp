@@ -103,6 +103,13 @@ std::string sample_to_json(const Sample& s) {
     out.append(s.entropy.present ? "true" : "false");
     out.append("},");
 
+    out.append("\"self\":{");
+    append_kv_uint  (&out, "rss_bytes",          s.self_.rss_bytes);          out.push_back(',');
+    append_kv_uint  (&out, "peak_rss_bytes",     s.self_.peak_rss_bytes);     out.push_back(',');
+    append_kv_double(&out, "cpu_user_seconds",   s.self_.cpu_user_seconds);   out.push_back(',');
+    append_kv_double(&out, "cpu_system_seconds", s.self_.cpu_system_seconds);
+    out.append("},");
+
     append_kv_double(&out, "uptime_seconds", s.uptime_seconds);
     out.push_back('}');
     return out;

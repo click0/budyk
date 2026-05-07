@@ -39,6 +39,16 @@ struct EntropyStats {
     bool     present;
 };
 
+// Self-metrics — the daemon's own RSS / VSZ / CPU consumption
+// (spec §3.3.3). All fields are best-effort; unavailable data
+// is reported as 0 rather than a separate present flag.
+struct SelfStats {
+    uint64_t rss_bytes;          // current resident set; Linux only
+    uint64_t peak_rss_bytes;     // peak ever, from getrusage(2)
+    double   cpu_user_seconds;
+    double   cpu_system_seconds;
+};
+
 struct Sample {
     uint64_t timestamp_nanos;
     Level    level;
@@ -50,8 +60,9 @@ struct Sample {
     NetStats  net;
     ProcessStats proc;
     EntropyStats entropy;
+    SelfStats    self_;
     double    uptime_seconds;
-    // TODO: thermal, self
+    // TODO: thermal
 };
 
 } // namespace budyk

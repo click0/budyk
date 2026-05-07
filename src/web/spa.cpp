@@ -61,6 +61,7 @@ h1 .host { color: var(--muted); margin-left: .6rem; font-weight: 400; }
     <div class="row"><span class="label">Network</span>  <span class="muted" id="net">--</span>         <span class="value">&nbsp;</span></div>
     <div class="row"><span class="label">Processes</span><span class="muted" id="proc">--</span>        <span class="value">&nbsp;</span></div>
     <div class="row" id="entropyRow"><span class="label">Entropy</span><span class="muted" id="entropy">--</span> <span class="value">&nbsp;</span></div>
+    <div class="row"><span class="label">budyk RSS</span><span class="muted" id="self">--</span>        <span class="value">&nbsp;</span></div>
     <div class="row"><span class="label">Uptime</span>   <span class="muted" id="uptime">--</span>      <span class="value">&nbsp;</span></div>
   </div>
   <div class="status" id="status">connecting&hellip;</div>
@@ -129,6 +130,16 @@ function render(s) {
     $("entropy").textContent = `${s.entropy.available_bits} bits in pool`;
   } else {
     $("entropyRow").classList.add("hidden");
+  }
+
+  // Self-metrics — daemon's own footprint.
+  if (s.self) {
+    const rss  = s.self.rss_bytes ?? 0;
+    const peak = s.self.peak_rss_bytes ?? 0;
+    const cuser = s.self.cpu_user_seconds ?? 0;
+    const csys  = s.self.cpu_system_seconds ?? 0;
+    $("self").textContent =
+      `RSS ${fmtBytes(rss)} (peak ${fmtBytes(peak)}) — CPU ${cuser.toFixed(2)}s user / ${csys.toFixed(2)}s sys`;
   }
 
   $("uptime").textContent = fmtUptime(s.uptime_seconds ?? 0);

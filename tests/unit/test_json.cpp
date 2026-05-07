@@ -48,6 +48,10 @@ int main() {
         s.proc.running             = 4;
         s.entropy.available_bits   = 512;
         s.entropy.present          = true;
+        s.self_.rss_bytes          = 16ULL * 1024 * 1024;
+        s.self_.peak_rss_bytes     = 32ULL * 1024 * 1024;
+        s.self_.cpu_user_seconds   = 2.5;
+        s.self_.cpu_system_seconds = 0.5;
         s.uptime_seconds           = 7200.5;
 
         std::string j = sample_to_json(s);
@@ -69,6 +73,9 @@ int main() {
         assert(contains(j, "\"entropy\":{"));
         assert(contains(j, "\"available_bits\":512"));
         assert(contains(j, "\"present\":true"));
+        assert(contains(j, "\"self\":{"));
+        assert(contains(j, "\"cpu_user_seconds\":2.5"));
+        assert(contains(j, "\"cpu_system_seconds\":0.5"));
         assert(contains(j, "\"uptime_seconds\":7200.5"));
     }
 

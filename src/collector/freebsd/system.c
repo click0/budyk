@@ -87,3 +87,30 @@ int budyk_collect_entropy_freebsd(budyk_sample_c* s) {
     s->entropy.present        = 0;
     return 0;
 }
+
+/* Self-metrics on FreeBSD: getrusage(2) gives ru_maxrss (KiB on
+ * FreeBSD ≥ 9, see getrusage(2)) and the cpu time accumulators.
+ * Current RSS is harder to come by without a full kvm proc walk
+ * (we already do it once in the proc collector), so we leave
+ * rss_bytes at 0 and rely on peak_rss_bytes for monitoring.
+ */
+#include <sys/resource.h>
+
+int budyk_collect_self_freebsd(budyk_sample_c* s) {
+    if (s == NULL) return -EINVAL;
+
+    s->self_.rss_bytes          = 0;
+    s->self_.peak_rss_bytes     = 0;
+    s->self_.cpu_user_seconds   = 0.0;
+    s->self_.cpu_system_seconds = 0.0;
+
+    struct rusage ru;
+    if (getrusage(RUSAGE_SELF, &ru) == 0) {
+        s->self_.peak_rss_bytes     = (uint64_t)ru.ru_maxrss * 1024ULL;
+        s->self_.cpu_user_seconds   =
+            (double)ru.ru_utime.tv_sec + (double)ru.ru_utime.tv_usec / 1.0e6;
+        s->self_.cpu_system_seconds =
+            (double)ru.ru_stime.tv_sec + (double)ru.ru_stime.tv_usec / 1.0e6;
+    }
+    return 0;
+}
