@@ -61,6 +61,7 @@ h1 .host { color: var(--muted); margin-left: .6rem; font-weight: 400; }
     <div class="row"><span class="label">Network</span>  <span class="muted" id="net">--</span>         <span class="value">&nbsp;</span></div>
     <div class="row"><span class="label">Processes</span><span class="muted" id="proc">--</span>        <span class="value">&nbsp;</span></div>
     <div class="row" id="entropyRow"><span class="label">Entropy</span><span class="muted" id="entropy">--</span> <span class="value">&nbsp;</span></div>
+    <div class="row" id="thermalRow"><span class="label">Thermal</span><span class="muted" id="thermal">--</span> <span class="value">&nbsp;</span></div>
     <div class="row"><span class="label">budyk RSS</span><span class="muted" id="self">--</span>        <span class="value">&nbsp;</span></div>
     <div class="row"><span class="label">Uptime</span>   <span class="muted" id="uptime">--</span>      <span class="value">&nbsp;</span></div>
   </div>
@@ -130,6 +131,15 @@ function render(s) {
     $("entropy").textContent = `${s.entropy.available_bits} bits in pool`;
   } else {
     $("entropyRow").classList.add("hidden");
+  }
+
+  // Thermal — hide the row on hosts without ACPI / sensor passthrough.
+  if (s.thermal?.present) {
+    $("thermalRow").classList.remove("hidden");
+    $("thermal").textContent =
+      `${s.thermal.max_celsius.toFixed(1)} °C across ${s.thermal.sensor_count} sensor(s)`;
+  } else {
+    $("thermalRow").classList.add("hidden");
   }
 
   // Self-metrics — daemon's own footprint.

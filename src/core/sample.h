@@ -49,6 +49,19 @@ struct SelfStats {
     double   cpu_system_seconds;
 };
 
+// Thermal sensors — L3 / active tier (spec §3.3.3).
+// Reports the hottest reading across every sensor we can probe.
+//   * Linux:   /sys/class/thermal/thermal_zone*/temp (millidegrees C)
+//   * FreeBSD: dev.cpu.<N>.temperature sysctl (Kelvin × 10)
+// `present == false` when no sensors are exposed (containers, VMs
+// without ACPI, jails). `max_celsius` and `sensor_count` stay 0 in
+// that case.
+struct ThermalStats {
+    double   max_celsius;
+    uint32_t sensor_count;
+    bool     present;
+};
+
 struct Sample {
     uint64_t timestamp_nanos;
     Level    level;
@@ -61,8 +74,8 @@ struct Sample {
     ProcessStats proc;
     EntropyStats entropy;
     SelfStats    self_;
+    ThermalStats thermal;
     double    uptime_seconds;
-    // TODO: thermal
 };
 
 } // namespace budyk

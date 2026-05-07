@@ -110,6 +110,13 @@ std::string sample_to_json(const Sample& s) {
     append_kv_double(&out, "cpu_system_seconds", s.self_.cpu_system_seconds);
     out.append("},");
 
+    out.append("\"thermal\":{");
+    append_kv_double(&out, "max_celsius",  s.thermal.max_celsius); out.push_back(',');
+    append_kv_uint  (&out, "sensor_count", s.thermal.sensor_count); out.push_back(',');
+    out.append("\"present\":");
+    out.append(s.thermal.present ? "true" : "false");
+    out.append("},");
+
     append_kv_double(&out, "uptime_seconds", s.uptime_seconds);
     out.push_back('}');
     return out;

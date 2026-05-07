@@ -93,6 +93,7 @@ int main() {
         assert(budyk_collect_proc_linux   (nullptr) != 0);
         assert(budyk_collect_entropy_linux(nullptr) != 0);
         assert(budyk_collect_self_linux   (nullptr) != 0);
+        assert(budyk_collect_thermal_linux(nullptr) != 0);
     }
 
     // Container / sandbox detection — /proc/diskstats and /proc/net/dev may
@@ -202,6 +203,24 @@ int main() {
         assert(s.self_.peak_rss_bytes > 0);
         assert(s.self_.cpu_user_seconds   >= 0.0);
         assert(s.self_.cpu_system_seconds >= 0.0);
+    }
+
+    // 7e. Thermal — /sys/class/thermal/thermal_zone*/temp.
+    //     rc == 0 always (never fails — soft-falls to present=0).
+    //     If sensors are present, sensor_count > 0 and max_celsius is
+    //     a finite reading. CI runners typically have at least one
+    //     thermal_zone (acpitz) but bare containers may have none.
+    {
+        budyk_sample_c s;
+        std::memset(&s, 0, sizeof(s));
+        int rc = budyk_collect_thermal_linux(&s);
+        assert(rc == 0);
+        if (s.thermal.present) {
+            assert(s.thermal.sensor_count > 0);
+        } else {
+            assert(s.thermal.sensor_count == 0);
+            assert(s.thermal.max_celsius  == 0.0);
+        }
     }
 
     // 8. Disk: same timestamp on two consecutive calls must not divide

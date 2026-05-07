@@ -364,6 +364,7 @@ void collect_one(budyk::Sample* s,
     budyk_collect_proc_linux   (&c);
     budyk_collect_entropy_linux(&c);
     budyk_collect_self_linux   (&c);
+    budyk_collect_thermal_linux(&c);
 #elif defined(BUDYK_FREEBSD)
     budyk_collect_cpu_freebsd    (cpu_ctx, &c);
     budyk_collect_memory_freebsd (&c);
@@ -374,6 +375,7 @@ void collect_one(budyk::Sample* s,
     budyk_collect_proc_freebsd   (&c);
     budyk_collect_entropy_freebsd(&c);
     budyk_collect_self_freebsd   (&c);
+    budyk_collect_thermal_freebsd(&c);
 #else
     (void)cpu_ctx; (void)disk_ctx; (void)net_ctx;
 #endif
@@ -405,6 +407,9 @@ void collect_one(budyk::Sample* s,
     s->self_.peak_rss_bytes     = c.self_.peak_rss_bytes;
     s->self_.cpu_user_seconds   = c.self_.cpu_user_seconds;
     s->self_.cpu_system_seconds = c.self_.cpu_system_seconds;
+    s->thermal.max_celsius      = c.thermal.max_celsius;
+    s->thermal.sensor_count     = c.thermal.sensor_count;
+    s->thermal.present          = (c.thermal.present != 0);
     s->uptime_seconds         = c.uptime_seconds;
 }
 
