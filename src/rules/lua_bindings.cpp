@@ -70,6 +70,13 @@ void budyk_lua_bind_sample(lua_State* L, const budyk::Sample& s) {
     set_integer(L, "running", static_cast<lua_Integer>(s.proc.running));
     lua_setglobal(L, "proc");
 
+    // entropy — kernel CSPRNG pool depth in bits (Linux only).
+    lua_newtable(L);
+    set_integer(L, "available_bits", static_cast<lua_Integer>(s.entropy.available_bits));
+    lua_pushboolean(L, s.entropy.present);
+    lua_setfield(L, -2, "present");
+    lua_setglobal(L, "entropy");
+
     lua_pushnumber(L, s.uptime_seconds);
     lua_setglobal(L, "uptime_seconds");
 }

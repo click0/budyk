@@ -96,6 +96,13 @@ std::string sample_to_json(const Sample& s) {
     append_kv_uint(&out, "running", s.proc.running);
     out.append("},");
 
+    out.append("\"entropy\":{");
+    append_kv_uint(&out, "available_bits", s.entropy.available_bits);
+    out.push_back(',');
+    out.append("\"present\":");
+    out.append(s.entropy.present ? "true" : "false");
+    out.append("},");
+
     append_kv_double(&out, "uptime_seconds", s.uptime_seconds);
     out.push_back('}');
     return out;

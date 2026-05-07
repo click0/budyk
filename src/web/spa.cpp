@@ -60,6 +60,7 @@ h1 .host { color: var(--muted); margin-left: .6rem; font-weight: 400; }
     <div class="row"><span class="label">Disk</span>     <span class="muted" id="disk">--</span>        <span class="value">&nbsp;</span></div>
     <div class="row"><span class="label">Network</span>  <span class="muted" id="net">--</span>         <span class="value">&nbsp;</span></div>
     <div class="row"><span class="label">Processes</span><span class="muted" id="proc">--</span>        <span class="value">&nbsp;</span></div>
+    <div class="row" id="entropyRow"><span class="label">Entropy</span><span class="muted" id="entropy">--</span> <span class="value">&nbsp;</span></div>
     <div class="row"><span class="label">Uptime</span>   <span class="muted" id="uptime">--</span>      <span class="value">&nbsp;</span></div>
   </div>
   <div class="status" id="status">connecting&hellip;</div>
@@ -120,6 +121,16 @@ function render(s) {
     `rx ${fmtBytes(s.net.rx_bytes_per_sec)}/s   tx ${fmtBytes(s.net.tx_bytes_per_sec)}/s   (${s.net.interface_count ?? 0} ifaces)`;
   $("proc").textContent =
     `${s.proc?.running ?? 0} running / ${s.proc?.total ?? 0} total`;
+
+  // Entropy is Linux-only; hide the row on platforms (FreeBSD) that
+  // report present=false.
+  if (s.entropy?.present) {
+    $("entropyRow").classList.remove("hidden");
+    $("entropy").textContent = `${s.entropy.available_bits} bits in pool`;
+  } else {
+    $("entropyRow").classList.add("hidden");
+  }
+
   $("uptime").textContent = fmtUptime(s.uptime_seconds ?? 0);
 }
 

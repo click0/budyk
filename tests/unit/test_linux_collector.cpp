@@ -91,6 +91,7 @@ int main() {
         assert(budyk_collect_network_linux(nullptr, &s) != 0);
         assert(budyk_collect_network_linux(&nctx, nullptr) != 0);
         assert(budyk_collect_proc_linux   (nullptr) != 0);
+        assert(budyk_collect_entropy_linux(nullptr) != 0);
     }
 
     // Container / sandbox detection — /proc/diskstats and /proc/net/dev may
@@ -169,6 +170,22 @@ int main() {
             assert(s.proc.running <= s.proc.total);
         } else {
             std::printf("test_linux_collector: skip proc (rc=%d)\n", rc);
+        }
+    }
+
+    // 7c. Entropy — /proc/sys/kernel/random/entropy_avail. On real
+    //     hosts this is a non-negative integer; on stripped containers
+    //     the file may be missing, in which case present=0 and
+    //     available_bits=0.
+    {
+        budyk_sample_c s;
+        std::memset(&s, 0, sizeof(s));
+        int rc = budyk_collect_entropy_linux(&s);
+        assert(rc == 0);              /* never fails — soft-falls to present=0 */
+        if (s.entropy.present) {
+            (void)s.entropy.available_bits; /* any non-negative value is OK */
+        } else {
+            assert(s.entropy.available_bits == 0);
         }
     }
 

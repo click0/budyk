@@ -57,11 +57,11 @@ int main() {
         assert(one_shot == chained);
     }
 
-    // 4. record_size_for_sample — header (14) + sample max (184 for v3).
+    // 4. record_size_for_sample — header (14) + sample max (192 for v4).
     {
         const size_t sz = record_size_for_sample();
         assert(sz == kRecordHeaderSize + sample_max_encoded_size());
-        assert(sz == 14 + 184);
+        assert(sz == 14 + 192);
     }
 
     // 5. Round-trip — full sample encode → decode preserves every field.

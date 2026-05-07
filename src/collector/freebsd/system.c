@@ -73,3 +73,17 @@ int budyk_collect_proc_freebsd(budyk_sample_c* s) {
     s->proc.running = 0;
     return 0;
 }
+
+/* FreeBSD has no /proc/sys/kernel/random/entropy_avail equivalent.
+ * `kern.random.harvest.*` exposes harvest sources (boolean flags),
+ * not pool depth in bits — different semantics from the Linux number.
+ * Spec §3.3.3 explicitly says "either omit or use kern.random.*" —
+ * we omit by reporting present=0; the SPA / Lua bindings handle this
+ * gracefully.
+ */
+int budyk_collect_entropy_freebsd(budyk_sample_c* s) {
+    if (s == NULL) return -EINVAL;
+    s->entropy.available_bits = 0;
+    s->entropy.present        = 0;
+    return 0;
+}

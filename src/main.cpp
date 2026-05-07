@@ -362,6 +362,7 @@ void collect_one(budyk::Sample* s,
     budyk_collect_disk_linux   (disk_ctx, &c);
     budyk_collect_network_linux(net_ctx,  &c);
     budyk_collect_proc_linux   (&c);
+    budyk_collect_entropy_linux(&c);
 #elif defined(BUDYK_FREEBSD)
     budyk_collect_cpu_freebsd    (cpu_ctx, &c);
     budyk_collect_memory_freebsd (&c);
@@ -370,6 +371,7 @@ void collect_one(budyk::Sample* s,
     budyk_collect_disk_freebsd   (disk_ctx, &c);
     budyk_collect_network_freebsd(net_ctx,  &c);
     budyk_collect_proc_freebsd   (&c);
+    budyk_collect_entropy_freebsd(&c);
 #else
     (void)cpu_ctx; (void)disk_ctx; (void)net_ctx;
 #endif
@@ -395,6 +397,8 @@ void collect_one(budyk::Sample* s,
     s->net.interface_count      = c.net.interface_count;
     s->proc.total              = c.proc.total;
     s->proc.running            = c.proc.running;
+    s->entropy.available_bits  = c.entropy.available_bits;
+    s->entropy.present         = (c.entropy.present != 0);
     s->uptime_seconds         = c.uptime_seconds;
 }
 
