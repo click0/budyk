@@ -114,3 +114,47 @@ int budyk_collect_self_freebsd(budyk_sample_c* s) {
     }
     return 0;
 }
+
+/* Thermal — walk the dev.cpu.<N>.temperature sysctl chain.
+ * Each value is reported as Kelvin × 10 (e.g. 3151 = 42.0°C).
+ * Stop on the first sysctl that fails; that's how many cores have
+ * thermal monitoring exposed on this host.
+ *
+ * Many guests (jails, virt without ACPI/IPMI passthrough) won't
+ * expose any temperature sysctls — the collector reports
+ * present=0 in that case.
+ */
+#include <stdio.h>
+#include <string.h>
+
+int budyk_collect_thermal_freebsd(budyk_sample_c* s) {
+    if (s == NULL) return -EINVAL;
+
+    s->thermal.max_celsius  = 0.0;
+    s->thermal.sensor_count = 0;
+    s->thermal.present      = 0;
+
+    double  hottest = -1e9;
+    uint32_t count  = 0;
+
+    for (int n = 0; n < 256; ++n) {
+        char mib[48];
+        int  m = snprintf(mib, sizeof(mib), "dev.cpu.%d.temperature", n);
+        if (m <= 0 || (size_t)m >= sizeof(mib)) break;
+
+        int    raw = 0;
+        size_t sz  = sizeof(raw);
+        if (sysctlbyname(mib, &raw, &sz, NULL, 0) != 0) break;
+
+        const double celsius = (double)raw / 10.0 - 273.15;
+        if (celsius > hottest) hottest = celsius;
+        ++count;
+    }
+
+    if (count > 0) {
+        s->thermal.max_celsius  = hottest;
+        s->thermal.sensor_count = count;
+        s->thermal.present      = 1;
+    }
+    return 0;
+}

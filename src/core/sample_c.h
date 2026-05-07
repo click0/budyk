@@ -65,6 +65,12 @@ typedef struct {
 } budyk_self_c;
 
 typedef struct {
+    double   max_celsius;
+    uint32_t sensor_count;
+    uint8_t  present;       /* 0 = no sensors exposed on this host */
+} budyk_thermal_c;
+
+typedef struct {
     uint64_t        timestamp_nanos;
     uint8_t         level;
     budyk_cpu_c     cpu;
@@ -76,6 +82,7 @@ typedef struct {
     budyk_proc_c    proc;
     budyk_entropy_c entropy;
     budyk_self_c    self_;
+    budyk_thermal_c thermal;
     double          uptime_seconds;
 } budyk_sample_c;
 
@@ -120,6 +127,7 @@ int budyk_collect_network_linux(budyk_net_ctx_c*  ctx, budyk_sample_c* s);
 int budyk_collect_proc_linux   (budyk_sample_c* s);
 int budyk_collect_entropy_linux(budyk_sample_c* s);
 int budyk_collect_self_linux   (budyk_sample_c* s);
+int budyk_collect_thermal_linux(budyk_sample_c* s);
 
 // FreeBSD collectors. Same shape as Linux ones; built only when
 // BUDYK_PLATFORM=freebsd. Returns 0 on success, negative errno on failure.
@@ -132,6 +140,7 @@ int budyk_collect_network_freebsd(budyk_net_ctx_c*  ctx, budyk_sample_c* s);
 int budyk_collect_proc_freebsd   (budyk_sample_c* s);
 int budyk_collect_entropy_freebsd(budyk_sample_c* s);
 int budyk_collect_self_freebsd   (budyk_sample_c* s);
+int budyk_collect_thermal_freebsd(budyk_sample_c* s);
 
 #ifdef __cplusplus
 }

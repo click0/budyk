@@ -39,6 +39,9 @@ static Sample make_sample() {
     s.self_.peak_rss_bytes     = 64ULL * 1024 * 1024;
     s.self_.cpu_user_seconds   = 1.234;
     s.self_.cpu_system_seconds = 0.567;
+    s.thermal.max_celsius      = 67.5;
+    s.thermal.sensor_count     = 4;
+    s.thermal.present          = true;
     s.uptime_seconds         = 123456.789;
     return s;
 }
@@ -75,6 +78,9 @@ static void assert_samples_equal(const Sample& a, const Sample& b) {
     assert(a.self_.peak_rss_bytes     == b.self_.peak_rss_bytes);
     assert(bitwise_eq(a.self_.cpu_user_seconds,   b.self_.cpu_user_seconds));
     assert(bitwise_eq(a.self_.cpu_system_seconds, b.self_.cpu_system_seconds));
+    assert(bitwise_eq(a.thermal.max_celsius, b.thermal.max_celsius));
+    assert(a.thermal.sensor_count == b.thermal.sensor_count);
+    assert(a.thermal.present == b.thermal.present);
     assert(bitwise_eq(a.uptime_seconds, b.uptime_seconds));
 }
 
@@ -286,13 +292,13 @@ int main() {
     }
 
     // 11d. v4 backward compat — version=4, length 192. Entropy parsed,
-    //      self zeroed.
+    //      self + thermal zeroed.
     {
         Sample in = make_sample();
         uint8_t buf[512] = {0};
         size_t  full = 0;
         assert(sample_encode(&in, buf, sizeof(buf), &full) == 0);
-        buf[8] = 4;                            // version 5 → 4
+        buf[8] = 4;                            // version 6 → 4
         constexpr size_t kV4Size = 192;
         Sample out{};
         assert(sample_decode(buf, kV4Size, &out) == 0);
@@ -300,6 +306,25 @@ int main() {
         assert(out.entropy.present        == in.entropy.present);
         assert(out.self_.rss_bytes        == 0);
         assert(out.self_.peak_rss_bytes   == 0);
+        assert(out.thermal.sensor_count   == 0);
+        assert(out.thermal.present        == false);
+    }
+
+    // 11e. v5 backward compat — version=5, length 224. Self parsed,
+    //      thermal zeroed.
+    {
+        Sample in = make_sample();
+        uint8_t buf[512] = {0};
+        size_t  full = 0;
+        assert(sample_encode(&in, buf, sizeof(buf), &full) == 0);
+        buf[8] = 5;                            // version 6 → 5
+        constexpr size_t kV5Size = 224;
+        Sample out{};
+        assert(sample_decode(buf, kV5Size, &out) == 0);
+        assert(out.self_.rss_bytes        == in.self_.rss_bytes);
+        assert(out.self_.peak_rss_bytes   == in.self_.peak_rss_bytes);
+        assert(out.thermal.sensor_count   == 0);
+        assert(out.thermal.present        == false);
     }
 
     // 12. v3 with length that truncates the proc tail — rejected.

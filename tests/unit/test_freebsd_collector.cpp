@@ -178,6 +178,23 @@ int main() {
         assert(budyk_collect_self_freebsd(nullptr) != 0);
     }
 
+    // 11. Thermal — dev.cpu.<N>.temperature sysctl chain. rc == 0
+    //     always (soft-fail). Present=true on bare-metal hosts with
+    //     ACPI/coretemp, false on virt without sensor passthrough.
+    {
+        budyk_sample_c s;
+        std::memset(&s, 0, sizeof(s));
+        int rc = budyk_collect_thermal_freebsd(&s);
+        assert(rc == 0);
+        if (s.thermal.present) {
+            assert(s.thermal.sensor_count > 0);
+        } else {
+            assert(s.thermal.sensor_count == 0);
+        }
+
+        assert(budyk_collect_thermal_freebsd(nullptr) != 0);
+    }
+
     std::printf("test_freebsd_collector: PASS\n");
     return 0;
 }

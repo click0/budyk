@@ -85,6 +85,14 @@ void budyk_lua_bind_sample(lua_State* L, const budyk::Sample& s) {
     set_number (L, "cpu_system_seconds", s.self_.cpu_system_seconds);
     lua_setglobal(L, "self_");
 
+    // thermal — hottest sensor reading across thermal_zone* / cpu.<N>.
+    lua_newtable(L);
+    set_number (L, "max_celsius",  s.thermal.max_celsius);
+    set_integer(L, "sensor_count", static_cast<lua_Integer>(s.thermal.sensor_count));
+    lua_pushboolean(L, s.thermal.present);
+    lua_setfield(L, -2, "present");
+    lua_setglobal(L, "thermal");
+
     lua_pushnumber(L, s.uptime_seconds);
     lua_setglobal(L, "uptime_seconds");
 }

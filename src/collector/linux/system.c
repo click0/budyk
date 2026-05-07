@@ -7,9 +7,11 @@
 #include <sys/time.h>
 #include <unistd.h>
 
+#include <dirent.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 int budyk_collect_uptime_linux(budyk_sample_c* s) {
     if (s == NULL) return -EINVAL;
@@ -128,6 +130,54 @@ int budyk_collect_self_linux(budyk_sample_c* s) {
             (double)ru.ru_utime.tv_sec + (double)ru.ru_utime.tv_usec / 1.0e6;
         s->self_.cpu_system_seconds =
             (double)ru.ru_stime.tv_sec + (double)ru.ru_stime.tv_usec / 1.0e6;
+    }
+    return 0;
+}
+
+/* Thermal — walk /sys/class/thermal/thermal_zone*\/temp.
+ * Each file holds millidegrees Celsius (e.g. 45000 = 45.0°C).
+ * Take the hottest reading across every zone we can read; report
+ * present=0 (with sensor_count=0, max_celsius=0.0) when /sys/class/
+ * thermal is missing (containers, jails, virt without ACPI).
+ */
+int budyk_collect_thermal_linux(budyk_sample_c* s) {
+    if (s == NULL) return -EINVAL;
+
+    s->thermal.max_celsius  = 0.0;
+    s->thermal.sensor_count = 0;
+    s->thermal.present      = 0;
+
+    DIR* d = opendir("/sys/class/thermal");
+    if (d == NULL) return 0;          /* soft-fail, host has no thermal sysfs */
+
+    struct dirent* ent;
+    double         hottest = -1e9;
+    uint32_t       count   = 0;
+    while ((ent = readdir(d)) != NULL) {
+        if (strncmp(ent->d_name, "thermal_zone", 12) != 0) continue;
+
+        char path[256];
+        int n = snprintf(path, sizeof(path),
+                         "/sys/class/thermal/%s/temp", ent->d_name);
+        if (n <= 0 || (size_t)n >= sizeof(path)) continue;
+
+        FILE* f = fopen(path, "r");
+        if (f == NULL) continue;
+        long milli = 0;
+        int ok = fscanf(f, "%ld", &milli);
+        fclose(f);
+        if (ok != 1) continue;
+
+        double celsius = (double)milli / 1000.0;
+        if (celsius > hottest) hottest = celsius;
+        ++count;
+    }
+    closedir(d);
+
+    if (count > 0) {
+        s->thermal.max_celsius  = hottest;
+        s->thermal.sensor_count = count;
+        s->thermal.present      = 1;
     }
     return 0;
 }

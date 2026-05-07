@@ -52,6 +52,9 @@ int main() {
         s.self_.peak_rss_bytes     = 32ULL * 1024 * 1024;
         s.self_.cpu_user_seconds   = 2.5;
         s.self_.cpu_system_seconds = 0.5;
+        s.thermal.max_celsius      = 67.5;
+        s.thermal.sensor_count     = 4;
+        s.thermal.present          = true;
         s.uptime_seconds           = 7200.5;
 
         std::string j = sample_to_json(s);
@@ -76,6 +79,9 @@ int main() {
         assert(contains(j, "\"self\":{"));
         assert(contains(j, "\"cpu_user_seconds\":2.5"));
         assert(contains(j, "\"cpu_system_seconds\":0.5"));
+        assert(contains(j, "\"thermal\":{"));
+        assert(contains(j, "\"max_celsius\":67.5"));
+        assert(contains(j, "\"sensor_count\":4"));
         assert(contains(j, "\"uptime_seconds\":7200.5"));
     }
 
