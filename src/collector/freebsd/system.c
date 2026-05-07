@@ -51,3 +51,25 @@ int budyk_collect_load_freebsd(budyk_sample_c* s) {
     s->load.avg_15m = avg[2];
     return 0;
 }
+
+/* Process count via the kern.proc.all sysctl size-only query.
+ * Passing oldp == NULL returns the size required for the full
+ * struct kinfo_proc array — divide by sizeof(kinfo_proc) for the
+ * total process count. No process walk, no copying.
+ *
+ * `running` is left at 0 — getting it requires walking the array
+ * and inspecting ki_stat per entry, which is heavier and not worth
+ * it for the headline tile. Future work.
+ */
+#include <sys/user.h>     /* struct kinfo_proc */
+
+int budyk_collect_proc_freebsd(budyk_sample_c* s) {
+    if (s == NULL) return -EINVAL;
+
+    size_t bytes = 0;
+    if (sysctlbyname("kern.proc.all", NULL, &bytes, NULL, 0) != 0) return -errno;
+
+    s->proc.total   = (uint32_t)(bytes / sizeof(struct kinfo_proc));
+    s->proc.running = 0;
+    return 0;
+}

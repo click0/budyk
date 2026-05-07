@@ -136,6 +136,19 @@ int main() {
         assert(budyk_collect_load_freebsd   (nullptr) != 0);
         assert(budyk_collect_network_freebsd(nullptr, &s) != 0);
         assert(budyk_collect_network_freebsd(&nctx, nullptr) != 0);
+        assert(budyk_collect_proc_freebsd   (nullptr) != 0);
+    }
+
+    // 8. Process count — kern.proc.all size-only query. Total > 0 on
+    //    any running host (pid 1 + the test binary). `running` stays
+    //    at 0 in the FreeBSD path until we walk ki_stat.
+    {
+        budyk_sample_c s;
+        std::memset(&s, 0, sizeof(s));
+        int rc = budyk_collect_proc_freebsd(&s);
+        assert(rc == 0);
+        assert(s.proc.total > 0);
+        assert(s.proc.running <= s.proc.total);
     }
 
     std::printf("test_freebsd_collector: PASS\n");

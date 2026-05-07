@@ -90,6 +90,7 @@ int main() {
         assert(budyk_collect_disk_linux   (&dctx, nullptr) != 0);
         assert(budyk_collect_network_linux(nullptr, &s) != 0);
         assert(budyk_collect_network_linux(&nctx, nullptr) != 0);
+        assert(budyk_collect_proc_linux   (nullptr) != 0);
     }
 
     // Container / sandbox detection — /proc/diskstats and /proc/net/dev may
@@ -154,6 +155,21 @@ int main() {
         (void)s2.net.tx_bytes_per_sec;
     } else {
         std::printf("test_linux_collector: skip net  (empty /proc/net/dev)\n");
+    }
+
+    // 7b. Process count — /proc/loadavg field 4 ("running/total"). Proc
+    //     numbers are non-negative; running ≤ total. On stripped
+    //     containers loadavg may report "0/0", which is also acceptable
+    //     (running == total == 0).
+    {
+        budyk_sample_c s;
+        std::memset(&s, 0, sizeof(s));
+        int rc = budyk_collect_proc_linux(&s);
+        if (rc == 0) {
+            assert(s.proc.running <= s.proc.total);
+        } else {
+            std::printf("test_linux_collector: skip proc (rc=%d)\n", rc);
+        }
     }
 
     // 8. Disk: same timestamp on two consecutive calls must not divide

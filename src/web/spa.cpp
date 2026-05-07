@@ -59,6 +59,7 @@ h1 .host { color: var(--muted); margin-left: .6rem; font-weight: 400; }
     <div class="row"><span class="label">Load 1m</span>  <div class="bar"><i id="loadBar"></i></div>    <span class="value" id="load">--</span></div>
     <div class="row"><span class="label">Disk</span>     <span class="muted" id="disk">--</span>        <span class="value">&nbsp;</span></div>
     <div class="row"><span class="label">Network</span>  <span class="muted" id="net">--</span>         <span class="value">&nbsp;</span></div>
+    <div class="row"><span class="label">Processes</span><span class="muted" id="proc">--</span>        <span class="value">&nbsp;</span></div>
     <div class="row"><span class="label">Uptime</span>   <span class="muted" id="uptime">--</span>      <span class="value">&nbsp;</span></div>
   </div>
   <div class="status" id="status">connecting&hellip;</div>
@@ -117,6 +118,8 @@ function render(s) {
     `r ${fmtBytes(s.disk.read_bytes_per_sec)}/s   w ${fmtBytes(s.disk.write_bytes_per_sec)}/s   (${s.disk.device_count ?? 0} devs)`;
   $("net").textContent =
     `rx ${fmtBytes(s.net.rx_bytes_per_sec)}/s   tx ${fmtBytes(s.net.tx_bytes_per_sec)}/s   (${s.net.interface_count ?? 0} ifaces)`;
+  $("proc").textContent =
+    `${s.proc?.running ?? 0} running / ${s.proc?.total ?? 0} total`;
   $("uptime").textContent = fmtUptime(s.uptime_seconds ?? 0);
 }
 

@@ -31,6 +31,8 @@ static Sample make_sample() {
     s.net.rx_bytes_per_sec     = 987654321ULL;
     s.net.tx_bytes_per_sec     = 123456789ULL;
     s.net.interface_count      = 2;
+    s.proc.total               = 423;
+    s.proc.running             = 7;
     s.uptime_seconds         = 123456.789;
     return s;
 }
@@ -59,6 +61,8 @@ static void assert_samples_equal(const Sample& a, const Sample& b) {
     assert(a.net.rx_bytes_per_sec     == b.net.rx_bytes_per_sec);
     assert(a.net.tx_bytes_per_sec     == b.net.tx_bytes_per_sec);
     assert(a.net.interface_count      == b.net.interface_count);
+    assert(a.proc.total               == b.proc.total);
+    assert(a.proc.running             == b.proc.running);
     assert(bitwise_eq(a.uptime_seconds, b.uptime_seconds));
 }
 
@@ -228,7 +232,33 @@ int main() {
         assert(out.net.interface_count      == 0);
     }
 
-    // 12. v2 with length that truncates the disk/net tail — rejected.
+    // 11b. v2 backward compat — a hand-rolled v2 record (176 bytes,
+    //      version=2) decodes successfully, proc fields zeroed.
+    {
+        // Easiest path: encode a v3 record, then patch the version byte
+        // back to 2 and shrink len to the v2 size. The shared codec
+        // path is symmetric enough that this exercises the v2 branch.
+        Sample in = make_sample();
+        uint8_t buf[512] = {0};
+        size_t  full = 0;
+        assert(sample_encode(&in, buf, sizeof(buf), &full) == 0);
+
+        // Patch version 3 → 2 at offset 8 (u8[8] magic, then u32 version).
+        buf[8] = 2;
+
+        // Truncate to 176 bytes — the v2 size (v3 is 184, v3-8 proc
+        // bytes = 176 v2).
+        constexpr size_t kV2Size = 176;
+        Sample out{};
+        assert(sample_decode(buf, kV2Size, &out) == 0);
+        assert(out.proc.total   == 0);
+        assert(out.proc.running == 0);
+        // Disk/net survived from the encoded sample.
+        assert(out.disk.device_count   == in.disk.device_count);
+        assert(out.net.interface_count == in.net.interface_count);
+    }
+
+    // 12. v3 with length that truncates the proc tail — rejected.
     {
         Sample in = make_sample();
         uint8_t buf[512] = {0};

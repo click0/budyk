@@ -44,6 +44,8 @@ int main() {
         s.net.rx_bytes_per_sec     = 5ULL * 1024 * 1024;
         s.net.tx_bytes_per_sec     = 1ULL * 1024 * 1024;
         s.net.interface_count      = 3;
+        s.proc.total               = 235;
+        s.proc.running             = 4;
         s.uptime_seconds           = 7200.5;
 
         std::string j = sample_to_json(s);
@@ -59,6 +61,9 @@ int main() {
         assert(contains(j, "\"device_count\":2"));
         assert(contains(j, "\"net\":{"));
         assert(contains(j, "\"interface_count\":3"));
+        assert(contains(j, "\"proc\":{"));
+        assert(contains(j, "\"total\":235"));
+        assert(contains(j, "\"running\":4"));
         assert(contains(j, "\"uptime_seconds\":7200.5"));
     }
 
