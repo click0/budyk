@@ -77,6 +77,14 @@ void budyk_lua_bind_sample(lua_State* L, const budyk::Sample& s) {
     lua_setfield(L, -2, "present");
     lua_setglobal(L, "entropy");
 
+    // self — daemon's own RSS / peak / CPU consumption.
+    lua_newtable(L);
+    set_integer(L, "rss_bytes",          static_cast<lua_Integer>(s.self_.rss_bytes));
+    set_integer(L, "peak_rss_bytes",     static_cast<lua_Integer>(s.self_.peak_rss_bytes));
+    set_number (L, "cpu_user_seconds",   s.self_.cpu_user_seconds);
+    set_number (L, "cpu_system_seconds", s.self_.cpu_system_seconds);
+    lua_setglobal(L, "self_");
+
     lua_pushnumber(L, s.uptime_seconds);
     lua_setglobal(L, "uptime_seconds");
 }

@@ -164,6 +164,20 @@ int main() {
         assert(budyk_collect_entropy_freebsd(nullptr) != 0);
     }
 
+    // 10. Self-metrics — getrusage(RUSAGE_SELF). peak_rss > 0 always;
+    //     rss_bytes stays 0 on FreeBSD until we wire a kvm proc walk.
+    {
+        budyk_sample_c s;
+        std::memset(&s, 0, sizeof(s));
+        int rc = budyk_collect_self_freebsd(&s);
+        assert(rc == 0);
+        assert(s.self_.peak_rss_bytes > 0);
+        assert(s.self_.cpu_user_seconds   >= 0.0);
+        assert(s.self_.cpu_system_seconds >= 0.0);
+
+        assert(budyk_collect_self_freebsd(nullptr) != 0);
+    }
+
     std::printf("test_freebsd_collector: PASS\n");
     return 0;
 }

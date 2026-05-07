@@ -13,7 +13,8 @@ constexpr uint32_t kVersionV1    = 1;
 constexpr uint32_t kVersionV2    = 2;
 constexpr uint32_t kVersionV3    = 3;
 constexpr uint32_t kVersionV4    = 4;
-constexpr uint32_t kVersionWrite = kVersionV4;
+constexpr uint32_t kVersionV5    = 5;
+constexpr uint32_t kVersionWrite = kVersionV5;
 
 // v1 layout (unchanged — still decoded for records written before the bump).
 constexpr size_t kEncodedSizeV1 =
@@ -40,6 +41,11 @@ constexpr size_t kEncodedSizeV3 =
 constexpr size_t kEncodedSizeV4 =
       kEncodedSizeV3
     + 4 + 1 + 3;    // entropy.available_bits, present, pad
+
+// v5 appends self.{rss, peak_rss, cpu_user_s, cpu_system_s} = 32 bytes.
+constexpr size_t kEncodedSizeV5 =
+      kEncodedSizeV4
+    + 8 + 8 + 8 + 8;
 
 inline uint32_t to_le32(uint32_t v) {
 #if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
@@ -70,11 +76,11 @@ inline void     skip   (const uint8_t*& p, size_t n) { p += n; }
 
 } // namespace
 
-size_t sample_max_encoded_size() { return kEncodedSizeV4; }
+size_t sample_max_encoded_size() { return kEncodedSizeV5; }
 
 int sample_encode(const Sample* s, void* buf, size_t cap, size_t* out_len) {
     if (s == nullptr || buf == nullptr || out_len == nullptr) return -1;
-    if (cap < kEncodedSizeV4) return -2;
+    if (cap < kEncodedSizeV5) return -2;
 
     auto* p = static_cast<uint8_t*>(buf);
     std::memcpy(p, kMagic, 8); p += 8;
@@ -123,7 +129,13 @@ int sample_encode(const Sample* s, void* buf, size_t cap, size_t* out_len) {
     put_u8 (p, s->entropy.present ? 1 : 0);
     put_pad(p, 3);
 
-    *out_len = kEncodedSizeV4;
+    // v5 tail
+    put_u64(p, s->self_.rss_bytes);
+    put_u64(p, s->self_.peak_rss_bytes);
+    put_f64(p, s->self_.cpu_user_seconds);
+    put_f64(p, s->self_.cpu_system_seconds);
+
+    *out_len = kEncodedSizeV5;
     return 0;
 }
 
@@ -137,10 +149,12 @@ int sample_decode(const void* buf, size_t len, Sample* out) {
 
     uint32_t version = get_u32(p);
     if (version != kVersionV1 && version != kVersionV2 &&
-        version != kVersionV3 && version != kVersionV4) return -4;
+        version != kVersionV3 && version != kVersionV4 &&
+        version != kVersionV5) return -4;
     if (version == kVersionV2 && len < kEncodedSizeV2)  return -2;
     if (version == kVersionV3 && len < kEncodedSizeV3)  return -2;
     if (version == kVersionV4 && len < kEncodedSizeV4)  return -2;
+    if (version == kVersionV5 && len < kEncodedSizeV5)  return -2;
     (void)get_u32(p);
 
     out->timestamp_nanos = get_u64(p);
@@ -167,7 +181,8 @@ int sample_decode(const void* buf, size_t len, Sample* out) {
 
     out->uptime_seconds = get_f64(p);
 
-    if (version == kVersionV2 || version == kVersionV3 || version == kVersionV4) {
+    if (version == kVersionV2 || version == kVersionV3 ||
+        version == kVersionV4 || version == kVersionV5) {
         out->disk.read_bytes_per_sec  = get_u64(p);
         out->disk.write_bytes_per_sec = get_u64(p);
         out->disk.device_count        = get_u32(p);
@@ -183,7 +198,7 @@ int sample_decode(const void* buf, size_t len, Sample* out) {
         out->net  = NetStats{};
     }
 
-    if (version == kVersionV3 || version == kVersionV4) {
+    if (version == kVersionV3 || version == kVersionV4 || version == kVersionV5) {
         out->proc.total   = get_u32(p);
         out->proc.running = get_u32(p);
     } else {
@@ -191,13 +206,23 @@ int sample_decode(const void* buf, size_t len, Sample* out) {
         out->proc = ProcessStats{};
     }
 
-    if (version == kVersionV4) {
+    if (version == kVersionV4 || version == kVersionV5) {
         out->entropy.available_bits = get_u32(p);
         out->entropy.present        = (get_u8(p) != 0);
         skip(p, 3);
     } else {
         // v1 / v2 / v3 records carry no entropy data.
         out->entropy = EntropyStats{};
+    }
+
+    if (version == kVersionV5) {
+        out->self_.rss_bytes          = get_u64(p);
+        out->self_.peak_rss_bytes     = get_u64(p);
+        out->self_.cpu_user_seconds   = get_f64(p);
+        out->self_.cpu_system_seconds = get_f64(p);
+    } else {
+        // v1..v4 records carry no self data.
+        out->self_ = SelfStats{};
     }
     return 0;
 }

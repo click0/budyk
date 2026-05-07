@@ -35,6 +35,10 @@ static Sample make_sample() {
     s.proc.running             = 7;
     s.entropy.available_bits   = 256;
     s.entropy.present          = true;
+    s.self_.rss_bytes          = 32ULL * 1024 * 1024;
+    s.self_.peak_rss_bytes     = 64ULL * 1024 * 1024;
+    s.self_.cpu_user_seconds   = 1.234;
+    s.self_.cpu_system_seconds = 0.567;
     s.uptime_seconds         = 123456.789;
     return s;
 }
@@ -67,6 +71,10 @@ static void assert_samples_equal(const Sample& a, const Sample& b) {
     assert(a.proc.running             == b.proc.running);
     assert(a.entropy.available_bits   == b.entropy.available_bits);
     assert(a.entropy.present          == b.entropy.present);
+    assert(a.self_.rss_bytes          == b.self_.rss_bytes);
+    assert(a.self_.peak_rss_bytes     == b.self_.peak_rss_bytes);
+    assert(bitwise_eq(a.self_.cpu_user_seconds,   b.self_.cpu_user_seconds));
+    assert(bitwise_eq(a.self_.cpu_system_seconds, b.self_.cpu_system_seconds));
     assert(bitwise_eq(a.uptime_seconds, b.uptime_seconds));
 }
 
@@ -259,20 +267,39 @@ int main() {
     }
 
     // 11c. v3 backward compat — version=3, length 184. Proc parsed,
-    //      entropy zeroed.
+    //      entropy + self zeroed.
     {
         Sample in = make_sample();
         uint8_t buf[512] = {0};
         size_t  full = 0;
         assert(sample_encode(&in, buf, sizeof(buf), &full) == 0);
-        buf[8] = 3;                            // version 4 → 3
+        buf[8] = 3;                            // version 5 → 3
         constexpr size_t kV3Size = 184;
         Sample out{};
         assert(sample_decode(buf, kV3Size, &out) == 0);
-        assert(out.proc.total           == in.proc.total);
-        assert(out.proc.running         == in.proc.running);
+        assert(out.proc.total             == in.proc.total);
+        assert(out.proc.running           == in.proc.running);
         assert(out.entropy.available_bits == 0);
-        assert(out.entropy.present      == false);
+        assert(out.entropy.present        == false);
+        assert(out.self_.rss_bytes        == 0);
+        assert(out.self_.peak_rss_bytes   == 0);
+    }
+
+    // 11d. v4 backward compat — version=4, length 192. Entropy parsed,
+    //      self zeroed.
+    {
+        Sample in = make_sample();
+        uint8_t buf[512] = {0};
+        size_t  full = 0;
+        assert(sample_encode(&in, buf, sizeof(buf), &full) == 0);
+        buf[8] = 4;                            // version 5 → 4
+        constexpr size_t kV4Size = 192;
+        Sample out{};
+        assert(sample_decode(buf, kV4Size, &out) == 0);
+        assert(out.entropy.available_bits == in.entropy.available_bits);
+        assert(out.entropy.present        == in.entropy.present);
+        assert(out.self_.rss_bytes        == 0);
+        assert(out.self_.peak_rss_bytes   == 0);
     }
 
     // 12. v3 with length that truncates the proc tail — rejected.
