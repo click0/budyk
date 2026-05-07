@@ -91,6 +91,11 @@ std::string sample_to_json(const Sample& s) {
     append_kv_uint(&out, "interface_count",  s.net.interface_count);
     out.append("},");
 
+    out.append("\"proc\":{");
+    append_kv_uint(&out, "total",   s.proc.total);   out.push_back(',');
+    append_kv_uint(&out, "running", s.proc.running);
+    out.append("},");
+
     append_kv_double(&out, "uptime_seconds", s.uptime_seconds);
     out.push_back('}');
     return out;

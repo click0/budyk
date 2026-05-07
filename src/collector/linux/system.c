@@ -34,3 +34,26 @@ int budyk_collect_load_linux(budyk_sample_c* s) {
     s->load.avg_15m = avg[2];
     return 0;
 }
+
+/* /proc/loadavg layout (kernel ≥ 2.6):
+ *   <load1> <load5> <load15> <running>/<total> <last_pid>
+ *
+ * Field 4 ("running/total") gives us both numbers cheaply, no /proc
+ * directory walk required.
+ */
+int budyk_collect_proc_linux(budyk_sample_c* s) {
+    if (s == NULL) return -EINVAL;
+
+    FILE* f = fopen("/proc/loadavg", "r");
+    if (f == NULL) return -errno;
+
+    double a, b, c;
+    unsigned int running = 0, total = 0;
+    int n = fscanf(f, "%lf %lf %lf %u/%u", &a, &b, &c, &running, &total);
+    fclose(f);
+    if (n != 5) return -EIO;
+
+    s->proc.running = running;
+    s->proc.total   = total;
+    return 0;
+}

@@ -64,6 +64,12 @@ void budyk_lua_bind_sample(lua_State* L, const budyk::Sample& s) {
     set_integer(L, "interface_count",    static_cast<lua_Integer>(s.net.interface_count));
     lua_setglobal(L, "net");
 
+    // proc — running / total process counts.
+    lua_newtable(L);
+    set_integer(L, "total",   static_cast<lua_Integer>(s.proc.total));
+    set_integer(L, "running", static_cast<lua_Integer>(s.proc.running));
+    lua_setglobal(L, "proc");
+
     lua_pushnumber(L, s.uptime_seconds);
     lua_setglobal(L, "uptime_seconds");
 }

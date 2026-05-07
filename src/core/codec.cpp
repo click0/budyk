@@ -11,7 +11,8 @@ namespace {
 constexpr uint8_t  kMagic[8]     = {'B', 'D', 'Y', 'K', 'S', 'M', 'P', 'L'};
 constexpr uint32_t kVersionV1    = 1;
 constexpr uint32_t kVersionV2    = 2;
-constexpr uint32_t kVersionWrite = kVersionV2;
+constexpr uint32_t kVersionV3    = 3;
+constexpr uint32_t kVersionWrite = kVersionV3;
 
 // v1 layout (unchanged — still decoded for records written before the bump).
 constexpr size_t kEncodedSizeV1 =
@@ -28,6 +29,11 @@ constexpr size_t kEncodedSizeV2 =
       kEncodedSizeV1
     + 8 + 8 + 4 + 4 // disk.read_bps, disk.write_bps, disk.device_count, pad
     + 8 + 8 + 4 + 4;// net.rx_bps, net.tx_bps, net.interface_count, pad
+
+// v3 appends proc.{total,running}, padded to 8-byte alignment.
+constexpr size_t kEncodedSizeV3 =
+      kEncodedSizeV2
+    + 4 + 4;        // proc.total, proc.running
 
 inline uint32_t to_le32(uint32_t v) {
 #if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
@@ -58,11 +64,11 @@ inline void     skip   (const uint8_t*& p, size_t n) { p += n; }
 
 } // namespace
 
-size_t sample_max_encoded_size() { return kEncodedSizeV2; }
+size_t sample_max_encoded_size() { return kEncodedSizeV3; }
 
 int sample_encode(const Sample* s, void* buf, size_t cap, size_t* out_len) {
     if (s == nullptr || buf == nullptr || out_len == nullptr) return -1;
-    if (cap < kEncodedSizeV2) return -2;
+    if (cap < kEncodedSizeV3) return -2;
 
     auto* p = static_cast<uint8_t*>(buf);
     std::memcpy(p, kMagic, 8); p += 8;
@@ -102,7 +108,11 @@ int sample_encode(const Sample* s, void* buf, size_t cap, size_t* out_len) {
     put_u32(p, s->net.interface_count);
     put_pad(p, 4);
 
-    *out_len = kEncodedSizeV2;
+    // v3 tail
+    put_u32(p, s->proc.total);
+    put_u32(p, s->proc.running);
+
+    *out_len = kEncodedSizeV3;
     return 0;
 }
 
@@ -115,8 +125,9 @@ int sample_decode(const void* buf, size_t len, Sample* out) {
     p += 8;
 
     uint32_t version = get_u32(p);
-    if (version != kVersionV1 && version != kVersionV2) return -4;
+    if (version != kVersionV1 && version != kVersionV2 && version != kVersionV3) return -4;
     if (version == kVersionV2 && len < kEncodedSizeV2)  return -2;
+    if (version == kVersionV3 && len < kEncodedSizeV3)  return -2;
     (void)get_u32(p);
 
     out->timestamp_nanos = get_u64(p);
@@ -143,7 +154,7 @@ int sample_decode(const void* buf, size_t len, Sample* out) {
 
     out->uptime_seconds = get_f64(p);
 
-    if (version == kVersionV2) {
+    if (version == kVersionV2 || version == kVersionV3) {
         out->disk.read_bytes_per_sec  = get_u64(p);
         out->disk.write_bytes_per_sec = get_u64(p);
         out->disk.device_count        = get_u32(p);
@@ -157,6 +168,14 @@ int sample_decode(const void* buf, size_t len, Sample* out) {
         // v1 records carry no disk/net data — leave fields zeroed.
         out->disk = DiskStats{};
         out->net  = NetStats{};
+    }
+
+    if (version == kVersionV3) {
+        out->proc.total   = get_u32(p);
+        out->proc.running = get_u32(p);
+    } else {
+        // v1 / v2 records carry no proc data — leave fields zeroed.
+        out->proc = ProcessStats{};
     }
     return 0;
 }

@@ -25,6 +25,12 @@ struct NetStats {
     uint32_t interface_count;
 };
 
+// Process state — L2 / watchful tier (spec §3.3.2).
+struct ProcessStats {
+    uint32_t total;
+    uint32_t running;
+};
+
 struct Sample {
     uint64_t timestamp_nanos;
     Level    level;
@@ -34,8 +40,9 @@ struct Sample {
     LoadStats load;
     DiskStats disk;
     NetStats  net;
+    ProcessStats proc;
     double    uptime_seconds;
-    // TODO: processes, thermal, entropy, self
+    // TODO: thermal, entropy, self
 };
 
 } // namespace budyk

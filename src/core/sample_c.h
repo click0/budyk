@@ -48,6 +48,11 @@ typedef struct {
 } budyk_net_c;
 
 typedef struct {
+    uint32_t total;
+    uint32_t running;
+} budyk_proc_c;
+
+typedef struct {
     uint64_t     timestamp_nanos;
     uint8_t      level;
     budyk_cpu_c  cpu;
@@ -56,6 +61,7 @@ typedef struct {
     budyk_load_c load;
     budyk_disk_c disk;
     budyk_net_c  net;
+    budyk_proc_c proc;
     double       uptime_seconds;
 } budyk_sample_c;
 
@@ -97,6 +103,7 @@ typedef struct {
 
 int budyk_collect_disk_linux   (budyk_disk_ctx_c* ctx, budyk_sample_c* s);
 int budyk_collect_network_linux(budyk_net_ctx_c*  ctx, budyk_sample_c* s);
+int budyk_collect_proc_linux   (budyk_sample_c* s);
 
 // FreeBSD collectors. Same shape as Linux ones; built only when
 // BUDYK_PLATFORM=freebsd. Returns 0 on success, negative errno on failure.
@@ -106,6 +113,7 @@ int budyk_collect_uptime_freebsd (budyk_sample_c* s);
 int budyk_collect_cpu_freebsd    (budyk_cpu_ctx_c*  ctx, budyk_sample_c* s);
 int budyk_collect_disk_freebsd   (budyk_disk_ctx_c* ctx, budyk_sample_c* s);
 int budyk_collect_network_freebsd(budyk_net_ctx_c*  ctx, budyk_sample_c* s);
+int budyk_collect_proc_freebsd   (budyk_sample_c* s);
 
 #ifdef __cplusplus
 }
