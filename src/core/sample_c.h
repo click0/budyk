@@ -53,16 +53,22 @@ typedef struct {
 } budyk_proc_c;
 
 typedef struct {
-    uint64_t     timestamp_nanos;
-    uint8_t      level;
-    budyk_cpu_c  cpu;
-    budyk_mem_c  mem;
-    budyk_swap_c swap;
-    budyk_load_c load;
-    budyk_disk_c disk;
-    budyk_net_c  net;
-    budyk_proc_c proc;
-    double       uptime_seconds;
+    uint32_t available_bits;
+    uint8_t  present;       /* 0 = platform has no entropy_avail surface */
+} budyk_entropy_c;
+
+typedef struct {
+    uint64_t        timestamp_nanos;
+    uint8_t         level;
+    budyk_cpu_c     cpu;
+    budyk_mem_c     mem;
+    budyk_swap_c    swap;
+    budyk_load_c    load;
+    budyk_disk_c    disk;
+    budyk_net_c     net;
+    budyk_proc_c    proc;
+    budyk_entropy_c entropy;
+    double          uptime_seconds;
 } budyk_sample_c;
 
 // Linux collectors. Return 0 on success, negative errno on failure.
@@ -104,6 +110,7 @@ typedef struct {
 int budyk_collect_disk_linux   (budyk_disk_ctx_c* ctx, budyk_sample_c* s);
 int budyk_collect_network_linux(budyk_net_ctx_c*  ctx, budyk_sample_c* s);
 int budyk_collect_proc_linux   (budyk_sample_c* s);
+int budyk_collect_entropy_linux(budyk_sample_c* s);
 
 // FreeBSD collectors. Same shape as Linux ones; built only when
 // BUDYK_PLATFORM=freebsd. Returns 0 on success, negative errno on failure.
@@ -114,6 +121,7 @@ int budyk_collect_cpu_freebsd    (budyk_cpu_ctx_c*  ctx, budyk_sample_c* s);
 int budyk_collect_disk_freebsd   (budyk_disk_ctx_c* ctx, budyk_sample_c* s);
 int budyk_collect_network_freebsd(budyk_net_ctx_c*  ctx, budyk_sample_c* s);
 int budyk_collect_proc_freebsd   (budyk_sample_c* s);
+int budyk_collect_entropy_freebsd(budyk_sample_c* s);
 
 #ifdef __cplusplus
 }

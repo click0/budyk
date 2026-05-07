@@ -46,6 +46,8 @@ int main() {
         s.net.interface_count      = 3;
         s.proc.total               = 235;
         s.proc.running             = 4;
+        s.entropy.available_bits   = 512;
+        s.entropy.present          = true;
         s.uptime_seconds           = 7200.5;
 
         std::string j = sample_to_json(s);
@@ -64,6 +66,9 @@ int main() {
         assert(contains(j, "\"proc\":{"));
         assert(contains(j, "\"total\":235"));
         assert(contains(j, "\"running\":4"));
+        assert(contains(j, "\"entropy\":{"));
+        assert(contains(j, "\"available_bits\":512"));
+        assert(contains(j, "\"present\":true"));
         assert(contains(j, "\"uptime_seconds\":7200.5"));
     }
 

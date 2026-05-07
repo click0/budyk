@@ -31,6 +31,14 @@ struct ProcessStats {
     uint32_t running;
 };
 
+// Entropy pool state — L3 / active tier (spec §3.3.3).
+// On platforms without an entropy_avail surface (currently FreeBSD),
+// available_bits stays at 0 and `present` is false.
+struct EntropyStats {
+    uint32_t available_bits;
+    bool     present;
+};
+
 struct Sample {
     uint64_t timestamp_nanos;
     Level    level;
@@ -41,8 +49,9 @@ struct Sample {
     DiskStats disk;
     NetStats  net;
     ProcessStats proc;
+    EntropyStats entropy;
     double    uptime_seconds;
-    // TODO: thermal, entropy, self
+    // TODO: thermal, self
 };
 
 } // namespace budyk

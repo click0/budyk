@@ -151,6 +151,19 @@ int main() {
         assert(s.proc.running <= s.proc.total);
     }
 
+    // 9. Entropy — FreeBSD has no /proc/sys/kernel/random/entropy_avail
+    //    equivalent, so the collector reports present=0 unconditionally.
+    {
+        budyk_sample_c s;
+        std::memset(&s, 0, sizeof(s));
+        int rc = budyk_collect_entropy_freebsd(&s);
+        assert(rc == 0);
+        assert(s.entropy.present == 0);
+        assert(s.entropy.available_bits == 0);
+
+        assert(budyk_collect_entropy_freebsd(nullptr) != 0);
+    }
+
     std::printf("test_freebsd_collector: PASS\n");
     return 0;
 }

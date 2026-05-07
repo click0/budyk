@@ -35,6 +35,33 @@ int budyk_collect_load_linux(budyk_sample_c* s) {
     return 0;
 }
 
+/* /proc/sys/kernel/random/entropy_avail — single integer, the number
+ * of bits currently in the kernel's CSPRNG entropy pool. Populated on
+ * every Linux >= 2.6. On stripped containers the file may be missing
+ * (read-only / unsupported sysctl) — soft-fail with present=0.
+ */
+int budyk_collect_entropy_linux(budyk_sample_c* s) {
+    if (s == NULL) return -EINVAL;
+
+    FILE* f = fopen("/proc/sys/kernel/random/entropy_avail", "r");
+    if (f == NULL) {
+        s->entropy.available_bits = 0;
+        s->entropy.present        = 0;
+        return 0;                  /* missing on this host — non-fatal */
+    }
+    unsigned int bits = 0;
+    int n = fscanf(f, "%u", &bits);
+    fclose(f);
+    if (n != 1) {
+        s->entropy.available_bits = 0;
+        s->entropy.present        = 0;
+        return 0;
+    }
+    s->entropy.available_bits = bits;
+    s->entropy.present        = 1;
+    return 0;
+}
+
 /* /proc/loadavg layout (kernel ≥ 2.6):
  *   <load1> <load5> <load15> <running>/<total> <last_pid>
  *

@@ -33,6 +33,8 @@ static Sample make_sample() {
     s.net.interface_count      = 2;
     s.proc.total               = 423;
     s.proc.running             = 7;
+    s.entropy.available_bits   = 256;
+    s.entropy.present          = true;
     s.uptime_seconds         = 123456.789;
     return s;
 }
@@ -63,6 +65,8 @@ static void assert_samples_equal(const Sample& a, const Sample& b) {
     assert(a.net.interface_count      == b.net.interface_count);
     assert(a.proc.total               == b.proc.total);
     assert(a.proc.running             == b.proc.running);
+    assert(a.entropy.available_bits   == b.entropy.available_bits);
+    assert(a.entropy.present          == b.entropy.present);
     assert(bitwise_eq(a.uptime_seconds, b.uptime_seconds));
 }
 
@@ -230,32 +234,45 @@ int main() {
         assert(out.net.rx_bytes_per_sec     == 0);
         assert(out.net.tx_bytes_per_sec     == 0);
         assert(out.net.interface_count      == 0);
+        assert(out.proc.total               == 0);
+        assert(out.entropy.available_bits   == 0);
+        assert(out.entropy.present          == false);
     }
 
     // 11b. v2 backward compat — a hand-rolled v2 record (176 bytes,
-    //      version=2) decodes successfully, proc fields zeroed.
+    //      version=2) decodes successfully; proc + entropy zeroed.
     {
-        // Easiest path: encode a v3 record, then patch the version byte
-        // back to 2 and shrink len to the v2 size. The shared codec
-        // path is symmetric enough that this exercises the v2 branch.
         Sample in = make_sample();
         uint8_t buf[512] = {0};
         size_t  full = 0;
         assert(sample_encode(&in, buf, sizeof(buf), &full) == 0);
-
-        // Patch version 3 → 2 at offset 8 (u8[8] magic, then u32 version).
-        buf[8] = 2;
-
-        // Truncate to 176 bytes — the v2 size (v3 is 184, v3-8 proc
-        // bytes = 176 v2).
+        buf[8] = 2;                            // version 4 → 2
         constexpr size_t kV2Size = 176;
         Sample out{};
         assert(sample_decode(buf, kV2Size, &out) == 0);
-        assert(out.proc.total   == 0);
-        assert(out.proc.running == 0);
-        // Disk/net survived from the encoded sample.
-        assert(out.disk.device_count   == in.disk.device_count);
-        assert(out.net.interface_count == in.net.interface_count);
+        assert(out.proc.total           == 0);
+        assert(out.proc.running         == 0);
+        assert(out.entropy.available_bits == 0);
+        assert(out.entropy.present      == false);
+        assert(out.disk.device_count    == in.disk.device_count);
+        assert(out.net.interface_count  == in.net.interface_count);
+    }
+
+    // 11c. v3 backward compat — version=3, length 184. Proc parsed,
+    //      entropy zeroed.
+    {
+        Sample in = make_sample();
+        uint8_t buf[512] = {0};
+        size_t  full = 0;
+        assert(sample_encode(&in, buf, sizeof(buf), &full) == 0);
+        buf[8] = 3;                            // version 4 → 3
+        constexpr size_t kV3Size = 184;
+        Sample out{};
+        assert(sample_decode(buf, kV3Size, &out) == 0);
+        assert(out.proc.total           == in.proc.total);
+        assert(out.proc.running         == in.proc.running);
+        assert(out.entropy.available_bits == 0);
+        assert(out.entropy.present      == false);
     }
 
     // 12. v3 with length that truncates the proc tail — rejected.
