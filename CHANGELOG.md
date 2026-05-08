@@ -5,6 +5,67 @@ All notable changes to budyk will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — 2026-05-07
+
+Closes the entire spec §3.3.3 metric set — the `Sample` struct now
+covers every block the design ever called out: cpu / mem / swap /
+load / disk / net / proc / entropy / self / thermal.
+
+### Added
+
+- **`ProcessStats`** — `proc.{total, running}` from `/proc/loadavg`
+  field 4 on Linux, `kern.proc.all` size-only sysctl on FreeBSD.
+  `running` stays at 0 on FreeBSD until a `kinfo_proc.ki_stat`
+  walk lands; `total` is exact on both. (PR #46)
+- **`EntropyStats`** — `entropy.{available_bits, present}` from
+  `/proc/sys/kernel/random/entropy_avail` on Linux. FreeBSD has no
+  semantically equivalent surface — `present == false` there. The
+  SPA hides the row when `present == false`. (PR #47)
+- **`SelfStats`** — `self_.{rss_bytes, peak_rss_bytes,
+  cpu_user_seconds, cpu_system_seconds}`. Linux pulls current RSS
+  from `/proc/self/statm`; both platforms use `getrusage(2)` for
+  peak RSS and CPU time. Lets users see the daemon's own
+  footprint via `/api/samples` or rule-engine alerts. (PR #48)
+- **`ThermalStats`** — `thermal.{max_celsius, sensor_count,
+  present}` — hottest sensor reading across `/sys/class/thermal/
+  thermal_zone*/temp` on Linux and the `dev.cpu.<N>.temperature`
+  sysctl chain on FreeBSD. Soft-fails to `present == false` on
+  hosts without ACPI / IPMI passthrough. (PR #49)
+
+### Changed
+
+- **Codec versioned to v6** in four steps:
+  - v3 (PR #46) — adds `proc` (8 B). 184 B per sample.
+  - v4 (PR #47) — adds `entropy` (8 B). 192 B.
+  - v5 (PR #48) — adds `self` (32 B). 224 B.
+  - v6 (PR #49) — adds `thermal` (16 B). 240 B.
+  Storage record is now `14 header + 240 = 254` bytes. `sample_decode`
+  honours every prior version (v1..v5) — historical ring-file
+  records remain readable, the missing tail fields read as zero.
+- **Lua bindings** gained `proc`, `entropy`, `self_`, and `thermal`
+  globals — rule `when()` bodies can now reference any metric in
+  the spec.
+- **JSON `/api/samples`** + **WebSocket** push gained the four
+  matching blocks. The single-page UI (`src/web/spa.cpp`) added
+  three new dashboard rows: "Processes", "Entropy" (Linux-only,
+  hidden on FreeBSD), "Thermal" (hidden when no sensors), and
+  "budyk RSS" for the daemon's own footprint.
+- **CI** bumped `cross-platform-actions/action` from v0.32.0 to
+  v1.0.0 (latest GA, April 2026). FreeBSD jobs continue to flake
+  on the upstream Vagrant Cloud SSH bootstrap (`exit 8`) — that's
+  an infra-side issue independent of our code; the bump just keeps
+  us on a maintained release. (PR #50)
+
+### Tests
+
+19 ctest suites still cover every code path. The codec, JSON,
+Lua-engine, and Linux/FreeBSD collector tests grew assertions
+for each new metric block; new backward-compatibility cases
+encode-then-patch the version byte to verify v3, v4, v5 records
+decode cleanly with the missing tail fields zeroed.
+
+[0.4.0]: https://github.com/click0/budyk/releases/tag/v0.4.0
+
 ## [0.3.1] — 2026-04-30
 
 Patch release — paper cuts surfaced while smoke-testing the v0.3.0
