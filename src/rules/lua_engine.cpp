@@ -141,6 +141,9 @@ const std::vector<std::string>& LuaEngine::exec_allowlist() const {
     return exec_allowlist_;
 }
 
+AlertDispatcher&       LuaEngine::alerts()       { return alerts_; }
+const AlertDispatcher& LuaEngine::alerts() const { return alerts_; }
+
 void LuaEngine::add_rule(const std::string& name, int when_ref, int action_ref,
                          const std::string& action_tag,
                          int for_ticks, int cooldown_ticks) {

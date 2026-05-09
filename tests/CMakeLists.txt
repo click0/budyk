@@ -106,3 +106,8 @@ add_executable(test_exec_action unit/test_exec_action.cpp)
 target_link_libraries(test_exec_action PRIVATE budyk_rules budyk_core)
 target_include_directories(test_exec_action PRIVATE ${CMAKE_SOURCE_DIR}/src)
 add_test(NAME test_exec_action COMMAND test_exec_action)
+
+add_executable(test_alert unit/test_alert.cpp)
+target_link_libraries(test_alert PRIVATE budyk_rules budyk_core)
+target_include_directories(test_alert PRIVATE ${CMAKE_SOURCE_DIR}/src)
+add_test(NAME test_alert COMMAND test_alert)

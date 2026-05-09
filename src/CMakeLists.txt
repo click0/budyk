@@ -66,6 +66,7 @@ add_library(budyk_rules STATIC
     rules/lua_bindings.cpp
     rules/lua_stdlib.cpp
     rules/exec_action.cpp
+    rules/alert.cpp
     rules/yaml_compat.cpp
 )
 target_link_libraries(budyk_rules PRIVATE budyk_core ${LUA_LIBRARIES})
