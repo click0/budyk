@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #pragma once
 #include "core/sample.h"
+#include "rules/alert.h"
 
 #include <cstdint>
 #include <string>
@@ -49,6 +50,11 @@ public:
     void set_exec_allowlist(std::vector<std::string> paths);
     const std::vector<std::string>& exec_allowlist() const;
 
+    // Mutable reference — call sites add channels at config-load time
+    // and l_alert() pulls the dispatcher when a rule fires.
+    AlertDispatcher&       alerts();
+    const AlertDispatcher& alerts() const;
+
     const std::vector<LuaRule>& rules() const;
 
     // Called by the watch() C binding. Public so the binding can reach
@@ -63,6 +69,7 @@ private:
     bool                     exec_enabled_    = false;
     int                      last_fire_count_ = 0;
     std::vector<std::string> exec_allowlist_;
+    AlertDispatcher          alerts_;
 };
 
 } // namespace budyk

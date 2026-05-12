@@ -9,6 +9,7 @@ extern "C" {
 #include <lua.h>
 }
 
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -73,11 +74,28 @@ int l_watch(lua_State* L) {
 }
 
 int l_alert(lua_State* L) {
-    // Placeholder — v1.0 fires `alert` to log + WS event only (spec §7).
-    // For the engine MVP this is a no-op sink; users invoke it via
-    // opts.action = alert inside their when() or as an explicit call.
-    (void)L;
-    return 0;
+    // alert(name, severity?, message?) — fires every configured channel.
+    //   name      — required string (the rule name / event name)
+    //   severity  — optional "info" / "warning" / "critical" (default warning)
+    //   message   — optional human-readable body (default empty)
+    auto* eng = engine_from(L);
+    if (eng == nullptr) return 0;
+
+    const char* name    = luaL_checkstring(L, 1);
+    const char* sev_str = lua_tostring(L, 2);
+    const char* msg     = lua_tostring(L, 3);
+
+    budyk::AlertSeverity sev = budyk::AlertSeverity::Warning;
+    if (sev_str != nullptr) {
+        if (std::strcmp(sev_str, "info")     == 0 ||
+            std::strcmp(sev_str, "INFO")     == 0) sev = budyk::AlertSeverity::Info;
+        else if (std::strcmp(sev_str, "critical") == 0 ||
+                 std::strcmp(sev_str, "CRITICAL") == 0) sev = budyk::AlertSeverity::Critical;
+    }
+
+    const int ok = eng->alerts().dispatch(sev, name, msg ? msg : "");
+    lua_pushinteger(L, ok);
+    return 1;
 }
 
 int l_escalate(lua_State* L) {
