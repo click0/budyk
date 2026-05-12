@@ -50,6 +50,52 @@ rules:
       - /usr/local/bin/budyk-alerter
       - /usr/bin/systemctl
 
+# ---- Alert channels (rules can call alert(name, severity, message)) -----
+# Each channel is a separate notification destination. The dispatcher
+# fires every channel best-effort: a failed channel logs to stderr and
+# the rest keep going. Channel `type` selects the backend; the other
+# fields are interpreted per backend (see comments below).
+#
+# alerts:
+#   channels:
+#     # ntfy.sh — POST <url>/<topic>, plain-text body.
+#     - name:  ops-ntfy
+#       type:  ntfy
+#       url:   "https://ntfy.sh"
+#       topic: "budyk-alerts"
+#
+#     # Discord — POST to the full webhook URL with a JSON embed.
+#     - name:  ops-discord
+#       type:  discord
+#       url:   "https://discord.com/api/webhooks/XXX/YYY"
+#
+#     # Telegram Bot API — sendMessage on the bot's token; chat_id can
+#     # be a numeric id, a "-100…" channel id, or a "@channelname".
+#     - name:  ops-telegram
+#       type:  telegram
+#       token: "1234567890:AA..."
+#       topic: "-1001234567890"
+#
+#     # SMTP — curl smtp[s]://host:port, RFC822 body composed in-process.
+#     # `token` is "user:pass" (basic auth) — omit for an unauthenticated
+#     # relay. Quote the hash because it contains `$`.
+#     - name:  ops-mail
+#       type:  smtp
+#       url:   "smtps://smtp.example.com:465"
+#       from:  "alerts@example.com"
+#       topic: "oncall@example.com"
+#       token: "alerts@example.com:hunter2"
+#
+#     # Twilio SMS — POST to the /Messages.json endpoint of an account.
+#     # `token` is "AccountSID:AuthToken" (HTTP basic). `from` and
+#     # `topic` are E.164 phone numbers ("+15551234567").
+#     - name:  ops-sms
+#       type:  twilio
+#       url:   "https://api.twilio.com/2010-04-01/Accounts/AC.../Messages.json"
+#       token: "AC...:auth_token"
+#       from:  "+15551234567"
+#       topic: "+15559876543"
+
 # ---- Web server / SPA ----------------------------------------------------
 web:
   auth:

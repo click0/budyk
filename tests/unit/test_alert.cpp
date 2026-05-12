@@ -75,7 +75,79 @@ int main() {
         assert(ok == 0);             // unknown type → not counted
     }
 
-    // 7. AlertDispatcher — unreachable channel: dispatcher does not
+    // 7. telegram_payload — JSON with chat_id + "[sev] name: message".
+    {
+        const std::string body = telegram_payload(
+            AlertSeverity::Info, "-100123456789", "uptime_ok",
+            "uptime > 86400");
+        assert(contains(body, "\"chat_id\":\"-100123456789\""));
+        assert(contains(body, "\"text\":\"[info] uptime_ok: uptime > 86400\""));
+    }
+
+    // 8. telegram_payload — empty message: no trailing ": " separator.
+    {
+        const std::string body = telegram_payload(
+            AlertSeverity::Critical, "42", "alarm", "");
+        assert(contains(body, "\"text\":\"[critical] alarm\""));
+    }
+
+    // 9. smtp_message — required headers + body all present.
+    {
+        const std::string m = smtp_message(
+            AlertSeverity::Warning,
+            "alerts@example.com", "oncall@example.com",
+            "high_load", "load_1m=12.0");
+        assert(contains(m, "From: alerts@example.com\r\n"));
+        assert(contains(m, "To: oncall@example.com\r\n"));
+        assert(contains(m, "Subject: [budyk:warning] high_load\r\n"));
+        assert(contains(m, "Date: "));
+        assert(contains(m, "MIME-Version: 1.0\r\n"));
+        assert(contains(m, "Content-Type: text/plain; charset=utf-8\r\n"));
+        assert(contains(m, "\r\n\r\nload_1m=12.0\r\n"));   // blank line + body
+    }
+
+    // 10. twilio_form — URL-encoded From/To/Body. '+' in E.164 phone
+    //     numbers must be encoded as %2B, '%' in the body as %25,
+    //     spaces in the body as '+', ':' as %3A.
+    {
+        const std::string b = twilio_form(
+            "+15551234567", "+15559876543",
+            "high_cpu", "cpu pegged at 99%");
+        assert(contains(b, "From=%2B15551234567"));
+        assert(contains(b, "To=%2B15559876543"));
+        assert(contains(b, "Body=%5Bbudyk%5D+high_cpu%3A+cpu+pegged+at+99%25"));
+    }
+
+    // 11. AlertDispatcher — smtp channel missing required fields is
+    //     skipped (not counted, dispatcher returns 0 successes).
+    {
+        AlertDispatcher d;
+        AlertChannel ch;
+        ch.name = "broken-smtp";
+        ch.type = "smtp";
+        ch.url  = "smtp://localhost:25";
+        // from + topic deliberately missing
+        d.add_channel(std::move(ch));
+        const int ok = d.dispatch(AlertSeverity::Warning, "x", "y");
+        assert(ok == 0);
+    }
+
+    // 12. AlertDispatcher — twilio channel missing token is skipped.
+    {
+        AlertDispatcher d;
+        AlertChannel ch;
+        ch.name  = "broken-twilio";
+        ch.type  = "twilio";
+        ch.url   = "https://api.twilio.com/2010-04-01/Accounts/AC.../Messages.json";
+        ch.from  = "+15551234567";
+        ch.topic = "+15559876543";
+        // token deliberately missing
+        d.add_channel(std::move(ch));
+        const int ok = d.dispatch(AlertSeverity::Warning, "x", "y");
+        assert(ok == 0);
+    }
+
+    // 13. AlertDispatcher — unreachable channel: dispatcher does not
     //    crash, returns 0 successes, the count stays as configured.
     //    We use a port that's almost certainly closed (127.0.0.1:1)
     //    and a 10-second curl timeout, which means this test takes a

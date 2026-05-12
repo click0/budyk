@@ -5,6 +5,25 @@ All notable changes to budyk will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Multi-channel alert dispatcher** — `AlertChannel.type` now routes
+  to **ntfy.sh / Discord / Telegram / SMTP / Twilio**. ntfy and
+  Discord shipped in PR #52; Telegram, SMTP and Twilio land here.
+  Each backend reuses the existing `popen(curl …)` plumbing and
+  writes credentials through `curl --netrc-file` so SMTP usernames
+  / Twilio Account SIDs never appear in `ps`.
+- **Config schema** — `alerts.channels: [...]` block in `config.yaml`
+  with per-entry `{name, type, url, topic, token, from}`. Channels
+  with no `type` are silently dropped (no-op); `cmd_serve` walks the
+  list and calls `engine.alerts().add_channel(...)` for each, logging
+  the registered count to stderr. Documented in `config.example.yaml`.
+- **Payload builders** exported for tests: `telegram_payload`,
+  `smtp_message` (full RFC 5322 blob with `Date:` / `MIME-Version:` /
+  `Content-Type:`), `twilio_form` (URL-encoded `From/To/Body`).
+
 ## [0.4.0] — 2026-05-07
 
 Closes the entire spec §3.3.3 metric set — the `Sample` struct now

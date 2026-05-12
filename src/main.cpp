@@ -16,6 +16,7 @@
 #include "core/sample.h"
 #include "core/sample_c.h"
 #include "hot_buffer/hot_buffer.h"
+#include "rules/alert.h"
 #include "rules/lua_engine.h"
 #include "scheduler/scheduler.h"
 #include "storage/codec.h"
@@ -520,6 +521,24 @@ int cmd_serve(int argc, char* argv[]) {
                     cfg.rules_path);
             }
         }
+    }
+
+    // Register configured alert channels with the Lua engine's dispatcher
+    // so rules can call alert(name, severity, message) and reach them.
+    for (const auto& src : cfg.alert_channels) {
+        budyk::AlertChannel ch;
+        ch.name  = src.name;
+        ch.type  = src.type;
+        ch.url   = src.url;
+        ch.topic = src.topic;
+        ch.token = src.token;
+        ch.from  = src.from;
+        engine.alerts().add_channel(std::move(ch));
+    }
+    if (!cfg.alert_channels.empty()) {
+        std::fprintf(stderr,
+            "budyk serve: registered %zu alert channel(s)\n",
+            cfg.alert_channels.size());
     }
 
     budyk::HttpServer    http;

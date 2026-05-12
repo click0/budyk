@@ -82,6 +82,33 @@ void apply_str_list(yaml_document_t* d, const yaml_node_t* m, const char* key,
     }
 }
 
+// Walks a YAML sequence of mappings under `key` and converts each item
+// into an AlertChannelConfig via the {name,type,url,topic,token,from}
+// scalar fields. A missing or non-sequence node leaves dst untouched.
+void apply_alert_channels(yaml_document_t* d, const yaml_node_t* m,
+                          std::vector<Config::AlertChannelConfig>* dst) {
+    const yaml_node_t* seq = find_key(d, m, "channels");
+    if (seq == nullptr || seq->type != YAML_SEQUENCE_NODE) return;
+    dst->clear();
+    for (auto* item = seq->data.sequence.items.start;
+         item     != seq->data.sequence.items.top; ++item) {
+        const yaml_node_t* n = yaml_document_get_node(d, *item);
+        if (n == nullptr || n->type != YAML_MAPPING_NODE) continue;
+        Config::AlertChannelConfig ch;
+        const char* v = nullptr;
+        if ((v = scalar_str(find_key(d, n, "name")))  != nullptr) ch.name  = v;
+        if ((v = scalar_str(find_key(d, n, "type")))  != nullptr) ch.type  = v;
+        if ((v = scalar_str(find_key(d, n, "url")))   != nullptr) ch.url   = v;
+        if ((v = scalar_str(find_key(d, n, "topic"))) != nullptr) ch.topic = v;
+        if ((v = scalar_str(find_key(d, n, "token"))) != nullptr) ch.token = v;
+        if ((v = scalar_str(find_key(d, n, "from")))  != nullptr) ch.from  = v;
+        // A channel with no type is meaningless — silently drop it
+        // rather than register a no-op that confuses operators.
+        if (ch.type.empty()) continue;
+        dst->emplace_back(std::move(ch));
+    }
+}
+
 // --- Section walkers --------------------------------------------------------
 
 void apply_collection(yaml_document_t* d, const yaml_node_t* col, Config* out) {
@@ -150,6 +177,10 @@ int parse_document(yaml_parser_t* parser, Config* out) {
             apply_bool    (&doc, exec, "enabled", &out->rules_enable_exec);
             apply_str_list(&doc, exec, "allow",   &out->rules_exec_allow);
         }
+    }
+
+    if (auto* alerts = find_key(&doc, root, "alerts")) {
+        apply_alert_channels(&doc, alerts, &out->alert_channels);
     }
 
     if (auto* web = find_key(&doc, root, "web")) {
