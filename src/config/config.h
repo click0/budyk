@@ -29,6 +29,19 @@ struct Config {
     // Absolute paths that `exec()` is permitted to launch. Empty = any
     // absolute path allowed (still subject to path-traversal guard).
     std::vector<std::string> rules_exec_allow;
+
+    // Alert channels — POD mirror of rules::AlertChannel. Kept here to
+    // avoid pulling budyk_config into budyk_rules' dep graph. main.cpp
+    // copies the fields into a rules::AlertChannel for each entry.
+    struct AlertChannelConfig {
+        std::string name;
+        std::string type;     // ntfy / discord / telegram / smtp / twilio
+        std::string url;
+        std::string topic;
+        std::string token;
+        std::string from;
+    };
+    std::vector<AlertChannelConfig> alert_channels;
 };
 
 // Load a YAML config into `out`, starting from defaults. Missing

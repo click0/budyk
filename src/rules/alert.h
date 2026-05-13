@@ -16,16 +16,27 @@ enum class AlertSeverity : int {
 
 const char* severity_name(AlertSeverity s);
 
-// One configured destination — Telegram / Discord / ntfy.sh / SMTP /
-// Twilio. The `type` field selects the dispatcher backend, `url`
-// carries the endpoint, `topic` and `token` are channel-specific
-// (ntfy topic, Telegram chat id, SMTP recipient, etc.).
+// One configured destination — ntfy.sh / Discord / Telegram / SMTP /
+// Twilio. The `type` field selects the dispatcher backend; the other
+// fields are interpreted per backend:
+//
+//   ntfy:     url = base (https://ntfy.sh), topic = topic name
+//   discord:  url = full webhook URL
+//   telegram: token = bot token, topic = chat_id
+//             (url optional override; default api.telegram.org)
+//   smtp:     url = smtp[s]://host:port, token = "user:pass" (basic auth,
+//             may be empty for unauthenticated relays), from = sender
+//             address, topic = recipient address
+//   twilio:   url = full Messages.json endpoint (contains Account SID),
+//             token = "AccountSID:AuthToken", from = sender phone,
+//             topic = recipient phone (E.164)
 struct AlertChannel {
     std::string name;
     std::string type;
     std::string url;
     std::string topic;
     std::string token;
+    std::string from;
 };
 
 // Lua-facing dispatcher. Each call to dispatch() fires one HTTP POST
@@ -47,9 +58,23 @@ private:
 };
 
 // --- Payload builders (exported for tests; no network) ---------------
-std::string ntfy_payload   (AlertSeverity sev, const std::string& rule_name,
-                            const std::string& message);
-std::string discord_payload(AlertSeverity sev, const std::string& rule_name,
-                            const std::string& message);
+std::string ntfy_payload    (AlertSeverity sev, const std::string& rule_name,
+                             const std::string& message);
+std::string discord_payload (AlertSeverity sev, const std::string& rule_name,
+                             const std::string& message);
+std::string telegram_payload(AlertSeverity sev, const std::string& chat_id,
+                             const std::string& rule_name,
+                             const std::string& message);
+// SMTP DATA section — full RFC 5322-ish blob: From/To/Subject/Date
+// headers, blank line, then the body. No CR-LF folding, no MIME.
+std::string smtp_message    (AlertSeverity sev, const std::string& from,
+                             const std::string& to,
+                             const std::string& rule_name,
+                             const std::string& message);
+// Twilio /Messages.json POST body — application/x-www-form-urlencoded
+// with three fields: From, To, Body.
+std::string twilio_form     (const std::string& from, const std::string& to,
+                             const std::string& rule_name,
+                             const std::string& message);
 
 } // namespace budyk

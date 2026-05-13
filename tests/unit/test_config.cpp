@@ -162,7 +162,57 @@ int main() {
         assert(c.rules_exec_allow[0] == "/bin/true");
     }
 
-    // 7. File load path: write a small YAML and parse it.
+    // 8. alerts.channels — full mix of all five backend types.
+    {
+        Config c;
+        const char* y =
+            "alerts:\n"
+            "  channels:\n"
+            "    - name: ops-ntfy\n"
+            "      type: ntfy\n"
+            "      url: https://ntfy.sh\n"
+            "      topic: budyk-alerts\n"
+            "    - name: ops-tg\n"
+            "      type: telegram\n"
+            "      token: \"12345:AAA\"\n"
+            "      topic: \"-1001234567\"\n"
+            "    - name: ops-mail\n"
+            "      type: smtp\n"
+            "      url: smtps://smtp.example.com:465\n"
+            "      from: alerts@example.com\n"
+            "      topic: oncall@example.com\n"
+            "      token: \"alerts@example.com:hunter2\"\n";
+        assert(config_load_string(y, &c) == 0);
+        assert(c.alert_channels.size() == 3);
+        assert(c.alert_channels[0].type == "ntfy");
+        assert(c.alert_channels[0].url  == "https://ntfy.sh");
+        assert(c.alert_channels[0].topic == "budyk-alerts");
+        assert(c.alert_channels[1].type == "telegram");
+        assert(c.alert_channels[1].token == "12345:AAA");
+        assert(c.alert_channels[2].type == "smtp");
+        assert(c.alert_channels[2].from == "alerts@example.com");
+        assert(c.alert_channels[2].topic == "oncall@example.com");
+    }
+
+    // 9. alerts: a channel with no `type` is silently dropped — the
+    //    dispatcher would have nothing to route it to anyway.
+    {
+        Config c;
+        const char* y =
+            "alerts:\n"
+            "  channels:\n"
+            "    - name: typeless\n"
+            "      url: https://example.com/\n"
+            "    - name: good\n"
+            "      type: ntfy\n"
+            "      url: https://ntfy.sh\n"
+            "      topic: t\n";
+        assert(config_load_string(y, &c) == 0);
+        assert(c.alert_channels.size() == 1);
+        assert(c.alert_channels[0].name == "good");
+    }
+
+    // 10. File load path: write a small YAML and parse it.
     {
         char tmpl[] = "/tmp/budyk_cfg_XXXXXX";
         int  fd = mkstemp(tmpl);
