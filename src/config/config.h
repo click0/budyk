@@ -30,6 +30,12 @@ struct Config {
     // absolute path allowed (still subject to path-traversal guard).
     std::vector<std::string> rules_exec_allow;
 
+    bool                     rules_enable_freeze = false;
+    // Process names (kernel `comm`) that freeze()/unfreeze() are
+    // allowed to signal. Empty = no name-based gate (the engine-wide
+    // enabled flag still applies).
+    std::vector<std::string> rules_freeze_allow;
+
     // Alert channels — POD mirror of rules::AlertChannel. Kept here to
     // avoid pulling budyk_config into budyk_rules' dep graph. main.cpp
     // copies the fields into a rules::AlertChannel for each entry.

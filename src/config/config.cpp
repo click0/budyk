@@ -177,6 +177,13 @@ int parse_document(yaml_parser_t* parser, Config* out) {
             apply_bool    (&doc, exec, "enabled", &out->rules_enable_exec);
             apply_str_list(&doc, exec, "allow",   &out->rules_exec_allow);
         }
+
+        // Nested `rules.freeze` block — gate + allowlist for
+        // freeze() / unfreeze(). Format mirrors rules.exec.
+        if (auto* fr = find_key(&doc, rules, "freeze")) {
+            apply_bool    (&doc, fr, "enabled", &out->rules_enable_freeze);
+            apply_str_list(&doc, fr, "allow",   &out->rules_freeze_allow);
+        }
     }
 
     if (auto* alerts = find_key(&doc, root, "alerts")) {

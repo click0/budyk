@@ -111,3 +111,8 @@ add_executable(test_alert unit/test_alert.cpp)
 target_link_libraries(test_alert PRIVATE budyk_rules budyk_core)
 target_include_directories(test_alert PRIVATE ${CMAKE_SOURCE_DIR}/src)
 add_test(NAME test_alert COMMAND test_alert)
+
+add_executable(test_freeze unit/test_freeze.cpp)
+target_link_libraries(test_freeze PRIVATE budyk_rules budyk_core)
+target_include_directories(test_freeze PRIVATE ${CMAKE_SOURCE_DIR}/src)
+add_test(NAME test_freeze COMMAND test_freeze)

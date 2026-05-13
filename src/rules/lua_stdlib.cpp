@@ -2,6 +2,7 @@
 #include "rules/lua_stdlib.h"
 
 #include "rules/exec_action.h"
+#include "rules/freeze.h"
 #include "rules/lua_engine.h"
 
 extern "C" {
@@ -201,6 +202,63 @@ int l_exec(lua_State* L) {
     return 1;
 }
 
+// Shared implementation of freeze() and unfreeze(). `stop == true` sends
+// SIGSTOP; `stop == false` sends SIGCONT. Both share the gate, the
+// allowlist match and the return-table shape, so factoring them keeps
+// the two bindings honest. Returns one value: a table with
+//   { ok = bool, errno = int, pid = int, name = string? }
+int freeze_action(lua_State* L, const char* fn_name, bool stop) {
+    auto* eng = engine_from(L);
+    if (eng == nullptr || !eng->freeze_enabled()) {
+        return luaL_error(L,
+            "%s is disabled (enable with --enable-freeze)", fn_name);
+    }
+
+    const lua_Integer pid_arg = luaL_checkinteger(L, 1);
+    if (pid_arg <= 0) {
+        return luaL_error(L, "%s: pid must be a positive integer", fn_name);
+    }
+    const int pid = static_cast<int>(pid_arg);
+
+    // Resolve the target's `comm` first — needed both for the allowlist
+    // check and to surface it back to the rule in the result table.
+    char       name_buf[64] = {0};
+    const bool name_ok      =
+        budyk::proc_name_of(pid, name_buf, sizeof(name_buf)) == 0;
+
+    const auto& allow = eng->freeze_allowlist();
+    if (!allow.empty()) {
+        if (!name_ok) {
+            return luaL_error(L,
+                "%s: cannot resolve process name for pid %d", fn_name, pid);
+        }
+        bool found = false;
+        for (const auto& n : allow) {
+            if (n == name_buf) { found = true; break; }
+        }
+        if (!found) {
+            return luaL_error(L,
+                "%s: process '%s' (pid %d) not in allowlist",
+                fn_name, name_buf, pid);
+        }
+    }
+
+    const int rc = stop ? budyk::freeze_pid(pid) : budyk::unfreeze_pid(pid);
+
+    lua_newtable(L);
+    lua_pushboolean(L, rc == 0);          lua_setfield(L, -2, "ok");
+    lua_pushinteger(L, rc < 0 ? -rc : 0); lua_setfield(L, -2, "errno");
+    lua_pushinteger(L, pid);              lua_setfield(L, -2, "pid");
+    if (name_ok) {
+        lua_pushstring(L, name_buf);
+        lua_setfield(L, -2, "name");
+    }
+    return 1;
+}
+
+int l_freeze  (lua_State* L) { return freeze_action(L, "freeze",   true);  }
+int l_unfreeze(lua_State* L) { return freeze_action(L, "unfreeze", false); }
+
 } // namespace
 
 void budyk_lua_register_stdlib(lua_State* L, bool /*enable_exec*/) {
@@ -208,4 +266,6 @@ void budyk_lua_register_stdlib(lua_State* L, bool /*enable_exec*/) {
     lua_register(L, "alert",    l_alert);
     lua_register(L, "escalate", l_escalate);
     lua_register(L, "exec",     l_exec);
+    lua_register(L, "freeze",   l_freeze);
+    lua_register(L, "unfreeze", l_unfreeze);
 }

@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`freeze()` / `unfreeze()` Lua actions** — incident-response surface
+  for the rule engine: `freeze(pid)` sends SIGSTOP, `unfreeze(pid)`
+  sends SIGCONT. Both raise an error unless the engine was started
+  with `--enable-freeze` (or `rules.freeze.enabled: true`), and both
+  honour `rules.freeze.allow: [...]` — a whitelist of process names
+  (kernel `comm`) the bindings are permitted to signal. `proc_name_of`
+  resolves the target via `/proc/<pid>/comm` on Linux and
+  `kinfo_proc.ki_comm` on FreeBSD.
 - **Multi-channel alert dispatcher** — `AlertChannel.type` now routes
   to **ntfy.sh / Discord / Telegram / SMTP / Twilio**. ntfy and
   Discord shipped in PR #52; Telegram, SMTP and Twilio land here.
