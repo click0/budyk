@@ -116,3 +116,8 @@ add_executable(test_freeze unit/test_freeze.cpp)
 target_link_libraries(test_freeze PRIVATE budyk_rules budyk_core)
 target_include_directories(test_freeze PRIVATE ${CMAKE_SOURCE_DIR}/src)
 add_test(NAME test_freeze COMMAND test_freeze)
+
+add_executable(test_ssh_audit unit/test_ssh_audit.cpp)
+target_link_libraries(test_ssh_audit PRIVATE budyk_security budyk_core)
+target_include_directories(test_ssh_audit PRIVATE ${CMAKE_SOURCE_DIR}/src)
+add_test(NAME test_ssh_audit COMMAND test_ssh_audit)

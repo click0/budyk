@@ -19,6 +19,7 @@
 #include "rules/alert.h"
 #include "rules/lua_engine.h"
 #include "scheduler/scheduler.h"
+#include "security/ssh_audit.h"
 #include "storage/codec.h"
 #include "storage/ring_file.h"
 #include "storage/tier_manager.h"
@@ -464,6 +465,51 @@ void interruptible_sleep(int seconds) {
     }
 }
 
+// One-shot scan of an sshd auth log — useful for ad-hoc forensics or
+// piping into other tools. Prints a small JSON-ish summary on stdout.
+//
+//   budyk ssh-audit [path]
+//
+// Path defaults to /var/log/auth.log (Debian/Ubuntu/FreeBSD); on
+// RHEL-family systems pass /var/log/secure explicitly.
+int cmd_ssh_audit(int argc, char* argv[]) {
+    const char* path = "/var/log/auth.log";
+    for (int i = 2; i < argc; ++i) {
+        if (argv[i][0] != '-') {
+            path = argv[i];
+        } else {
+            std::fprintf(stderr, "budyk ssh-audit: unknown arg '%s'\n", argv[i]);
+            return 1;
+        }
+    }
+
+    budyk::SshAuditScanner   sc;
+    budyk::SshAuditStats     st;
+    const int rc = sc.scan(path, &st);
+    if (rc != 0) {
+        std::fprintf(stderr,
+            "budyk ssh-audit: failed to read '%s' (rc=%d)\n", path, rc);
+        return 1;
+    }
+
+    std::printf("path:            %s\n",        path);
+    std::printf("bytes_consumed:  %llu\n",      (unsigned long long)sc.offset());
+    std::printf("failed_password: %llu\n",      (unsigned long long)st.failed_password);
+    std::printf("invalid_user:    %llu\n",      (unsigned long long)st.invalid_user);
+    std::printf("accepted:        %llu\n",      (unsigned long long)st.accepted);
+    std::printf("top_ips:\n");
+    for (const auto& kv : st.top_ips) {
+        std::printf("  %-39s %llu\n", kv.first.c_str(),
+                    (unsigned long long)kv.second);
+    }
+    std::printf("top_users:\n");
+    for (const auto& kv : st.top_users) {
+        std::printf("  %-32s %llu\n", kv.first.c_str(),
+                    (unsigned long long)kv.second);
+    }
+    return 0;
+}
+
 int cmd_serve(int argc, char* argv[]) {
     const char* config_path     = "/usr/local/etc/budyk/config.yaml";
     bool        cli_enable_exec   = false;
@@ -787,6 +833,10 @@ int main(int argc, char* argv[]) {
 
     if (std::strcmp(cmd, "suggest-rules") == 0) {
         return cmd_suggest_rules(argc, argv);
+    }
+
+    if (std::strcmp(cmd, "ssh-audit") == 0) {
+        return cmd_ssh_audit(argc, argv);
     }
 
     std::fprintf(stderr, "budyk: unknown command '%s'\n", cmd);

@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **SSH brute-force scanner** (`src/security/ssh_audit`) — parses
+  `/var/log/auth.log`-style sshd output and counts `Failed password`,
+  `Invalid user` and `Accepted password|publickey` events. Keeps a
+  byte offset between calls so successive scans only see new lines;
+  detects log rotation (file shrunk below cached offset) and rewinds
+  to 0. Top-16 offending IPs and target usernames sorted by hit count.
+  CLI exposes a one-shot mode: `budyk ssh-audit [/path/to/auth.log]`.
+  Daemon integration + Lua binding land in a follow-up.
 - **`freeze()` / `unfreeze()` Lua actions** — incident-response surface
   for the rule engine: `freeze(pid)` sends SIGSTOP, `unfreeze(pid)`
   sends SIGCONT. Both raise an error unless the engine was started

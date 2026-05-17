@@ -121,6 +121,12 @@ if(CURSES_FOUND)
     target_compile_definitions(budyk_tui PRIVATE BUDYK_HAVE_CURSES)
 endif()
 
+# Security — SSH brute-force scanner (PanicMode-inspired)
+add_library(budyk_security STATIC
+    security/ssh_audit.cpp
+)
+target_link_libraries(budyk_security PRIVATE budyk_core)
+
 # Config
 add_library(budyk_config STATIC
     config/config.cpp
@@ -144,6 +150,7 @@ target_link_libraries(budyk PRIVATE
     budyk_web
     budyk_tui
     budyk_config
+    budyk_security
     ${BUDYK_PLATFORM_LIBS}
     ${LUA_LIBRARIES}
 )
