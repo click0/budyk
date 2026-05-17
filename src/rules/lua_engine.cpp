@@ -87,6 +87,9 @@ int LuaEngine::eval_tick(const Sample& s) {
     if (L_ == nullptr) return -1;
 
     budyk_lua_bind_sample(L_, s);
+    if (has_ssh_audit_) {
+        budyk_lua_bind_ssh_audit(L_, ssh_audit_);
+    }
     last_fire_count_ = 0;
 
     for (auto& r : rules_) {
@@ -156,6 +159,14 @@ const std::vector<std::string>& LuaEngine::freeze_allowlist() const {
 
 AlertDispatcher&       LuaEngine::alerts()       { return alerts_; }
 const AlertDispatcher& LuaEngine::alerts() const { return alerts_; }
+
+void LuaEngine::set_ssh_audit(const SshAuditStats& s) {
+    ssh_audit_     = s;
+    has_ssh_audit_ = true;
+}
+
+bool                 LuaEngine::has_ssh_audit() const { return has_ssh_audit_; }
+const SshAuditStats& LuaEngine::ssh_audit()      const { return ssh_audit_; }
 
 void LuaEngine::add_rule(const std::string& name, int when_ref, int action_ref,
                          const std::string& action_tag,

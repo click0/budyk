@@ -2,6 +2,7 @@
 #include "rules/lua_bindings.h"
 
 #include "core/sample.h"
+#include "security/ssh_audit.h"
 
 extern "C" {
 #include <lauxlib.h>
@@ -95,4 +96,41 @@ void budyk_lua_bind_sample(lua_State* L, const budyk::Sample& s) {
 
     lua_pushnumber(L, s.uptime_seconds);
     lua_setglobal(L, "uptime_seconds");
+}
+
+void budyk_lua_bind_ssh_audit(lua_State* L, const budyk::SshAuditStats& s) {
+    // Expose cumulative counters + the single highest-hit IP/user so
+    // rules can write `if ssh_audit.top_ip_hits > 20 then …`.
+    // The full top_ips / top_users tables aren't projected — operators
+    // who need richer queries can move to a follow-up that exposes
+    // them as Lua sequences.
+    lua_newtable(L);
+    set_integer(L, "failed_password",
+                static_cast<lua_Integer>(s.failed_password));
+    set_integer(L, "invalid_user",
+                static_cast<lua_Integer>(s.invalid_user));
+    set_integer(L, "accepted",
+                static_cast<lua_Integer>(s.accepted));
+
+    if (!s.top_ips.empty()) {
+        lua_pushstring(L, s.top_ips.front().first.c_str());
+        lua_setfield(L, -2, "top_ip");
+        set_integer(L, "top_ip_hits",
+                    static_cast<lua_Integer>(s.top_ips.front().second));
+    } else {
+        lua_pushstring(L, "");
+        lua_setfield(L, -2, "top_ip");
+        set_integer(L, "top_ip_hits", 0);
+    }
+    if (!s.top_users.empty()) {
+        lua_pushstring(L, s.top_users.front().first.c_str());
+        lua_setfield(L, -2, "top_user");
+        set_integer(L, "top_user_hits",
+                    static_cast<lua_Integer>(s.top_users.front().second));
+    } else {
+        lua_pushstring(L, "");
+        lua_setfield(L, -2, "top_user");
+        set_integer(L, "top_user_hits", 0);
+    }
+    lua_setglobal(L, "ssh_audit");
 }

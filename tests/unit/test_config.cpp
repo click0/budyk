@@ -187,6 +187,30 @@ int main() {
         assert(c.rules_freeze_allow.empty());
     }
 
+    // 7g. security.ssh_audit — gate + path + interval all parse.
+    {
+        Config c;
+        const char* y =
+            "security:\n"
+            "  ssh_audit:\n"
+            "    enabled: true\n"
+            "    path: /var/log/secure\n"
+            "    interval: 30\n";
+        assert(config_load_string(y, &c) == 0);
+        assert(c.ssh_audit_enabled == true);
+        assert(std::strcmp(c.ssh_audit_path, "/var/log/secure") == 0);
+        assert(c.ssh_audit_interval_sec == 30);
+    }
+
+    // 7h. Defaults survive an unrelated config block.
+    {
+        Config c;
+        assert(config_load_string("rules: {}\n", &c) == 0);
+        assert(c.ssh_audit_enabled == false);
+        assert(std::strcmp(c.ssh_audit_path, "/var/log/auth.log") == 0);
+        assert(c.ssh_audit_interval_sec == 60);
+    }
+
     // 8. alerts.channels — full mix of all five backend types.
     {
         Config c;

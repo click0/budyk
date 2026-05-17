@@ -36,6 +36,14 @@ struct Config {
     // enabled flag still applies).
     std::vector<std::string> rules_freeze_allow;
 
+    // SSH brute-force scanner — periodically reads sshd auth log and
+    // exposes the counters as Lua globals (ssh_audit.failed_password,
+    // .top_ip, etc.) so rules can react. Disabled by default; admins
+    // opt in via `security.ssh_audit.enabled: true`.
+    bool                     ssh_audit_enabled      = false;
+    char                     ssh_audit_path[256]    = "/var/log/auth.log";
+    int                      ssh_audit_interval_sec = 60;
+
     // Alert channels — POD mirror of rules::AlertChannel. Kept here to
     // avoid pulling budyk_config into budyk_rules' dep graph. main.cpp
     // copies the fields into a rules::AlertChannel for each entry.

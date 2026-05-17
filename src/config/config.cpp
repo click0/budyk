@@ -190,6 +190,17 @@ int parse_document(yaml_parser_t* parser, Config* out) {
         apply_alert_channels(&doc, alerts, &out->alert_channels);
     }
 
+    // security.ssh_audit — periodic auth.log scan that feeds the Lua
+    // `ssh_audit` global so brute-force rules can fire.
+    if (auto* sec = find_key(&doc, root, "security")) {
+        if (auto* sa = find_key(&doc, sec, "ssh_audit")) {
+            apply_bool(&doc, sa, "enabled",  &out->ssh_audit_enabled);
+            apply_str (&doc, sa, "path",     out->ssh_audit_path,
+                       sizeof(out->ssh_audit_path));
+            apply_int (&doc, sa, "interval", &out->ssh_audit_interval_sec);
+        }
+    }
+
     if (auto* web = find_key(&doc, root, "web")) {
         if (auto* auth = find_key(&doc, web, "auth")) {
             apply_bool(&doc, auth, "enabled", &out->auth_enabled);

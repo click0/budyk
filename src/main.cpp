@@ -754,6 +754,9 @@ int cmd_serve(int argc, char* argv[]) {
     budyk_disk_ctx_c disk_ctx{};
     budyk_net_ctx_c  net_ctx{};
 
+    budyk::SshAuditScanner audit_scanner;
+    time_t                 next_audit = 0;   // 0 ⇒ first iteration triggers
+
     while (!g_stop) {
         budyk::Sample s{};
         s.timestamp_nanos = now_realtime_ns();
@@ -766,6 +769,22 @@ int cmd_serve(int argc, char* argv[]) {
             std::lock_guard<std::mutex> g(hot_mtx);
             hot.push(s);
         }
+
+        // SSH audit-log scan — runs at most every cfg.ssh_audit_interval_sec
+        // and re-binds the `ssh_audit` Lua global before eval_tick so
+        // any rules referencing it see fresh counters.
+        if (cfg.ssh_audit_enabled) {
+            const time_t now = ::time(nullptr);
+            if (now >= next_audit) {
+                budyk::SshAuditStats st;
+                audit_scanner.scan(cfg.ssh_audit_path, &st);
+                engine.set_ssh_audit(st);
+                const int iv = cfg.ssh_audit_interval_sec > 0
+                             ? cfg.ssh_audit_interval_sec : 60;
+                next_audit = now + iv;
+            }
+        }
+
         engine.eval_tick(s);
 
         // Push the freshly-collected sample to every connected WS client.
