@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **SSH brute-force daemon integration** — `cmd_serve` now runs the
+  `SshAuditScanner` on a configurable cadence
+  (`security.ssh_audit.{enabled, path, interval}`) and exposes the
+  fresh counters to the rule engine as a `ssh_audit` Lua global:
+  `failed_password`, `invalid_user`, `accepted`, `top_ip`,
+  `top_ip_hits`, `top_user`, `top_user_hits`. Rules can now write
+  `when = function() return ssh_audit.top_ip_hits > 20 end` and fire
+  alerts / freeze offending source IPs (alert dispatcher already
+  shipped in v0.4.x-Unreleased; freeze() landed in PR #54).
 - **SSH brute-force scanner** (`src/security/ssh_audit`) — parses
   `/var/log/auth.log`-style sshd output and counts `Failed password`,
   `Invalid user` and `Accepted password|publickey` events. Keeps a
