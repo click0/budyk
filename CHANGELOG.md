@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **File change watcher** (`src/security/file_watcher`) — cross-platform
+  surface over `inotify` (Linux) and `kqueue + EVFILT_VNODE` (FreeBSD)
+  for tamper-detection rules ("alert when /etc/sudoers changes"). API
+  is `init` / `add(path)` / `poll(timeout_ms, &events)` / `shutdown`;
+  events carry `path` + `kind` (Modified / Deleted / Created). Per-poll
+  coalescing collapses a flurry of editor `write(2)`s into one
+  Modified event per path. CLI: `budyk watch-files [--timeout MS]
+  <path>...` for ad-hoc diagnostic. Daemon integration + Lua binding
+  follow-up.
 - **SSH brute-force daemon integration** — `cmd_serve` now runs the
   `SshAuditScanner` on a configurable cadence
   (`security.ssh_audit.{enabled, path, interval}`) and exposes the

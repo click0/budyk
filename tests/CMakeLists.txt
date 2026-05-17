@@ -121,3 +121,8 @@ add_executable(test_ssh_audit unit/test_ssh_audit.cpp)
 target_link_libraries(test_ssh_audit PRIVATE budyk_security budyk_core)
 target_include_directories(test_ssh_audit PRIVATE ${CMAKE_SOURCE_DIR}/src)
 add_test(NAME test_ssh_audit COMMAND test_ssh_audit)
+
+add_executable(test_file_watcher unit/test_file_watcher.cpp)
+target_link_libraries(test_file_watcher PRIVATE budyk_security budyk_core)
+target_include_directories(test_file_watcher PRIVATE ${CMAKE_SOURCE_DIR}/src)
+add_test(NAME test_file_watcher COMMAND test_file_watcher)
