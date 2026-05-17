@@ -465,10 +465,16 @@ void interruptible_sleep(int seconds) {
 }
 
 int cmd_serve(int argc, char* argv[]) {
-    const char* config_path = "/usr/local/etc/budyk/config.yaml";
+    const char* config_path     = "/usr/local/etc/budyk/config.yaml";
+    bool        cli_enable_exec   = false;
+    bool        cli_enable_freeze = false;
     for (int i = 2; i < argc; ++i) {
         if (std::strcmp(argv[i], "--config") == 0 && i + 1 < argc) {
             config_path = argv[++i];
+        } else if (std::strcmp(argv[i], "--enable-exec") == 0) {
+            cli_enable_exec = true;
+        } else if (std::strcmp(argv[i], "--enable-freeze") == 0) {
+            cli_enable_freeze = true;
         } else {
             std::fprintf(stderr, "budyk serve: unknown arg '%s'\n", argv[i]);
             return 1;
@@ -481,6 +487,9 @@ int cmd_serve(int argc, char* argv[]) {
             "budyk serve: failed to load config '%s'\n", config_path);
         return 1;
     }
+    // CLI flags override config (operator intent on the command line wins).
+    if (cli_enable_exec)   cfg.rules_enable_exec   = true;
+    if (cli_enable_freeze) cfg.rules_enable_freeze = true;
 
     install_signal_handlers();
 
@@ -509,6 +518,10 @@ int cmd_serve(int argc, char* argv[]) {
     }
     if (!cfg.rules_exec_allow.empty()) {
         engine.set_exec_allowlist(cfg.rules_exec_allow);
+    }
+    engine.set_freeze_enabled(cfg.rules_enable_freeze);
+    if (!cfg.rules_freeze_allow.empty()) {
+        engine.set_freeze_allowlist(cfg.rules_freeze_allow);
     }
     if (cfg.rules_path[0] != '\0') {
         // Distinguish "file just doesn't exist on a fresh install" from

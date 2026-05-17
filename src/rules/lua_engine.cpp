@@ -130,6 +130,7 @@ int LuaEngine::eval_tick(const Sample& s) {
 int  LuaEngine::rule_count()      const { return static_cast<int>(rules_.size()); }
 int  LuaEngine::last_fire_count() const { return last_fire_count_; }
 bool LuaEngine::exec_enabled()    const { return exec_enabled_; }
+bool LuaEngine::freeze_enabled()  const { return freeze_enabled_; }
 
 const std::vector<LuaRule>& LuaEngine::rules() const { return rules_; }
 
@@ -139,6 +140,18 @@ void LuaEngine::set_exec_allowlist(std::vector<std::string> paths) {
 
 const std::vector<std::string>& LuaEngine::exec_allowlist() const {
     return exec_allowlist_;
+}
+
+void LuaEngine::set_freeze_enabled(bool enable) {
+    freeze_enabled_ = enable;
+}
+
+void LuaEngine::set_freeze_allowlist(std::vector<std::string> names) {
+    freeze_allowlist_ = std::move(names);
+}
+
+const std::vector<std::string>& LuaEngine::freeze_allowlist() const {
+    return freeze_allowlist_;
 }
 
 AlertDispatcher&       LuaEngine::alerts()       { return alerts_; }

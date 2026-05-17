@@ -49,6 +49,17 @@ rules:
     allow:
       - /usr/local/bin/budyk-alerter
       - /usr/bin/systemctl
+  freeze:
+    enabled: false         # `true` lets watch() actions call freeze(pid)
+                           # / unfreeze(pid) to send SIGSTOP / SIGCONT;
+                           # otherwise both bindings raise an error.
+    # When the list is non-empty, freeze() / unfreeze() will only signal
+    # a process whose kernel-reported name (`comm`) matches one entry.
+    # Empty list ⇒ no name-based gate (the engine-wide enabled flag
+    # still applies).
+    allow:
+      - nginx
+      - redis-server
 
 # ---- Alert channels (rules can call alert(name, severity, message)) -----
 # Each channel is a separate notification destination. The dispatcher

@@ -42,6 +42,7 @@ public:
     int  rule_count()      const;
     int  last_fire_count() const;
     bool exec_enabled()    const;
+    bool freeze_enabled()  const;
 
     // exec() hardening: when the allowlist is non-empty, exec() rejects
     // any argv[0] that is not exactly one of the listed absolute paths.
@@ -49,6 +50,15 @@ public:
     // to the no-traversal / must-be-absolute checks in l_exec).
     void set_exec_allowlist(std::vector<std::string> paths);
     const std::vector<std::string>& exec_allowlist() const;
+
+    // freeze() / unfreeze() gate. Disabled by default; admins opt in
+    // via --enable-freeze (CLI) or rules.freeze.enabled (YAML). The
+    // allowlist matches the target PID's process name (`comm`) against
+    // any entry — empty list ⇒ no name-based gate (still requires the
+    // engine-wide enabled flag).
+    void set_freeze_enabled(bool enable);
+    void set_freeze_allowlist(std::vector<std::string> names);
+    const std::vector<std::string>& freeze_allowlist() const;
 
     // Mutable reference — call sites add channels at config-load time
     // and l_alert() pulls the dispatcher when a rule fires.
@@ -69,6 +79,8 @@ private:
     bool                     exec_enabled_    = false;
     int                      last_fire_count_ = 0;
     std::vector<std::string> exec_allowlist_;
+    bool                     freeze_enabled_  = false;
+    std::vector<std::string> freeze_allowlist_;
     AlertDispatcher          alerts_;
 };
 

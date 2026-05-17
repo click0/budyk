@@ -93,6 +93,10 @@ int budyk_collect_entropy_freebsd(budyk_sample_c* s) {
  * Current RSS is harder to come by without a full kvm proc walk
  * (we already do it once in the proc collector), so we leave
  * rss_bytes at 0 and rely on peak_rss_bytes for monitoring.
+ *
+ * Note: FreeBSD updates ru_maxrss lazily — the value can legitimately
+ * be 0 for a process that just started and hasn't touched many pages.
+ * Tests must not assert peak_rss_bytes > 0 unconditionally.
  */
 #include <sys/resource.h>
 

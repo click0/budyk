@@ -162,6 +162,31 @@ int main() {
         assert(c.rules_exec_allow[0] == "/bin/true");
     }
 
+    // 7e. rules.freeze — gate + allowlist parse correctly.
+    {
+        Config c;
+        const char* y =
+            "rules:\n"
+            "  freeze:\n"
+            "    enabled: true\n"
+            "    allow:\n"
+            "      - nginx\n"
+            "      - redis-server\n";
+        assert(config_load_string(y, &c) == 0);
+        assert(c.rules_enable_freeze == true);
+        assert(c.rules_freeze_allow.size() == 2);
+        assert(c.rules_freeze_allow[0] == "nginx");
+        assert(c.rules_freeze_allow[1] == "redis-server");
+    }
+
+    // 7f. rules.freeze defaults: missing block leaves disabled + empty.
+    {
+        Config c;
+        assert(config_load_string("rules: {}\n", &c) == 0);
+        assert(c.rules_enable_freeze == false);
+        assert(c.rules_freeze_allow.empty());
+    }
+
     // 8. alerts.channels — full mix of all five backend types.
     {
         Config c;

@@ -372,6 +372,37 @@ int main() {
         e.shutdown();
     }
 
+    // 16. freeze() is disabled by default — calling it from a rule
+    //     should raise an error and load_string therefore fails.
+    {
+        budyk::LuaEngine e;
+        assert(e.init(/*enable_exec=*/false) == 0);
+        // Run freeze() at file scope so the error surfaces from
+        // load_string. We use pid 1 — gate runs before the actual kill.
+        const int rc = e.load_string("freeze(1)\n");
+        assert(rc != 0);   // luaL_error → load_string returns -2
+        e.shutdown();
+    }
+
+    // 17. freeze() with engine.set_freeze_enabled(true) but the target's
+    //     comm not in the allowlist → also rejected at gate time, never
+    //     touches kill(). We point freeze() at our own pid (we know the
+    //     name resolves) but list a name that doesn't match.
+    {
+        budyk::LuaEngine e;
+        assert(e.init(false) == 0);
+        e.set_freeze_enabled(true);
+        e.set_freeze_allowlist({"this-name-definitely-does-not-match"});
+        char buf[128];
+        std::snprintf(buf, sizeof(buf), "freeze(%d)\n",
+                      static_cast<int>(::getpid()));
+        // load_string runs at the file scope; the gate error surfaces
+        // as a luaL_error, which dostring reports as a non-zero rc.
+        const int rc = e.load_string(buf);
+        assert(rc != 0);
+        e.shutdown();
+    }
+
     std::printf("test_lua_engine: PASS\n");
     return 0;
 }
