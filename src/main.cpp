@@ -19,6 +19,7 @@
 #include "rules/alert.h"
 #include "rules/lua_engine.h"
 #include "scheduler/scheduler.h"
+#include "security/file_watcher.h"
 #include "security/ssh_audit.h"
 #include "storage/codec.h"
 #include "storage/ring_file.h"
@@ -510,6 +511,72 @@ int cmd_ssh_audit(int argc, char* argv[]) {
     return 0;
 }
 
+// Watch one or more file paths for content / metadata changes and
+// print events as they arrive. Useful for one-shot diagnostic, for
+// example "is something silently touching /etc/sudoers?".
+//
+//   budyk watch-files [--timeout MS] <path> [<path>...]
+//
+// Default timeout is 30s; pass --timeout -1 to block indefinitely.
+// Exits 0 on EOF (timeout reached) or when SIGTERM/SIGINT arrives.
+int cmd_watch_files(int argc, char* argv[]) {
+    int                       timeout_ms = 30000;
+    std::vector<std::string>  paths;
+    for (int i = 2; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--timeout") == 0 && i + 1 < argc) {
+            timeout_ms = std::atoi(argv[++i]);
+        } else if (argv[i][0] == '-') {
+            std::fprintf(stderr,
+                "budyk watch-files: unknown arg '%s'\n", argv[i]);
+            return 1;
+        } else {
+            paths.emplace_back(argv[i]);
+        }
+    }
+    if (paths.empty()) {
+        std::fprintf(stderr,
+            "usage: budyk watch-files [--timeout MS] <path> [<path>...]\n");
+        return 1;
+    }
+
+    budyk::FileWatcher fw;
+    if (fw.init() != 0) {
+        std::fprintf(stderr,
+            "budyk watch-files: FileWatcher.init() failed\n");
+        return 1;
+    }
+    for (const auto& p : paths) {
+        const int rc = fw.add(p);
+        if (rc < 0) {
+            std::fprintf(stderr,
+                "budyk watch-files: cannot watch '%s' (errno=%d)\n",
+                p.c_str(), -rc);
+        }
+    }
+    std::printf("watching %zu file(s); timeout=%dms\n",
+                static_cast<std::size_t>(fw.count()), timeout_ms);
+
+    std::vector<budyk::FileChangeEvent> events;
+    const int n = fw.poll(timeout_ms, &events);
+    if (n < 0) {
+        std::fprintf(stderr,
+            "budyk watch-files: poll failed (errno=%d)\n", -n);
+        return 1;
+    }
+    if (n == 0) {
+        std::printf("(no events within timeout)\n");
+        return 0;
+    }
+    for (const auto& ev : events) {
+        const char* kind =
+            ev.kind == budyk::FileChangeKind::Deleted  ? "deleted"  :
+            ev.kind == budyk::FileChangeKind::Created  ? "created"  :
+                                                         "modified";
+        std::printf("%-8s  %s\n", kind, ev.path.c_str());
+    }
+    return 0;
+}
+
 int cmd_serve(int argc, char* argv[]) {
     const char* config_path     = "/usr/local/etc/budyk/config.yaml";
     bool        cli_enable_exec   = false;
@@ -856,6 +923,10 @@ int main(int argc, char* argv[]) {
 
     if (std::strcmp(cmd, "ssh-audit") == 0) {
         return cmd_ssh_audit(argc, argv);
+    }
+
+    if (std::strcmp(cmd, "watch-files") == 0) {
+        return cmd_watch_files(argc, argv);
     }
 
     std::fprintf(stderr, "budyk: unknown command '%s'\n", cmd);
