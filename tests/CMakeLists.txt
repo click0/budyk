@@ -97,7 +97,7 @@ endif()
 
 if(LUA_FOUND)
     add_executable(test_lua_engine unit/test_lua_engine.cpp)
-    target_link_libraries(test_lua_engine PRIVATE budyk_rules budyk_core ${LUA_LIBRARIES})
+    target_link_libraries(test_lua_engine PRIVATE budyk_rules budyk_security budyk_core ${LUA_LIBRARIES})
     target_include_directories(test_lua_engine PRIVATE ${CMAKE_SOURCE_DIR}/src ${LUA_INCLUDE_DIR})
     add_test(NAME test_lua_engine COMMAND test_lua_engine)
 endif()

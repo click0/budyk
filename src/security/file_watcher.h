@@ -20,8 +20,10 @@
 
 #pragma once
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace budyk {
@@ -30,6 +32,23 @@ enum class FileChangeKind {
     Modified = 0,
     Deleted  = 1,
     Created  = 2,
+};
+
+struct FileChangeEvent;   // forward — defined below
+
+// Aggregate state the daemon hands to the rule engine each tick.
+// `modifies` / `deletes` are cumulative-since-start counters per path;
+// `tampered_this_tick` is the set of paths that fired any event during
+// the most recent poll cycle (so rules can `when = files[p].tampered`).
+struct FileWatchState {
+    std::unordered_map<std::string, uint64_t> modifies;
+    std::unordered_map<std::string, uint64_t> deletes;
+    std::unordered_set<std::string>           tampered_this_tick;
+
+    // Apply a batch of events from FileWatcher::poll() — clears the
+    // tick-scoped flag set first, then bumps counters and records the
+    // tampered paths. Idempotent: an empty `events` only clears.
+    void apply(const std::vector<FileChangeEvent>& events);
 };
 
 struct FileChangeEvent {

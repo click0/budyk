@@ -21,6 +21,21 @@
 
 namespace budyk {
 
+void FileWatchState::apply(const std::vector<FileChangeEvent>& events) {
+    tampered_this_tick.clear();
+    for (const auto& ev : events) {
+        tampered_this_tick.insert(ev.path);
+        if (ev.kind == FileChangeKind::Deleted) {
+            ++deletes[ev.path];
+        } else {
+            // Modified + Created both count as modifies for rule
+            // ergonomics — operators usually just care that "the file
+            // changed somehow".
+            ++modifies[ev.path];
+        }
+    }
+}
+
 FileWatcher::FileWatcher() = default;
 
 FileWatcher::~FileWatcher() { shutdown(); }

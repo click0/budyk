@@ -824,6 +824,33 @@ int cmd_serve(int argc, char* argv[]) {
     budyk::SshAuditScanner audit_scanner;
     time_t                 next_audit = 0;   // 0 ⇒ first iteration triggers
 
+    // File watcher — init once before the loop, add every configured
+    // path. Init failures (kernel unable to allocate inotify/kqueue)
+    // disable the feature for this run; per-path add failures are
+    // logged and the rest of the list still gets wired up.
+    budyk::FileWatcher    file_watcher;
+    budyk::FileWatchState file_state;
+    bool                  fw_active = false;
+    if (cfg.file_watch_enabled && !cfg.file_watch_paths.empty()) {
+        if (file_watcher.init() == 0) {
+            fw_active = true;
+            for (const auto& p : cfg.file_watch_paths) {
+                const int rc = file_watcher.add(p);
+                if (rc < 0) {
+                    std::fprintf(stderr,
+                        "budyk serve: cannot watch '%s' (errno=%d)\n",
+                        p.c_str(), -rc);
+                }
+            }
+            std::fprintf(stderr,
+                "budyk serve: file_watch active on %zu path(s)\n",
+                file_watcher.count());
+        } else {
+            std::fprintf(stderr,
+                "budyk serve: FileWatcher.init failed — file_watch disabled\n");
+        }
+    }
+
     while (!g_stop) {
         budyk::Sample s{};
         s.timestamp_nanos = now_realtime_ns();
@@ -850,6 +877,21 @@ int cmd_serve(int argc, char* argv[]) {
                              ? cfg.ssh_audit_interval_sec : 60;
                 next_audit = now + iv;
             }
+        }
+
+        // File-watch drain — non-blocking poll so the tick cadence is
+        // unchanged. apply() always clears the tampered set first, so
+        // a tick with zero events drops `files[p].tampered` back to
+        // false (one-shot semantics).
+        if (fw_active) {
+            std::vector<budyk::FileChangeEvent> events;
+            const int n = file_watcher.poll(/*timeout_ms=*/0, &events);
+            if (n < 0) {
+                std::fprintf(stderr,
+                    "budyk serve: file_watcher.poll failed (errno=%d)\n", -n);
+            }
+            file_state.apply(events);
+            engine.set_file_state(file_state);
         }
 
         engine.eval_tick(s);
