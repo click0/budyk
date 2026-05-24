@@ -90,6 +90,9 @@ int LuaEngine::eval_tick(const Sample& s) {
     if (has_ssh_audit_) {
         budyk_lua_bind_ssh_audit(L_, ssh_audit_);
     }
+    if (has_file_state_) {
+        budyk_lua_bind_files(L_, file_state_);
+    }
     last_fire_count_ = 0;
 
     for (auto& r : rules_) {
@@ -167,6 +170,14 @@ void LuaEngine::set_ssh_audit(const SshAuditStats& s) {
 
 bool                 LuaEngine::has_ssh_audit() const { return has_ssh_audit_; }
 const SshAuditStats& LuaEngine::ssh_audit()      const { return ssh_audit_; }
+
+void LuaEngine::set_file_state(const FileWatchState& s) {
+    file_state_     = s;
+    has_file_state_ = true;
+}
+
+bool                  LuaEngine::has_file_state() const { return has_file_state_; }
+const FileWatchState& LuaEngine::file_state()     const { return file_state_; }
 
 void LuaEngine::add_rule(const std::string& name, int when_ref, int action_ref,
                          const std::string& action_tag,

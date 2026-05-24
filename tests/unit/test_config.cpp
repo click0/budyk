@@ -202,6 +202,23 @@ int main() {
         assert(c.ssh_audit_interval_sec == 30);
     }
 
+    // 7g-bis. security.file_watch — gate + paths list parse.
+    {
+        Config c;
+        const char* y =
+            "security:\n"
+            "  file_watch:\n"
+            "    enabled: true\n"
+            "    paths:\n"
+            "      - /etc/sudoers\n"
+            "      - /etc/passwd\n";
+        assert(config_load_string(y, &c) == 0);
+        assert(c.file_watch_enabled == true);
+        assert(c.file_watch_paths.size() == 2);
+        assert(c.file_watch_paths[0] == "/etc/sudoers");
+        assert(c.file_watch_paths[1] == "/etc/passwd");
+    }
+
     // 7h. Defaults survive an unrelated config block.
     {
         Config c;
@@ -209,6 +226,8 @@ int main() {
         assert(c.ssh_audit_enabled == false);
         assert(std::strcmp(c.ssh_audit_path, "/var/log/auth.log") == 0);
         assert(c.ssh_audit_interval_sec == 60);
+        assert(c.file_watch_enabled == false);
+        assert(c.file_watch_paths.empty());
     }
 
     // 8. alerts.channels — full mix of all five backend types.

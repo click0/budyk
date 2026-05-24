@@ -131,6 +131,33 @@ rules:
 #     enabled:  false               # off by default
 #     path:     "/var/log/auth.log" # /var/log/secure on RHEL/Fedora
 #     interval: 60                  # seconds between scans
+#
+# File-change watcher (inotify on Linux, kqueue on FreeBSD). Each path
+# is checked on every tick; events surface as the `files` Lua global
+# with per-path counters and a tick-scoped `tampered` flag:
+#   files["/etc/sudoers"].modifies   (number — cumulative)
+#   files["/etc/sudoers"].deletes    (number — cumulative)
+#   files["/etc/sudoers"].tampered   (bool   — true iff the path
+#                                     fired any event this tick)
+#
+# Rule example:
+#   watch("sudoers_tamper", {
+#     when    = function()
+#                 local f = files["/etc/sudoers"]
+#                 return f and f.tampered
+#               end,
+#     action  = function() alert("sudoers_tamper", "critical",
+#                                "/etc/sudoers modified") end,
+#     cooldown = 60,
+#   })
+#
+# security:
+#   file_watch:
+#     enabled: false
+#     paths:
+#       - /etc/sudoers
+#       - /etc/passwd
+#       - /etc/crontab
 
 # ---- Web server / SPA ----------------------------------------------------
 web:

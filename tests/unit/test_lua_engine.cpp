@@ -454,6 +454,68 @@ int main() {
         e.shutdown();
     }
 
+    // 20. `files` global is bound when set_file_state() has been
+    //     called; rules can read .modifies / .tampered.
+    {
+        budyk::LuaEngine e;
+        assert(e.init(false) == 0);
+
+        budyk::FileWatchState st;
+        st.modifies["/etc/sudoers"]            = 3;
+        st.deletes ["/var/log/audit"]          = 1;
+        st.tampered_this_tick.insert("/etc/sudoers");
+        e.set_file_state(st);
+
+        assert(e.load_string(R"(
+            watch("sudoers_tamper", {
+                when = function()
+                    local f = files["/etc/sudoers"]
+                    return f
+                       and f.modifies == 3
+                       and f.tampered == true
+                end,
+            })
+        )") == 0);
+
+        budyk::Sample s{};
+        assert(e.eval_tick(s) == 1);
+        e.shutdown();
+    }
+
+    // 21. tampered_this_tick is cleared between ticks — a rule that
+    //     fires on .tampered won't keep firing forever once the event
+    //     drains. We seed a tampered path, eval once (fires), then
+    //     hand in an "empty events" apply() and eval again (no fire).
+    {
+        budyk::LuaEngine e;
+        assert(e.init(false) == 0);
+
+        budyk::FileWatchState st;
+        st.modifies["/etc/sudoers"] = 1;
+        st.tampered_this_tick.insert("/etc/sudoers");
+        e.set_file_state(st);
+
+        assert(e.load_string(R"(
+            watch("once", {
+                when = function()
+                    local f = files["/etc/sudoers"]
+                    return f and f.tampered == true
+                end,
+            })
+        )") == 0);
+
+        budyk::Sample s{};
+        assert(e.eval_tick(s) == 1);
+
+        // Simulate a tick with no events — daemon would call
+        // st.apply({}) which clears tampered_this_tick.
+        st.apply({});
+        e.set_file_state(st);
+        assert(e.eval_tick(s) == 0);
+
+        e.shutdown();
+    }
+
     std::printf("test_lua_engine: PASS\n");
     return 0;
 }

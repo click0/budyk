@@ -2,6 +2,7 @@
 #pragma once
 #include "core/sample.h"
 #include "rules/alert.h"
+#include "security/file_watcher.h"
 #include "security/ssh_audit.h"
 
 #include <cstdint>
@@ -75,6 +76,14 @@ public:
     bool                  has_ssh_audit() const;
     const SshAuditStats&  ssh_audit() const;
 
+    // File-watch state, projected to the `files` Lua global. cmd_serve
+    // calls set_file_state() right after FileWatcher::poll on every
+    // tick; eval_tick re-binds before running rules so the per-tick
+    // `tampered` flag is correct.
+    void                  set_file_state(const FileWatchState& s);
+    bool                  has_file_state() const;
+    const FileWatchState& file_state() const;
+
     const std::vector<LuaRule>& rules() const;
 
     // Called by the watch() C binding. Public so the binding can reach
@@ -94,6 +103,8 @@ private:
     AlertDispatcher          alerts_;
     bool                     has_ssh_audit_   = false;
     SshAuditStats            ssh_audit_;
+    bool                     has_file_state_  = false;
+    FileWatchState           file_state_;
 };
 
 } // namespace budyk

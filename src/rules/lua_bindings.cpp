@@ -2,6 +2,7 @@
 #include "rules/lua_bindings.h"
 
 #include "core/sample.h"
+#include "security/file_watcher.h"
 #include "security/ssh_audit.h"
 
 extern "C" {
@@ -133,4 +134,73 @@ void budyk_lua_bind_ssh_audit(lua_State* L, const budyk::SshAuditStats& s) {
         set_integer(L, "top_user_hits", 0);
     }
     lua_setglobal(L, "ssh_audit");
+}
+
+void budyk_lua_bind_files(lua_State* L, const budyk::FileWatchState& s) {
+    // `files` is a path-keyed table; each entry holds:
+    //   modifies  — cumulative count of Modified / Created events
+    //   deletes   — cumulative count of Deleted events
+    //   tampered  — true iff the path fired any event in the most
+    //               recent poll cycle (tick-scoped)
+    //
+    // Path coverage is the union of every path the watcher has ever
+    // seen an event for. A watched-but-never-modified path is absent
+    // until its first event — rules should guard with `if files[p]`.
+    lua_newtable(L);
+    auto bump_modify = [&](const std::string& path) {
+        // Find or create files[path]
+        lua_pushlstring(L, path.data(), path.size());
+        lua_pushvalue(L, -1);
+        lua_gettable(L, -3);
+        if (lua_isnil(L, -1)) {
+            lua_pop(L, 1);
+            lua_newtable(L);
+            set_integer(L, "modifies", 0);
+            set_integer(L, "deletes",  0);
+            lua_pushboolean(L, 0);
+            lua_setfield(L, -2, "tampered");
+        }
+        // Sub-table now on top, path-key just below.
+        return; // caller continues editing the sub-table
+    };
+    (void)bump_modify;   // unused — kept for clarity; we walk inline.
+
+    // Inline path-walk: union over modifies + deletes + tampered.
+    std::unordered_map<std::string, int> seen;   // path → table-index (1-based)
+    int                                  count = 0;
+    auto ensure_entry = [&](const std::string& path) {
+        auto it = seen.find(path);
+        if (it != seen.end()) return it->second;
+        ++count;
+        lua_newtable(L);
+        set_integer(L, "modifies", 0);
+        set_integer(L, "deletes",  0);
+        lua_pushboolean(L, 0);
+        lua_setfield(L, -2, "tampered");
+        lua_setfield(L, -2, path.c_str());
+        seen.emplace(path, count);
+        return count;
+    };
+
+    for (const auto& kv : s.modifies) {
+        ensure_entry(kv.first);
+        lua_getfield(L, -1, kv.first.c_str());
+        set_integer(L, "modifies", static_cast<lua_Integer>(kv.second));
+        lua_pop(L, 1);
+    }
+    for (const auto& kv : s.deletes) {
+        ensure_entry(kv.first);
+        lua_getfield(L, -1, kv.first.c_str());
+        set_integer(L, "deletes", static_cast<lua_Integer>(kv.second));
+        lua_pop(L, 1);
+    }
+    for (const auto& p : s.tampered_this_tick) {
+        ensure_entry(p);
+        lua_getfield(L, -1, p.c_str());
+        lua_pushboolean(L, 1);
+        lua_setfield(L, -2, "tampered");
+        lua_pop(L, 1);
+    }
+
+    lua_setglobal(L, "files");
 }

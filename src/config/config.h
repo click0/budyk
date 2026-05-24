@@ -44,6 +44,12 @@ struct Config {
     char                     ssh_audit_path[256]    = "/var/log/auth.log";
     int                      ssh_audit_interval_sec = 60;
 
+    // File watcher — paths the daemon should keep tabs on. Each path
+    // is fed into a single FileWatcher; events surface as the `files`
+    // Lua global with per-path .modifies / .deletes / .tampered.
+    bool                     file_watch_enabled = false;
+    std::vector<std::string> file_watch_paths;
+
     // Alert channels — POD mirror of rules::AlertChannel. Kept here to
     // avoid pulling budyk_config into budyk_rules' dep graph. main.cpp
     // copies the fields into a rules::AlertChannel for each entry.

@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **File watcher daemon integration** — `cmd_serve` now wires the
+  `FileWatcher` (inotify/kqueue) into the tick loop when
+  `security.file_watch.{enabled,paths}` is set, and exposes events
+  to rules as the `files` Lua global with per-path `.modifies`,
+  `.deletes`, and a tick-scoped `.tampered` flag. `FileWatchState::apply`
+  clears the tampered set before each batch, so one-shot rules like
+  `when = files[p].tampered` fire exactly once per detected event.
+  This closes out the PanicMode-inspired surface — alert dispatch,
+  freeze(), ssh_audit, file_watch all reachable from a five-line rule.
 - **File change watcher** (`src/security/file_watcher`) — cross-platform
   surface over `inotify` (Linux) and `kqueue + EVFILT_VNODE` (FreeBSD)
   for tamper-detection rules ("alert when /etc/sudoers changes"). API
