@@ -13,6 +13,12 @@ struct Config {
     char data_dir[256]   = "/var/db/budyk";
     char rules_path[256] = "/usr/local/etc/budyk/rules.lua";
 
+    // Persist per-rule cooldown / fire counters across restarts so a
+    // bounce doesn't re-fire rules that were mid-cooldown. Empty
+    // state_path ⇒ derive `<data_dir>/rule_state.tsv`.
+    bool rules_persist_state    = true;
+    char rules_state_path[256]  = "";
+
     SchedulerConfig scheduler;
 
     bool  auth_enabled        = false;

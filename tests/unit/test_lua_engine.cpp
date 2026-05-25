@@ -516,6 +516,59 @@ int main() {
         e.shutdown();
     }
 
+    // 22. save_state / load_state — a rule mid-cooldown survives a
+    //     simulated restart, so it does NOT re-fire immediately.
+    {
+        char tmpl[] = "/tmp/budyk_state_XXXXXX";
+        int  fd     = ::mkstemp(tmpl);
+        assert(fd >= 0);
+        ::close(fd);
+
+        const char* rule =
+            "watch('hot', {\n"
+            "  when = function() return cpu.total_percent > 90 end,\n"
+            "  for_ticks = 1,\n"
+            "  cooldown  = 5,\n"
+            "})\n";
+
+        // First engine: fire the rule once → cooldown_remaining = 5.
+        {
+            LuaEngine e;
+            assert(e.init(false) == 0);
+            assert(e.load_string(rule) == 0);
+            assert(e.eval_tick(mk(95, 0, 0, 0)) == 1);   // fires
+            assert(e.eval_tick(mk(95, 0, 0, 0)) == 0);   // in cooldown
+            assert(e.rules()[0].cooldown_remaining > 0);
+            assert(e.rules()[0].fire_count == 1);
+            assert(e.save_state(tmpl) == 0);
+            e.shutdown();
+        }
+
+        // Second engine ("after restart"): same rule, restore state.
+        // The very next tick must NOT fire because cooldown persisted.
+        {
+            LuaEngine e;
+            assert(e.init(false) == 0);
+            assert(e.load_string(rule) == 0);
+            assert(e.load_state(tmpl) == 0);
+            assert(e.rules()[0].cooldown_remaining > 0);
+            assert(e.rules()[0].fire_count == 1);        // counter restored
+            // Condition is still hot, but cooldown blocks the fire.
+            assert(e.eval_tick(mk(95, 0, 0, 0)) == 0);
+            e.shutdown();
+        }
+
+        ::unlink(tmpl);
+    }
+
+    // 23. load_state on a missing file is a no-op success (fresh box).
+    {
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        assert(e.load_state("/tmp/budyk_state_does_not_exist_zz") == 0);
+        e.shutdown();
+    }
+
     std::printf("test_lua_engine: PASS\n");
     return 0;
 }

@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Persistent rule cooldown state** — `LuaEngine::save_state` /
+  `load_state` serialize per-rule `cooldown_remaining`,
+  `consecutive_hits` and `fire_count` to `<data_dir>/rule_state.tsv`
+  (overridable via `rules.state_path`). `cmd_serve` restores on
+  startup after the rules load, flushes every 60s + on graceful
+  shutdown. A restart mid-cooldown therefore no longer re-fires the
+  rule — prevents an alert-storm on daemon bounce. Cooldown persists
+  as a tick count, so a long downtime doesn't decrement it (errs
+  toward staying quiet). Toggle with `rules.persist_state` (default
+  on). Writes are atomic (temp + rename).
+
 - **File watcher daemon integration** — `cmd_serve` now wires the
   `FileWatcher` (inotify/kqueue) into the tick loop when
   `security.file_watch.{enabled,paths}` is set, and exposes events

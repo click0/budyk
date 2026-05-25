@@ -124,6 +124,21 @@ int main() {
         assert(c.rules_exec_allow[1] == "/usr/bin/systemctl");
     }
 
+    // 7a-bis. rules.persist_state + state_path parse; defaults are
+    //         persist=true, empty path (derived from data_dir later).
+    {
+        Config c;
+        assert(c.rules_persist_state == true);   // default
+        assert(c.rules_state_path[0] == '\0');
+        const char* y =
+            "rules:\n"
+            "  persist_state: false\n"
+            "  state_path: /var/db/budyk/rules.tsv\n";
+        assert(config_load_string(y, &c) == 0);
+        assert(c.rules_persist_state == false);
+        assert(std::strcmp(c.rules_state_path, "/var/db/budyk/rules.tsv") == 0);
+    }
+
     // 7b. Missing allow key leaves the vector at default (empty).
     {
         Config c;

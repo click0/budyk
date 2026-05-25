@@ -37,6 +37,20 @@ public:
     int  load_string(const char* code);
     int  load_file  (const char* path);
 
+    // Persist / restore per-rule runtime state (cooldown_remaining,
+    // consecutive_hits, fire_count) keyed by rule name. Purpose: a
+    // daemon restart shouldn't re-fire a rule that was mid-cooldown,
+    // which would otherwise produce an alert-storm. load_state must be
+    // called *after* the rules are loaded (it matches saved entries to
+    // rules by name; unknown entries are dropped, unmatched rules keep
+    // their defaults). Cooldown is stored as a tick count — a long
+    // downtime therefore does NOT decrement it, which errs on the safe
+    // side (stay quiet a little longer rather than storm).
+    //   save_state: 0 on success, -errno on write failure.
+    //   load_state: 0 on success or missing file (fresh install).
+    int  save_state(const char* path) const;
+    int  load_state(const char* path);
+
     // Binds `s` as read-only Lua globals and calls every rule's `when()`.
     // Returns the number of rules that fired, or -1 if not initialised.
     int  eval_tick(const Sample& s);
