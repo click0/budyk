@@ -40,6 +40,14 @@ storage:
 # ---- Rules engine --------------------------------------------------------
 rules:
   path: "/usr/local/etc/budyk/rules.lua"
+  # Persist per-rule cooldown / fire counters across restarts so a
+  # daemon bounce doesn't re-fire a rule that was mid-cooldown (which
+  # would otherwise produce an alert-storm). State is flushed every 60s
+  # and on graceful shutdown. Cooldown is stored as a tick count, so a
+  # long downtime does not decrement it — erring toward "stay quiet".
+  persist_state: true
+  # Where to write the state. Empty ⇒ <data_dir>/rule_state.tsv.
+  # state_path: "/var/db/budyk/rule_state.tsv"
   exec:
     enabled: false         # `true` lets watch() actions invoke external
                            # programs; otherwise exec() is rejected

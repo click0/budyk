@@ -160,8 +160,11 @@ int parse_document(yaml_parser_t* parser, Config* out) {
     }
 
     if (auto* rules = find_key(&doc, root, "rules")) {
-        apply_str (&doc, rules, "path",        out->rules_path, sizeof(out->rules_path));
-        apply_bool(&doc, rules, "enable_exec", &out->rules_enable_exec);   // legacy flat key
+        apply_str (&doc, rules, "path",          out->rules_path, sizeof(out->rules_path));
+        apply_bool(&doc, rules, "enable_exec",   &out->rules_enable_exec);  // legacy flat key
+        apply_bool(&doc, rules, "persist_state", &out->rules_persist_state);
+        apply_str (&doc, rules, "state_path",    out->rules_state_path,
+                   sizeof(out->rules_state_path));
 
         // Nested `rules.exec` block — preferred spelling. Its `enabled`
         // also maps to rules_enable_exec, so either syntax works:

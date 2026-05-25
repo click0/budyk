@@ -10,6 +10,12 @@ extern "C" {
 #include <lualib.h>
 }
 
+#include <cerrno>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <string>
+
 namespace budyk {
 
 namespace {
@@ -80,6 +86,82 @@ int LuaEngine::load_file(const char* path) {
         lua_pop(L_, 1);
         return -2;
     }
+    return 0;
+}
+
+int LuaEngine::save_state(const char* path) const {
+    if (path == nullptr) return -EINVAL;
+
+    // Write to a sibling temp file then rename(2) over the target so a
+    // crash mid-write can never leave a half-written state file.
+    std::string tmp = path;
+    tmp += ".tmp";
+    std::FILE* f = std::fopen(tmp.c_str(), "w");
+    if (f == nullptr) return -errno;
+
+    std::fputs("# budyk rule state v1\n", f);
+    std::fputs("# cooldown_remaining\tconsecutive_hits\tfire_count\tname\n", f);
+    for (const auto& r : rules_) {
+        // A newline in a rule name would corrupt the line-based format.
+        // Such names are pathological (the name comes from watch()'s
+        // first arg); skip persisting them rather than risk a mangled
+        // file that breaks every subsequent rule's restore.
+        if (r.name.find('\n') != std::string::npos) continue;
+        std::fprintf(f, "%d\t%d\t%llu\t%s\n",
+                     r.cooldown_remaining, r.consecutive_hits,
+                     static_cast<unsigned long long>(r.fire_count),
+                     r.name.c_str());
+    }
+    std::fflush(f);
+    std::fclose(f);
+
+    if (std::rename(tmp.c_str(), path) != 0) {
+        const int e = -errno;
+        std::remove(tmp.c_str());
+        return e;
+    }
+    return 0;
+}
+
+int LuaEngine::load_state(const char* path) {
+    if (path == nullptr) return -EINVAL;
+    std::FILE* f = std::fopen(path, "r");
+    if (f == nullptr) return 0;   // no state yet — fresh install, fine
+
+    char line[1024];
+    while (std::fgets(line, sizeof(line), f) != nullptr) {
+        if (line[0] == '#' || line[0] == '\n') continue;
+
+        char* p   = line;
+        char* end = nullptr;
+
+        const long cd = std::strtol(p, &end, 10);
+        if (end == p || *end != '\t') continue;
+        p = end + 1;
+        const long ch = std::strtol(p, &end, 10);
+        if (end == p || *end != '\t') continue;
+        p = end + 1;
+        const unsigned long long fc = std::strtoull(p, &end, 10);
+        if (end == p || *end != '\t') continue;
+        p = end + 1;
+
+        std::string name(p);
+        while (!name.empty() &&
+               (name.back() == '\n' || name.back() == '\r')) {
+            name.pop_back();
+        }
+        if (name.empty()) continue;
+
+        for (auto& r : rules_) {
+            if (r.name == name) {
+                r.cooldown_remaining = static_cast<int>(cd);
+                r.consecutive_hits   = static_cast<int>(ch);
+                r.fire_count         = fc;
+                break;
+            }
+        }
+    }
+    std::fclose(f);
     return 0;
 }
 

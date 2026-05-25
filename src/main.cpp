@@ -649,6 +649,17 @@ int cmd_serve(int argc, char* argv[]) {
         }
     }
 
+    // Restore per-rule cooldown / fire counters from the last run so a
+    // restart doesn't re-fire a rule that was mid-cooldown. Must come
+    // after load_file (matches saved entries to rules by name).
+    std::string state_path;
+    if (cfg.rules_persist_state) {
+        state_path = cfg.rules_state_path[0] != '\0'
+                   ? std::string(cfg.rules_state_path)
+                   : std::string(cfg.data_dir) + "/rule_state.tsv";
+        engine.load_state(state_path.c_str());
+    }
+
     // Register configured alert channels with the Lua engine's dispatcher
     // so rules can call alert(name, severity, message) and reach them.
     for (const auto& src : cfg.alert_channels) {
@@ -851,6 +862,11 @@ int cmd_serve(int argc, char* argv[]) {
         }
     }
 
+    // Flush rule state to disk every 60s as crash insurance (graceful
+    // shutdown also saves below). A crash loses at most 60s of cooldown
+    // decrement — acceptable, and erring toward "still in cooldown".
+    time_t next_state_save = ::time(nullptr) + 60;
+
     while (!g_stop) {
         budyk::Sample s{};
         s.timestamp_nanos = now_realtime_ns();
@@ -896,6 +912,14 @@ int cmd_serve(int argc, char* argv[]) {
 
         engine.eval_tick(s);
 
+        if (cfg.rules_persist_state) {
+            const time_t now = ::time(nullptr);
+            if (now >= next_state_save) {
+                engine.save_state(state_path.c_str());
+                next_state_save = now + 60;
+            }
+        }
+
         // Push the freshly-collected sample to every connected WS client.
         // Failed sends are evicted by the hub itself.
         ws.broadcast(budyk::samples_to_json(&s, 1));
@@ -904,6 +928,10 @@ int cmd_serve(int argc, char* argv[]) {
     }
 
     std::fprintf(stderr, "budyk serve: shutting down\n");
+    // Final flush so a graceful stop captures the exact cooldown state.
+    if (cfg.rules_persist_state) {
+        engine.save_state(state_path.c_str());
+    }
     http.stop();
     ws.close_all();
     engine.shutdown();
