@@ -20,15 +20,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   toward staying quiet). Toggle with `rules.persist_state` (default
   on). Writes are atomic (temp + rename).
 
-- **File watcher daemon integration** — `cmd_serve` now wires the
-  `FileWatcher` (inotify/kqueue) into the tick loop when
-  `security.file_watch.{enabled,paths}` is set, and exposes events
-  to rules as the `files` Lua global with per-path `.modifies`,
-  `.deletes`, and a tick-scoped `.tampered` flag. `FileWatchState::apply`
-  clears the tampered set before each batch, so one-shot rules like
-  `when = files[p].tampered` fire exactly once per detected event.
-  This closes out the PanicMode-inspired surface — alert dispatch,
-  freeze(), ssh_audit, file_watch all reachable from a five-line rule.
 - **File change watcher** (`src/security/file_watcher`) — cross-platform
   surface over `inotify` (Linux) and `kqueue + EVFILT_VNODE` (FreeBSD)
   for tamper-detection rules ("alert when /etc/sudoers changes"). API
@@ -36,25 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   events carry `path` + `kind` (Modified / Deleted / Created). Per-poll
   coalescing collapses a flurry of editor `write(2)`s into one
   Modified event per path. CLI: `budyk watch-files [--timeout MS]
-  <path>...` for ad-hoc diagnostic. Daemon integration + Lua binding
-  follow-up.
-- **SSH brute-force daemon integration** — `cmd_serve` now runs the
-  `SshAuditScanner` on a configurable cadence
-  (`security.ssh_audit.{enabled, path, interval}`) and exposes the
-  fresh counters to the rule engine as a `ssh_audit` Lua global:
-  `failed_password`, `invalid_user`, `accepted`, `top_ip`,
-  `top_ip_hits`, `top_user`, `top_user_hits`. Rules can now write
-  `when = function() return ssh_audit.top_ip_hits > 20 end` and fire
-  alerts / freeze offending source IPs (alert dispatcher already
-  shipped in v0.4.x-Unreleased; freeze() landed in PR #54).
-- **SSH brute-force scanner** (`src/security/ssh_audit`) — parses
-  `/var/log/auth.log`-style sshd output and counts `Failed password`,
-  `Invalid user` and `Accepted password|publickey` events. Keeps a
-  byte offset between calls so successive scans only see new lines;
-  detects log rotation (file shrunk below cached offset) and rewinds
-  to 0. Top-16 offending IPs and target usernames sorted by hit count.
-  CLI exposes a one-shot mode: `budyk ssh-audit [/path/to/auth.log]`.
-  Daemon integration + Lua binding land in a follow-up.
+  <path>...` for ad-hoc diagnostic. `cmd_serve` wires it into the tick
+  loop when `security.file_watch.{enabled,paths}` is set, exposing
+  events as the `files` Lua global with per-path `.modifies`,
+  `.deletes`, and a tick-scoped `.tampered` flag (`FileWatchState::apply`
+  clears the tampered set before each batch, so `when = files[p].tampered`
+  fires exactly once per detected event).
 - **`freeze()` / `unfreeze()` Lua actions** — incident-response surface
   for the rule engine: `freeze(pid)` sends SIGSTOP, `unfreeze(pid)`
   sends SIGCONT. Both raise an error unless the engine was started

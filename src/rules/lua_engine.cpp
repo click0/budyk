@@ -169,9 +169,6 @@ int LuaEngine::eval_tick(const Sample& s) {
     if (L_ == nullptr) return -1;
 
     budyk_lua_bind_sample(L_, s);
-    if (has_ssh_audit_) {
-        budyk_lua_bind_ssh_audit(L_, ssh_audit_);
-    }
     if (has_file_state_) {
         budyk_lua_bind_files(L_, file_state_);
     }
@@ -244,14 +241,6 @@ const std::vector<std::string>& LuaEngine::freeze_allowlist() const {
 
 AlertDispatcher&       LuaEngine::alerts()       { return alerts_; }
 const AlertDispatcher& LuaEngine::alerts() const { return alerts_; }
-
-void LuaEngine::set_ssh_audit(const SshAuditStats& s) {
-    ssh_audit_     = s;
-    has_ssh_audit_ = true;
-}
-
-bool                 LuaEngine::has_ssh_audit() const { return has_ssh_audit_; }
-const SshAuditStats& LuaEngine::ssh_audit()      const { return ssh_audit_; }
 
 void LuaEngine::set_file_state(const FileWatchState& s) {
     file_state_     = s;

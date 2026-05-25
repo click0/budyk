@@ -116,30 +116,6 @@ rules:
 #       topic: "+15559876543"
 
 # ---- Security ------------------------------------------------------------
-# SSH brute-force scanner — periodically reads sshd auth log and exposes
-# cumulative counters to rules as the `ssh_audit` Lua global:
-#   ssh_audit.failed_password   (number)
-#   ssh_audit.invalid_user      (number)
-#   ssh_audit.accepted          (number)
-#   ssh_audit.top_ip            (string — single highest-hit source IP)
-#   ssh_audit.top_ip_hits       (number)
-#   ssh_audit.top_user          (string)
-#   ssh_audit.top_user_hits     (number)
-#
-# Rule example (drop in rules.lua):
-#   watch("ssh_brute", {
-#     when    = function() return ssh_audit.top_ip_hits > 20 end,
-#     action  = function() alert("ssh_brute", "critical",
-#                                "20+ SSH hits from " .. ssh_audit.top_ip) end,
-#     cooldown = 5,
-#   })
-#
-# security:
-#   ssh_audit:
-#     enabled:  false               # off by default
-#     path:     "/var/log/auth.log" # /var/log/secure on RHEL/Fedora
-#     interval: 60                  # seconds between scans
-#
 # File-change watcher (inotify on Linux, kqueue on FreeBSD). Each path
 # is checked on every tick; events surface as the `files` Lua global
 # with per-path counters and a tick-scoped `tampered` flag:

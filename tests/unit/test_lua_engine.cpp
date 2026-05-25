@@ -403,58 +403,7 @@ int main() {
         e.shutdown();
     }
 
-    // 18. ssh_audit global is bound when set_ssh_audit() has been
-    //     called, and rules can read its scalar fields.
-    {
-        budyk::LuaEngine e;
-        assert(e.init(false) == 0);
-
-        budyk::SshAuditStats st;
-        st.failed_password = 42;
-        st.invalid_user    = 7;
-        st.accepted        = 1;
-        st.top_ips.emplace_back("198.51.100.7", 10);
-        st.top_users.emplace_back("root", 9);
-        e.set_ssh_audit(st);
-
-        // Register a rule whose `when` returns true iff the counters
-        // round-trip through Lua intact. Trip threshold is intentionally
-        // low so a single tick fires it once for_ticks is met.
-        assert(e.load_string(R"(
-            watch("ssh_brute", {
-                when = function()
-                    return ssh_audit.failed_password == 42
-                       and ssh_audit.top_ip         == "198.51.100.7"
-                       and ssh_audit.top_ip_hits    == 10
-                end,
-            })
-        )") == 0);
-
-        budyk::Sample s{};
-        const int fired = e.eval_tick(s);
-        assert(fired == 1);
-        e.shutdown();
-    }
-
-    // 19. Without set_ssh_audit(), the `ssh_audit` global is absent —
-    //     a rule that references it raises an error and is skipped.
-    {
-        budyk::LuaEngine e;
-        assert(e.init(false) == 0);
-        assert(e.load_string(R"(
-            watch("ssh_brute", {
-                when = function() return ssh_audit.failed_password > 0 end,
-            })
-        )") == 0);
-        budyk::Sample s{};
-        // eval_tick swallows the per-rule error (pcall) and the rule
-        // simply doesn't fire — 0 fires this tick.
-        const int fired = e.eval_tick(s);
-        assert(fired == 0);
-        e.shutdown();
-    }
-
-    // 20. `files` global is bound when set_file_state() has been
+    // 18. `files` global is bound when set_file_state() has been
     //     called; rules can read .modifies / .tampered.
     {
         budyk::LuaEngine e;
