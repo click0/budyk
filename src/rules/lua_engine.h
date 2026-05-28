@@ -3,7 +3,6 @@
 #include "core/sample.h"
 #include "rules/alert.h"
 #include "security/file_watcher.h"
-#include "security/ssh_audit.h"
 
 #include <cstdint>
 #include <string>
@@ -81,15 +80,6 @@ public:
     AlertDispatcher&       alerts();
     const AlertDispatcher& alerts() const;
 
-    // Latest SSH audit-log snapshot. cmd_serve calls set_ssh_audit()
-    // after each periodic scan; eval_tick re-binds the `ssh_audit`
-    // Lua global so rules see fresh counters every tick. Unset until
-    // the first call — in which case the binding stays absent and
-    // rules referencing it get a `nil` (cheaply caught by Lua).
-    void                  set_ssh_audit(const SshAuditStats& s);
-    bool                  has_ssh_audit() const;
-    const SshAuditStats&  ssh_audit() const;
-
     // File-watch state, projected to the `files` Lua global. cmd_serve
     // calls set_file_state() right after FileWatcher::poll on every
     // tick; eval_tick re-binds before running rules so the per-tick
@@ -115,8 +105,6 @@ private:
     bool                     freeze_enabled_  = false;
     std::vector<std::string> freeze_allowlist_;
     AlertDispatcher          alerts_;
-    bool                     has_ssh_audit_   = false;
-    SshAuditStats            ssh_audit_;
     bool                     has_file_state_  = false;
     FileWatchState           file_state_;
 };
