@@ -62,6 +62,17 @@ struct ThermalStats {
     bool     present;
 };
 
+// File-watch summary — populated only when security.file_watch is
+// enabled (otherwise present=false and the SPA hides the row). Reports
+// per-tick activity so the dashboard shows a spiky timeline of *when*
+// watched files changed, rather than a continuous gauge.
+struct FileWatchSample {
+    uint32_t events_this_tick;   // distinct watched paths that fired an
+                                 // event since the previous tick
+    uint32_t watched_count;      // configured paths under watch
+    bool     present;            // file_watch enabled this run
+};
+
 struct Sample {
     uint64_t timestamp_nanos;
     Level    level;
@@ -75,6 +86,7 @@ struct Sample {
     EntropyStats entropy;
     SelfStats    self_;
     ThermalStats thermal;
+    FileWatchSample file_watch;
     double    uptime_seconds;
 };
 

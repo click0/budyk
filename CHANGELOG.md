@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **File-watch history on the dashboard** — codec **v7** appends a
+  `file_watch` block (`events_this_tick`, `watched_count`, `present`)
+  to the `Sample`, so file-change activity is persisted to the storage
+  rings, served via `/api/samples`, and rendered as a new SPA row
+  (hidden unless `security.file_watch` is enabled). `events_this_tick`
+  is the count of distinct watched paths that fired an event since the
+  previous tick — a spike on the timeline marks exactly when tampering
+  happened. Decoder still reads v1–v6 records (file_watch zero-filled);
+  record size grows 240 → 256 B (storage record 270 B).
+
 - **Persistent rule cooldown state** — `LuaEngine::save_state` /
   `load_state` serialize per-rule `cooldown_remaining`,
   `consecutive_hits` and `fire_count` to `<data_dir>/rule_state.tsv`

@@ -42,6 +42,9 @@ static Sample make_sample() {
     s.thermal.max_celsius      = 67.5;
     s.thermal.sensor_count     = 4;
     s.thermal.present          = true;
+    s.file_watch.events_this_tick = 2;
+    s.file_watch.watched_count    = 5;
+    s.file_watch.present          = true;
     s.uptime_seconds         = 123456.789;
     return s;
 }
@@ -81,6 +84,9 @@ static void assert_samples_equal(const Sample& a, const Sample& b) {
     assert(bitwise_eq(a.thermal.max_celsius, b.thermal.max_celsius));
     assert(a.thermal.sensor_count == b.thermal.sensor_count);
     assert(a.thermal.present == b.thermal.present);
+    assert(a.file_watch.events_this_tick == b.file_watch.events_this_tick);
+    assert(a.file_watch.watched_count    == b.file_watch.watched_count);
+    assert(a.file_watch.present          == b.file_watch.present);
     assert(bitwise_eq(a.uptime_seconds, b.uptime_seconds));
 }
 
@@ -317,7 +323,7 @@ int main() {
         uint8_t buf[512] = {0};
         size_t  full = 0;
         assert(sample_encode(&in, buf, sizeof(buf), &full) == 0);
-        buf[8] = 5;                            // version 6 → 5
+        buf[8] = 5;                            // version 7 → 5
         constexpr size_t kV5Size = 224;
         Sample out{};
         assert(sample_decode(buf, kV5Size, &out) == 0);
@@ -325,6 +331,24 @@ int main() {
         assert(out.self_.peak_rss_bytes   == in.self_.peak_rss_bytes);
         assert(out.thermal.sensor_count   == 0);
         assert(out.thermal.present        == false);
+    }
+
+    // 11f. v6 backward compat — version=6, length 240. Thermal parsed,
+    //      file_watch zeroed.
+    {
+        Sample in = make_sample();
+        uint8_t buf[512] = {0};
+        size_t  full = 0;
+        assert(sample_encode(&in, buf, sizeof(buf), &full) == 0);
+        buf[8] = 6;                            // version 7 → 6
+        constexpr size_t kV6Size = 240;
+        Sample out{};
+        assert(sample_decode(buf, kV6Size, &out) == 0);
+        assert(out.thermal.sensor_count        == in.thermal.sensor_count);
+        assert(out.thermal.present             == in.thermal.present);
+        assert(out.file_watch.events_this_tick == 0);
+        assert(out.file_watch.watched_count    == 0);
+        assert(out.file_watch.present          == false);
     }
 
     // 12. v3 with length that truncates the proc tail — rejected.

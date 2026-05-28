@@ -81,7 +81,9 @@ int TierManager::store(const Sample& s) {
     }
     if (target == nullptr) return -2;
 
-    uint8_t buf[256];
+    // Headroom over the current record size (14 + 256 = 270 for codec
+    // v7) so a future codec bump doesn't silently overflow here.
+    uint8_t buf[512];
     size_t  len = 0;
     const int rc = record_encode(s, buf, sizeof(buf), &len);
     if (rc != 0) return -3;
