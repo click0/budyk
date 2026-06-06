@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **File-watch sparkline** in the SPA — the new "Files" row now also
+  carries a unicode sparkline (`▁▂▃▅▇█`) over the last 30 ticks
+  (~2.5 h at default L1 cadence), so an operator can see *when*
+  changes happened, not just the current tick. Backfilled from the
+  `/api/samples` catch-up on page load so a refresh doesn't lose
+  the visible timeline.
+
 - **File-watch history on the dashboard** — codec **v7** appends a
   `file_watch` block (`events_this_tick`, `watched_count`, `present`)
   to the `Sample`, so file-change activity is persisted to the storage
