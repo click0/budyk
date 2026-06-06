@@ -824,17 +824,11 @@ int cmd_serve(int argc, char* argv[]) {
 
         collect_one(&s, &cpu_ctx, &disk_ctx, &net_ctx);
 
-        s.level = sched.tick(s);
-        tm.store(s);
-        {
-            std::lock_guard<std::mutex> g(hot_mtx);
-            hot.push(s);
-        }
-
         // File-watch drain — non-blocking poll so the tick cadence is
         // unchanged. apply() always clears the tampered set first, so
         // a tick with zero events drops `files[p].tampered` back to
-        // false (one-shot semantics).
+        // false (one-shot semantics). Done before tm.store/hot.push so
+        // the persisted + broadcast sample carries this tick's counts.
         if (fw_active) {
             std::vector<budyk::FileChangeEvent> events;
             const int n = file_watcher.poll(/*timeout_ms=*/0, &events);
@@ -844,6 +838,18 @@ int cmd_serve(int argc, char* argv[]) {
             }
             file_state.apply(events);
             engine.set_file_state(file_state);
+            s.file_watch.events_this_tick =
+                static_cast<uint32_t>(file_state.tampered_this_tick.size());
+            s.file_watch.watched_count =
+                static_cast<uint32_t>(file_watcher.count());
+            s.file_watch.present = true;
+        }
+
+        s.level = sched.tick(s);
+        tm.store(s);
+        {
+            std::lock_guard<std::mutex> g(hot_mtx);
+            hot.push(s);
         }
 
         engine.eval_tick(s);

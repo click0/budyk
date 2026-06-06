@@ -117,6 +117,15 @@ std::string sample_to_json(const Sample& s) {
     out.append(s.thermal.present ? "true" : "false");
     out.append("},");
 
+    out.append("\"file_watch\":{");
+    append_kv_uint(&out, "events_this_tick", s.file_watch.events_this_tick);
+    out.push_back(',');
+    append_kv_uint(&out, "watched_count",    s.file_watch.watched_count);
+    out.push_back(',');
+    out.append("\"present\":");
+    out.append(s.file_watch.present ? "true" : "false");
+    out.append("},");
+
     append_kv_double(&out, "uptime_seconds", s.uptime_seconds);
     out.push_back('}');
     return out;

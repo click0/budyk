@@ -62,6 +62,7 @@ h1 .host { color: var(--muted); margin-left: .6rem; font-weight: 400; }
     <div class="row"><span class="label">Processes</span><span class="muted" id="proc">--</span>        <span class="value">&nbsp;</span></div>
     <div class="row" id="entropyRow"><span class="label">Entropy</span><span class="muted" id="entropy">--</span> <span class="value">&nbsp;</span></div>
     <div class="row" id="thermalRow"><span class="label">Thermal</span><span class="muted" id="thermal">--</span> <span class="value">&nbsp;</span></div>
+    <div class="row" id="fileWatchRow"><span class="label">Files</span><span class="muted" id="fileWatch">--</span> <span class="value">&nbsp;</span></div>
     <div class="row"><span class="label">budyk RSS</span><span class="muted" id="self">--</span>        <span class="value">&nbsp;</span></div>
     <div class="row"><span class="label">Uptime</span>   <span class="muted" id="uptime">--</span>      <span class="value">&nbsp;</span></div>
   </div>
@@ -140,6 +141,20 @@ function render(s) {
       `${s.thermal.max_celsius.toFixed(1)} °C across ${s.thermal.sensor_count} sensor(s)`;
   } else {
     $("thermalRow").classList.add("hidden");
+  }
+
+  // File watcher — hide the row unless security.file_watch is enabled.
+  // Shows how many watched paths changed this tick (a spike means
+  // tampering just happened) out of the configured total.
+  if (s.file_watch?.present) {
+    $("fileWatchRow").classList.remove("hidden");
+    const ev = s.file_watch.events_this_tick ?? 0;
+    const wc = s.file_watch.watched_count ?? 0;
+    $("fileWatch").textContent = ev > 0
+      ? `${ev} change(s) this tick across ${wc} watched`
+      : `quiet — ${wc} watched`;
+  } else {
+    $("fileWatchRow").classList.add("hidden");
   }
 
   // Self-metrics — daemon's own footprint.
