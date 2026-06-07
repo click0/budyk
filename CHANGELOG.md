@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Persistent web sessions** — `SessionStore` now optionally flushes
+  its token table to `<data_dir>/sessions.tsv` (atomic temp+rename,
+  mode 0600) after every mutation, and reloads it on startup. A daemon
+  restart therefore keeps logged-in admins logged in instead of
+  bouncing every browser to the login screen — symmetric with the
+  rule-cooldown persistence. Expired tokens are dropped on load. The
+  file holds live bearer tokens, hence 0600 + a note to lock down
+  `data_dir`. Toggle with `web.auth.persist_sessions` (default on).
 - **`GET /api/range` — historical query over the on-disk tier rings.**
   The SPA / any client can now read hours-to-months of history, not
   just the 300-record RAM hot buffer. Params:
@@ -21,7 +29,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the HTTP thread while the collector writes; a torn read racing the
   writer fails CRC and is silently skipped. `RingFile` gains a
   `capacity()` accessor.
-
 - **FreeBSD: disk + proc.running + self.rss via kvm/devstat/kinfo_proc**
   — closes three long-standing FreeBSD platform gaps in one PR:
   * `collector/freebsd/disk.c` — previously a `-ENOSYS` stub. Now

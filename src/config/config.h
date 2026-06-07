@@ -23,6 +23,9 @@ struct Config {
 
     bool  auth_enabled        = false;
     char  password_hash[256]  = "";
+    // Persist web sessions to `<data_dir>/sessions.tsv` (mode 0600) so a
+    // daemon restart doesn't log everyone out. Set false for RAM-only.
+    bool  auth_persist_sessions = true;
 
     int   tier1_max_mb           = 250;
     int   tier2_max_mb           = 150;

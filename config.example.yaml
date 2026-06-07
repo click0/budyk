@@ -153,3 +153,9 @@ web:
     # quotes too, but quoting is the safe form.
     # Generate via:  budyk hash-password
     # password_hash: "$argon2id$v=19$m=65536,t=3,p=4$<salt>$<hash>"
+    #
+    # Persist logged-in sessions to <data_dir>/sessions.tsv (mode 0600)
+    # so a daemon restart doesn't bounce every browser to the login
+    # screen. The file holds live bearer tokens — keep data_dir locked
+    # down. Set false to keep sessions RAM-only (logout-on-restart).
+    persist_sessions: true
