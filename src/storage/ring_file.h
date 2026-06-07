@@ -16,6 +16,7 @@ public:
     int  read_at(uint64_t index, void* out, size_t len) const;
     uint64_t write_index() const;
     uint64_t count() const;
+    uint64_t capacity() const;
 
 private:
     int       fd_ = -1;

@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`GET /api/range` — historical query over the on-disk tier rings.**
+  The SPA / any client can now read hours-to-months of history, not
+  just the 300-record RAM hot buffer. Params:
+  `since`/`until` (timestamp_nanos bounds, `until=0` = now),
+  `tier` (1 raw L3 / 2 1-min L2 / 3 5-min L1, default 1),
+  `limit` (newest-kept, default + hard cap 5000). Backed by a new
+  `TierManager::query()` that walks the chosen ring newest→oldest,
+  stops at the `since` floor, and returns oldest-first. Reads go
+  through `pread` + the atomic `write_idx`, so it's safe to call from
+  the HTTP thread while the collector writes; a torn read racing the
+  writer fails CRC and is silently skipped. `RingFile` gains a
+  `capacity()` accessor.
+
 - **FreeBSD: disk + proc.running + self.rss via kvm/devstat/kinfo_proc**
   — closes three long-standing FreeBSD platform gaps in one PR:
   * `collector/freebsd/disk.c` — previously a `-ENOSYS` stub. Now

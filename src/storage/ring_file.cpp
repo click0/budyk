@@ -151,4 +151,6 @@ uint64_t RingFile::count() const {
     return idx < capacity_ ? idx : capacity_;
 }
 
+uint64_t RingFile::capacity() const { return capacity_; }
+
 } // namespace budyk
