@@ -52,15 +52,16 @@ int budyk_collect_load_freebsd(budyk_sample_c* s) {
     return 0;
 }
 
-/* Process count via the kern.proc.all sysctl size-only query.
- * Passing oldp == NULL returns the size required for the full
- * struct kinfo_proc array — divide by sizeof(kinfo_proc) for the
- * total process count. No process walk, no copying.
+/* Process counts via a single walk of kern.proc.all.
+ *   total   — total length / sizeof(kinfo_proc)
+ *   running — entries with ki_stat == SRUN
  *
- * `running` is left at 0 — getting it requires walking the array
- * and inspecting ki_stat per entry, which is heavier and not worth
- * it for the headline tile. Future work.
+ * We size the buffer with NULL+&bytes first (the FreeBSD idiom) then
+ * malloc and read in one go. A race where new procs spawn between the
+ * two calls means we might be off by ±1 — fine for monitoring; the
+ * tick repeats in seconds.
  */
+#include <sys/proc.h>     /* SRUN */
 #include <sys/user.h>     /* struct kinfo_proc */
 
 int budyk_collect_proc_freebsd(budyk_sample_c* s) {
@@ -68,9 +69,29 @@ int budyk_collect_proc_freebsd(budyk_sample_c* s) {
 
     size_t bytes = 0;
     if (sysctlbyname("kern.proc.all", NULL, &bytes, NULL, 0) != 0) return -errno;
+    if (bytes == 0) {
+        s->proc.total   = 0;
+        s->proc.running = 0;
+        return 0;
+    }
 
-    s->proc.total   = (uint32_t)(bytes / sizeof(struct kinfo_proc));
-    s->proc.running = 0;
+    struct kinfo_proc* procs = (struct kinfo_proc*)malloc(bytes);
+    if (procs == NULL) return -ENOMEM;
+    if (sysctlbyname("kern.proc.all", procs, &bytes, NULL, 0) != 0) {
+        const int e = -errno;
+        free(procs);
+        return e;
+    }
+
+    const uint32_t n = (uint32_t)(bytes / sizeof(struct kinfo_proc));
+    uint32_t running = 0;
+    for (uint32_t i = 0; i < n; ++i) {
+        if (procs[i].ki_stat == SRUN) ++running;
+    }
+    free(procs);
+
+    s->proc.total   = n;
+    s->proc.running = running;
     return 0;
 }
 
@@ -88,17 +109,19 @@ int budyk_collect_entropy_freebsd(budyk_sample_c* s) {
     return 0;
 }
 
-/* Self-metrics on FreeBSD: getrusage(2) gives ru_maxrss (KiB on
- * FreeBSD ≥ 9, see getrusage(2)) and the cpu time accumulators.
- * Current RSS is harder to come by without a full kvm proc walk
- * (we already do it once in the proc collector), so we leave
- * rss_bytes at 0 and rely on peak_rss_bytes for monitoring.
+/* Self-metrics on FreeBSD:
+ *   peak_rss_bytes / cpu_*_seconds — getrusage(RUSAGE_SELF). ru_maxrss
+ *     is in KiB on FreeBSD ≥ 9.
+ *   rss_bytes — sysctl KERN_PROC_PID on our own pid → kinfo_proc.ki_rssize
+ *     (pages) × getpagesize().
  *
  * Note: FreeBSD updates ru_maxrss lazily — the value can legitimately
  * be 0 for a process that just started and hasn't touched many pages.
- * Tests must not assert peak_rss_bytes > 0 unconditionally.
+ * Tests must not assert peak_rss_bytes > 0 unconditionally. ki_rssize
+ * is sampled live and is reliable.
  */
 #include <sys/resource.h>
+#include <unistd.h>      /* getpid, getpagesize */
 
 int budyk_collect_self_freebsd(budyk_sample_c* s) {
     if (s == NULL) return -EINVAL;
@@ -107,6 +130,17 @@ int budyk_collect_self_freebsd(budyk_sample_c* s) {
     s->self_.peak_rss_bytes     = 0;
     s->self_.cpu_user_seconds   = 0.0;
     s->self_.cpu_system_seconds = 0.0;
+
+    /* Current RSS via kinfo_proc for our own PID. ki_rssize is in
+     * VM_PAGE_SIZE units. Failure here is non-fatal — we just leave
+     * rss_bytes at 0 and continue with getrusage data. */
+    int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_PID, (int)getpid() };
+    struct kinfo_proc kp;
+    size_t kp_len = sizeof(kp);
+    if (sysctl(mib, 4, &kp, &kp_len, NULL, 0) == 0 && kp_len == sizeof(kp)) {
+        s->self_.rss_bytes = (uint64_t)kp.ki_rssize *
+                             (uint64_t)getpagesize();
+    }
 
     struct rusage ru;
     if (getrusage(RUSAGE_SELF, &ru) == 0) {

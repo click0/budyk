@@ -9,13 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **FreeBSD: disk + proc.running + self.rss via kvm/devstat/kinfo_proc**
+  — closes three long-standing FreeBSD platform gaps in one PR:
+  * `collector/freebsd/disk.c` — previously a `-ENOSYS` stub. Now
+    aggregates read/write bytes-per-second across whole disks via
+    `devstat_getdevs(3)`, filtered to `DEVSTAT_TYPE_DIRECT` (no
+    pass-through). `budyk_collector` links `-ldevstat` (base).
+  * `proc.running` — was hard-coded 0. Now counts `kinfo_proc`
+    entries with `ki_stat == SRUN` in the same `kern.proc.all`
+    walk that yields `total`, so the second metric is essentially
+    free.
+  * `self.rss_bytes` — was 0 (we relied on `peak_rss_bytes` from
+    getrusage). Now reads `kinfo_proc.ki_rssize × getpagesize()`
+    via `sysctl(KERN_PROC_PID, getpid())`.
+
 - **File-watch sparkline** in the SPA — the new "Files" row now also
   carries a unicode sparkline (`▁▂▃▅▇█`) over the last 30 ticks
   (~2.5 h at default L1 cadence), so an operator can see *when*
   changes happened, not just the current tick. Backfilled from the
   `/api/samples` catch-up on page load so a refresh doesn't lose
   the visible timeline.
-
 - **File-watch history on the dashboard** — codec **v7** appends a
   `file_watch` block (`events_this_tick`, `watched_count`, `present`)
   to the `Sample`, so file-change activity is persisted to the storage
