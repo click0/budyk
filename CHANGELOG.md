@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **SPA history chart** — the dashboard gains a "History" panel that
+  consumes `GET /api/range` and draws a zoomable inline-SVG line chart
+  (no JS libraries, still a single-file bundle). Metric buttons
+  (CPU % / Mem % / Load 1m / Disk B/s / Net B/s) and range presets
+  (1h / 6h / 24h / 7d). Short ranges query the raw L3 ring, longer ones
+  the 5-min L1 ring, with an automatic fall-back to the other tier when
+  the first is empty (covers the common "daemon mostly at L1" case).
+  The window auto-refreshes every 60s. `since` is computed with BigInt
+  so the nanosecond bound is exact despite JS float limits.
 - **Persistent web sessions** — `SessionStore` now optionally flushes
   its token table to `<data_dir>/sessions.tsv` (atomic temp+rename,
   mode 0600) after every mutation, and reloads it on startup. A daemon
