@@ -112,6 +112,13 @@ target_link_libraries(test_alert PRIVATE budyk_rules budyk_core)
 target_include_directories(test_alert PRIVATE ${CMAKE_SOURCE_DIR}/src)
 add_test(NAME test_alert COMMAND test_alert)
 
+if(LUA_FOUND)
+    add_executable(test_yaml_rules unit/test_yaml_rules.cpp)
+    target_link_libraries(test_yaml_rules PRIVATE budyk_rules budyk_core ${LUA_LIBRARIES})
+    target_include_directories(test_yaml_rules PRIVATE ${CMAKE_SOURCE_DIR}/src ${LUA_INCLUDE_DIR})
+    add_test(NAME test_yaml_rules COMMAND test_yaml_rules)
+endif()
+
 add_executable(test_freeze unit/test_freeze.cpp)
 target_link_libraries(test_freeze PRIVATE budyk_rules budyk_core)
 target_include_directories(test_freeze PRIVATE ${CMAKE_SOURCE_DIR}/src)

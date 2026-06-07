@@ -18,6 +18,7 @@
 #include "hot_buffer/hot_buffer.h"
 #include "rules/alert.h"
 #include "rules/lua_engine.h"
+#include "rules/yaml_compat.h"
 #include "scheduler/scheduler.h"
 #include "security/file_watcher.h"
 #include "storage/codec.h"
@@ -635,10 +636,26 @@ int cmd_serve(int argc, char* argv[]) {
         // "file is present but won't parse" — only the second is worth
         // a warning. ::access(R_OK) is the cheapest probe.
         if (::access(cfg.rules_path, R_OK) == 0) {
-            if (engine.load_file(cfg.rules_path) != 0) {
+            // Dispatch by extension: .yaml / .yml goes through the
+            // simple-YAML transpiler first, anything else is fed to Lua
+            // verbatim. The transpiler emits regular watch() calls, so
+            // the engine sees no difference downstream.
+            const size_t plen = std::strlen(cfg.rules_path);
+            const bool   is_yaml =
+                (plen >= 5 && std::strcmp(cfg.rules_path + plen - 5, ".yaml") == 0) ||
+                (plen >= 4 && std::strcmp(cfg.rules_path + plen - 4, ".yml")  == 0);
+            int rc;
+            if (is_yaml) {
+                std::string lua_src;
+                rc = budyk::yaml_rules_to_lua_file(cfg.rules_path, &lua_src);
+                if (rc == 0) rc = engine.load_string(lua_src.c_str());
+            } else {
+                rc = engine.load_file(cfg.rules_path);
+            }
+            if (rc != 0) {
                 std::fprintf(stderr,
-                    "budyk serve: rules file '%s' failed to load — continuing without rules\n",
-                    cfg.rules_path);
+                    "budyk serve: rules file '%s' failed to load (rc=%d) — continuing without rules\n",
+                    cfg.rules_path, rc);
             }
         }
     }

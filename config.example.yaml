@@ -38,6 +38,18 @@ storage:
   tier3_max_mb: 50         # 5-minute aggregates
 
 # ---- Rules engine --------------------------------------------------------
+# The engine is always Lua internally, but a `.yaml` / `.yml` rules file
+# is auto-transpiled at load time for the common "simple thresholds"
+# case. Format:
+#   - name: high_cpu
+#     when: "cpu.total_percent > 90"   # spliced verbatim into Lua
+#     for_ticks: 5                     # consecutive hits before firing
+#     cooldown: 10                     # ticks to wait after firing
+#     severity: warning                # info / warning / critical
+#     action: alert                    # alert | log
+#     message: "CPU pegged"            # alert body; defaults to name
+# Multi-line / computed thresholds → use a .lua file instead, the
+# engine accepts both transparently.
 rules:
   path: "/usr/local/etc/budyk/rules.lua"
   # Persist per-rule cooldown / fire counters across restarts so a
