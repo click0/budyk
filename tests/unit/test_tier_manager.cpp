@@ -128,6 +128,83 @@ int main() {
         rmrf(d);
     }
 
+    // 8. query() — chronological window read from a tier ring.
+    {
+        const std::string d = mkdtmp();
+        TierManager tm;
+        assert(tm.init(d.c_str(), 1, 1, 1) == 0);
+
+        // Ten L3 samples at ts = 1000, 1100, ... 1900.
+        for (int i = 0; i < 10; ++i) {
+            assert(tm.store(mk(Level::L3, 1000ULL + i * 100)) == 0);
+        }
+
+        // Full read, no bounds → all 10, oldest-first.
+        {
+            std::vector<Sample> out;
+            const int n = tm.query(1, /*since*/0, /*until*/0, 100, &out);
+            assert(n == 10);
+            assert(out.size() == 10);
+            assert(out.front().timestamp_nanos == 1000);
+            assert(out.back().timestamp_nanos  == 1900);
+            // strictly increasing
+            for (size_t i = 1; i < out.size(); ++i)
+                assert(out[i].timestamp_nanos > out[i - 1].timestamp_nanos);
+        }
+
+        // since filter — only ts >= 1500 (five samples: 1500..1900).
+        {
+            std::vector<Sample> out;
+            const int n = tm.query(1, 1500, 0, 100, &out);
+            assert(n == 5);
+            assert(out.front().timestamp_nanos == 1500);
+            assert(out.back().timestamp_nanos  == 1900);
+        }
+
+        // since + until window — [1200, 1400] inclusive → 3 samples.
+        {
+            std::vector<Sample> out;
+            const int n = tm.query(1, 1200, 1400, 100, &out);
+            assert(n == 3);
+            assert(out.front().timestamp_nanos == 1200);
+            assert(out.back().timestamp_nanos  == 1400);
+        }
+
+        // limit caps to the NEWEST max_records.
+        {
+            std::vector<Sample> out;
+            const int n = tm.query(1, 0, 0, 3, &out);
+            assert(n == 3);
+            assert(out.front().timestamp_nanos == 1700);
+            assert(out.back().timestamp_nanos  == 1900);
+        }
+
+        // Empty tier (tier2 never written) → 0, out untouched.
+        {
+            std::vector<Sample> out;
+            const int n = tm.query(2, 0, 0, 100, &out);
+            assert(n == 0);
+            assert(out.empty());
+        }
+
+        // Bad args: invalid tier, zero max, null out, before-init.
+        {
+            std::vector<Sample> out;
+            assert(tm.query(0, 0, 0, 100, &out) == -1);
+            assert(tm.query(4, 0, 0, 100, &out) == -1);
+            assert(tm.query(1, 0, 0, 0,   &out) == -1);
+            assert(tm.query(1, 0, 0, 100, nullptr) == -1);
+        }
+
+        tm.close();
+        // Query on a closed manager is rejected.
+        {
+            std::vector<Sample> out;
+            assert(tm.query(1, 0, 0, 100, &out) == -1);
+        }
+        rmrf(d);
+    }
+
     std::printf("test_tier_manager: PASS\n");
     return 0;
 }

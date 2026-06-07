@@ -454,6 +454,46 @@ std::string cookie_value(const std::string& cookie_header, const char* name) {
     return {};
 }
 
+// Split a request target into path + raw query string. "/api/range?x=1"
+// → path "/api/range", query "x=1". No query → query stays empty.
+void split_target(const std::string& target,
+                  std::string* path, std::string* query) {
+    const size_t q = target.find('?');
+    if (q == std::string::npos) {
+        *path  = target;
+        query->clear();
+    } else {
+        *path  = target.substr(0, q);
+        *query = target.substr(q + 1);
+    }
+}
+
+// Pull a single unsigned 64-bit value for `key` out of a urlencoded
+// query string ("a=1&b=2"). Returns `fallback` when the key is absent
+// or doesn't parse as a non-negative integer. Only digits are accepted
+// — no signs, no units (callers pass nanoseconds / counts directly).
+uint64_t query_u64(const std::string& query, const char* key, uint64_t fallback) {
+    const std::string needle = std::string(key) + "=";
+    size_t p = 0;
+    while (p < query.size()) {
+        size_t amp = query.find('&', p);
+        if (amp == std::string::npos) amp = query.size();
+        if (query.compare(p, needle.size(), needle) == 0) {
+            const std::string val = query.substr(p + needle.size(),
+                                                 amp - p - needle.size());
+            if (val.empty()) return fallback;
+            uint64_t out = 0;
+            for (char c : val) {
+                if (c < '0' || c > '9') return fallback;
+                out = out * 10 + static_cast<uint64_t>(c - '0');
+            }
+            return out;
+        }
+        p = amp + 1;
+    }
+    return fallback;
+}
+
 // Sleep for at most `seconds` real-time, returning early if a signal sets
 // g_stop. Safe to call with seconds <= 0 (no-op).
 void interruptible_sleep(int seconds) {
@@ -644,7 +684,7 @@ int cmd_serve(int argc, char* argv[]) {
         return !tok.empty() && sessions.verify(tok);
     };
 
-    auto router = [&cfg, &hot, &hot_mtx, &sessions, &ws, &authed](const budyk::HttpRequest& req) {
+    auto router = [&cfg, &hot, &hot_mtx, &tm, &sessions, &ws, &authed](const budyk::HttpRequest& req) {
         // Static SPA — served at /, /index.html and /budyk for the
         // browser-friendly entry. Always public; the JS itself does
         // the auth-probe + login round-trip.
@@ -728,6 +768,46 @@ int cmd_serve(int argc, char* argv[]) {
             r.content_type = "application/json";
             r.body         = budyk::samples_to_json(snap.data(), snap.size());
             return r;
+        }
+
+        // Historical range query against the on-disk tier rings — lets
+        // the SPA show hours/days, not just the 300-record hot buffer.
+        //   GET /api/range?since=<ns>&until=<ns>&tier=<1|2|3>&limit=<n>
+        //     since  — lower bound on timestamp_nanos (default 0 = all)
+        //     until  — upper bound, 0 = now (default 0)
+        //     tier   — 1 raw L3 / 2 1-min L2 / 3 5-min L1 (default 1)
+        //     limit  — max samples returned, newest kept (default+cap 5000)
+        {
+            std::string rpath, rquery;
+            split_target(req.path, &rpath, &rquery);
+            if (req.method == "GET" && rpath == "/api/range") {
+                if (!authed(req)) {
+                    return budyk::HttpResponse{
+                        401, "application/json",
+                        "{\"error\":\"unauthenticated\"}\n", {}, {}};
+                }
+                constexpr uint64_t kMaxLimit = 5000;
+                const uint64_t since = query_u64(rquery, "since", 0);
+                const uint64_t until = query_u64(rquery, "until", 0);
+                uint64_t tier        = query_u64(rquery, "tier",  1);
+                uint64_t limit       = query_u64(rquery, "limit", kMaxLimit);
+                if (tier < 1 || tier > 3) tier = 1;
+                if (limit == 0 || limit > kMaxLimit) limit = kMaxLimit;
+
+                std::vector<budyk::Sample> out;
+                const int n = tm.query(static_cast<int>(tier), since, until,
+                                       static_cast<size_t>(limit), &out);
+                if (n < 0) {
+                    return budyk::HttpResponse{
+                        400, "application/json",
+                        "{\"error\":\"bad range query\"}\n", {}, {}};
+                }
+                budyk::HttpResponse r;
+                r.status       = 200;
+                r.content_type = "application/json";
+                r.body         = budyk::samples_to_json(out.data(), out.size());
+                return r;
+            }
         }
 
         if (req.path == "/api/ws") {

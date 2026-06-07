@@ -3,6 +3,7 @@
 
 #include "storage/codec.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 
@@ -98,6 +99,52 @@ void TierManager::close() {
     tier2_.close();
     tier1_.close();
     ready_ = false;
+}
+
+int TierManager::query(int tier, uint64_t since_ns, uint64_t until_ns,
+                       std::size_t max_records, std::vector<Sample>* out) const {
+    if (!ready_ || out == nullptr || max_records == 0) return -1;
+
+    const RingFile* ring = nullptr;
+    switch (tier) {
+        case 1: ring = &tier1_; break;
+        case 2: ring = &tier2_; break;
+        case 3: ring = &tier3_; break;
+        default: return -1;
+    }
+
+    const uint64_t cap  = ring->capacity();
+    const uint64_t widx = ring->write_index();
+    if (cap == 0 || widx == 0) return 0;
+
+    const uint64_t valid = widx < cap ? widx : cap;   // records still live
+
+    // Walk newest → oldest so the time-window cutoff lets us stop early
+    // and so an over-long window keeps the *newest* max_records. Records
+    // are appended in timestamp order, so a sample older than since_ns
+    // means every remaining one is too — break.
+    const std::size_t rsize = record_size_for_sample();
+    std::vector<uint8_t> buf(rsize);
+    std::vector<Sample>  newest_first;
+    newest_first.reserve(std::min<std::size_t>(max_records, valid));
+
+    for (uint64_t k = 0; k < valid && newest_first.size() < max_records; ++k) {
+        const uint64_t logical = widx - 1 - k;
+        const uint64_t slot    = logical % cap;
+        if (ring->read_at(slot, buf.data(), rsize) != 0) continue;
+        Sample s{};
+        if (record_decode(buf.data(), rsize, &s) != 0) continue;   // torn / CRC
+        if (s.timestamp_nanos < since_ns) break;                   // window floor
+        if (until_ns != 0 && s.timestamp_nanos > until_ns) continue;
+        newest_first.push_back(s);
+    }
+
+    // Flip to chronological (oldest-first) for the caller.
+    out->reserve(out->size() + newest_first.size());
+    for (auto it = newest_first.rbegin(); it != newest_first.rend(); ++it) {
+        out->push_back(*it);
+    }
+    return static_cast<int>(newest_first.size());
 }
 
 uint64_t TierManager::tier1_count() const { return tier1_.count(); }
