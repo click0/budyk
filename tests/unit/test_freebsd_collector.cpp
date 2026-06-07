@@ -141,7 +141,10 @@ int main() {
 
     // 8. Process count — kern.proc.all size-only query. Total > 0 on
     //    any running host (pid 1 + the test binary). `running` stays
-    //    at 0 in the FreeBSD path until we walk ki_stat.
+    //    Both populated via a single kern.proc.all walk now —
+    //    `running` counts entries with ki_stat == SRUN. We *can't*
+    //    assert running > 0 because at the nanosecond of the sysctl
+    //    every process might be sleeping; the bound is the useful one.
     {
         budyk_sample_c s;
         std::memset(&s, 0, sizeof(s));
@@ -178,6 +181,36 @@ int main() {
         assert(s.self_.cpu_system_seconds >= 0.0);
 
         assert(budyk_collect_self_freebsd(nullptr) != 0);
+    }
+
+    // 10a. Disk — devstat walk. Two calls: first populates the ctx
+    //      baseline (rates = 0), second computes a delta. We can't
+    //      assert non-zero rates because a freshly-booted VM might do
+    //      nothing in the gap; we just check the API contract.
+    {
+        budyk_disk_ctx_c ctx;
+        std::memset(&ctx, 0, sizeof(ctx));
+        budyk_sample_c   s;
+        std::memset(&s, 0, sizeof(s));
+
+        s.timestamp_nanos = 1'000'000'000ULL;
+        int rc = budyk_collect_disk_freebsd(&ctx, &s);
+        assert(rc == 0);
+        assert(s.disk.read_bytes_per_sec  == 0);   // first call → baseline
+        assert(s.disk.write_bytes_per_sec == 0);
+        assert(ctx.has_prev != 0);
+
+        s.timestamp_nanos = 2'000'000'000ULL;
+        rc = budyk_collect_disk_freebsd(&ctx, &s);
+        assert(rc == 0);
+        // device_count typically ≥ 1 even in jails, but we don't gate
+        // on it — some minimal VMs have no whole-disk providers.
+        // Rates are best-effort; just verify they're sensible u64.
+        assert(s.disk.read_bytes_per_sec  < UINT64_MAX);
+        assert(s.disk.write_bytes_per_sec < UINT64_MAX);
+
+        assert(budyk_collect_disk_freebsd(nullptr, &s) != 0);
+        assert(budyk_collect_disk_freebsd(&ctx, nullptr) != 0);
     }
 
     // 11. Thermal — dev.cpu.<N>.temperature sysctl chain. rc == 0
