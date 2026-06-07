@@ -74,6 +74,23 @@ h1 .host { color: var(--muted); margin-left: .6rem; font-weight: 400; }
 
 const $ = (id) => document.getElementById(id);
 
+// Unicode sparkline — eight glyph height steps. Values are scaled
+// to the per-window max (min 1) so a flat-zero window stays a thin
+// baseline and a single spike pegs to the top. Plenty good for the
+// 0/1-mostly file_watch signal.
+const SPARK_TICKS = "▁▂▃▄▅▆▇█";
+function spark(arr) {
+  if (!arr.length) return "";
+  const m = Math.max(1, ...arr);
+  return arr.map(v => SPARK_TICKS[Math.min(7, Math.floor(v / m * 7))]).join("");
+}
+
+// Rolling window of recent file-watch event counts. 30 ticks at the
+// default L1 cadence (5 min) is ~2.5 h of history — visible at a
+// glance and small enough to never feel laggy.
+const FW_HIST_MAX = 30;
+let fileWatchHist = [];
+
 function fmtBytes(b) {
   if (b == null) return "--";
   const u = ["B","KiB","MiB","GiB","TiB"];
@@ -145,16 +162,22 @@ function render(s) {
 
   // File watcher — hide the row unless security.file_watch is enabled.
   // Shows how many watched paths changed this tick (a spike means
-  // tampering just happened) out of the configured total.
+  // tampering just happened) out of the configured total, plus a
+  // unicode sparkline of the last FW_HIST_MAX ticks so the operator
+  // can see *when* changes happened, not only the current tick.
   if (s.file_watch?.present) {
     $("fileWatchRow").classList.remove("hidden");
     const ev = s.file_watch.events_this_tick ?? 0;
     const wc = s.file_watch.watched_count ?? 0;
+    fileWatchHist.push(ev);
+    if (fileWatchHist.length > FW_HIST_MAX) fileWatchHist.shift();
+    const sp = spark(fileWatchHist);
     $("fileWatch").textContent = ev > 0
-      ? `${ev} change(s) this tick across ${wc} watched`
-      : `quiet — ${wc} watched`;
+      ? `${ev} change(s) this tick across ${wc} watched   ${sp}`
+      : `quiet — ${wc} watched   ${sp}`;
   } else {
     $("fileWatchRow").classList.add("hidden");
+    fileWatchHist = [];
   }
 
   // Self-metrics — daemon's own footprint.
@@ -217,10 +240,23 @@ async function start() {
     return showLogin();
   }
   showDash();
-  // Render the catch-up snapshot first, then go live.
+  // Render the catch-up snapshot first, then go live. Backfill the
+  // file-watch sparkline from the same snapshot so a page reload
+  // doesn't reset the timeline visible to the operator.
   try {
     const doc = await r.json();
     const arr = doc.samples || [];
+    const tail = arr.slice(-FW_HIST_MAX);
+    for (const s of tail) {
+      if (s.file_watch?.present) {
+        fileWatchHist.push(s.file_watch.events_this_tick ?? 0);
+      }
+    }
+    if (fileWatchHist.length > FW_HIST_MAX) {
+      fileWatchHist = fileWatchHist.slice(-FW_HIST_MAX);
+    }
+    // render() will push the latest sample's value again, so trim one.
+    if (fileWatchHist.length > 0) fileWatchHist.pop();
     if (arr.length) render(arr[arr.length - 1]);
   } catch (_) {}
   openWs();
