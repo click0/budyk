@@ -676,6 +676,15 @@ int cmd_serve(int argc, char* argv[]) {
     budyk::SessionStore  sessions;       // 24-h default TTL
     budyk::WebSocketHub  ws;
 
+    // Restore logged-in sessions across restarts. The file holds live
+    // bearer tokens (mode 0600); load drops any already past their TTL.
+    if (cfg.auth_persist_sessions) {
+        const std::string session_path =
+            std::string(cfg.data_dir) + "/sessions.tsv";
+        sessions.load(session_path.c_str());
+        sessions.set_persist_path(session_path);   // autosave on mutation
+    }
+
     auto authed = [&cfg, &sessions](const budyk::HttpRequest& req) -> bool {
         if (!cfg.auth_enabled) return true;
         const std::string c = req.header("Cookie");

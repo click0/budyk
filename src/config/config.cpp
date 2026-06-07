@@ -207,6 +207,8 @@ int parse_document(yaml_parser_t* parser, Config* out) {
             apply_bool(&doc, auth, "enabled", &out->auth_enabled);
             apply_str (&doc, auth, "password_hash",
                        out->password_hash, sizeof(out->password_hash));
+            apply_bool(&doc, auth, "persist_sessions",
+                       &out->auth_persist_sessions);
         }
     }
 
