@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Simple-YAML rule format** — the long-deferred spec §3.6.2
+  YAML-to-Lua transpiler is finally real. A `.yaml` / `.yml` rules
+  file is detected by extension at load time and converted to regular
+  `watch()` calls; the engine sees no difference. Per-rule keys:
+  `name*` / `when*` (Lua expression spliced verbatim) + optional
+  `for_ticks`, `cooldown`, `severity` (info/warning/critical),
+  `action` (alert/log), `message`. Top-level may be a bare sequence
+  or a mapping with a `rules:` wrapper. The `when` text is guarded
+  against newlines (would let the splice close `function() return …`
+  early); bad severities silently fall back to `warning`; malformed
+  YAML is rejected with no partial rule registered. Multi-line or
+  computed thresholds still want native Lua — the engine accepts
+  both transparently in the same `rules.path`.
+
 - **SPA history chart** — the dashboard gains a "History" panel that
   consumes `GET /api/range` and draws a zoomable inline-SVG line chart
   (no JS libraries, still a single-file bundle). Metric buttons

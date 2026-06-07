@@ -73,6 +73,12 @@ add_library(budyk_rules STATIC
 )
 target_link_libraries(budyk_rules PRIVATE budyk_core ${LUA_LIBRARIES})
 target_include_directories(budyk_rules PRIVATE ${LUA_INCLUDE_DIR})
+# libyaml is in base and already used by budyk_config; needed here for
+# the simple-YAML → Lua transpiler in rules/yaml_compat.cpp.
+find_library(YAML_LIB_RULES yaml REQUIRED)
+find_path(YAML_INCLUDE_DIR_RULES yaml.h REQUIRED)
+target_link_libraries(budyk_rules PRIVATE ${YAML_LIB_RULES})
+target_include_directories(budyk_rules PRIVATE ${YAML_INCLUDE_DIR_RULES})
 
 # AI suggestions
 add_library(budyk_ai STATIC
