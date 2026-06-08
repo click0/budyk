@@ -322,9 +322,13 @@ int cmd_suggest_rules(int argc, char* argv[]) {
 // static lib. We use the C-shim Sample type for collector calls and copy
 // the relevant fields back into budyk::Sample for the rest of the pipeline.
 
-static volatile std::sig_atomic_t g_stop = 0;
+static volatile std::sig_atomic_t g_stop   = 0;
+static volatile std::sig_atomic_t g_reload = 0;
 
-extern "C" void serve_signal_handler(int /*sig*/) { g_stop = 1; }
+extern "C" void serve_signal_handler(int sig) {
+    if (sig == SIGHUP) g_reload = 1;
+    else               g_stop   = 1;
+}
 
 void install_signal_handlers() {
     struct sigaction sa{};
@@ -333,6 +337,7 @@ void install_signal_handlers() {
     sa.sa_flags = 0;                      // no SA_RESTART — let nanosleep return
     ::sigaction(SIGINT,  &sa, nullptr);
     ::sigaction(SIGTERM, &sa, nullptr);
+    ::sigaction(SIGHUP,  &sa, nullptr);   // → rules reload
 
     struct sigaction ign{};
     ign.sa_handler = SIG_IGN;
@@ -619,23 +624,23 @@ int cmd_serve(int argc, char* argv[]) {
     budyk::Scheduler sched(cfg.scheduler);
 
     budyk::LuaEngine engine;
-    if (engine.init(cfg.rules_enable_exec) != 0) {
-        std::fprintf(stderr, "budyk serve: LuaEngine.init failed\n");
-        tm.close();
-        return 1;
-    }
-    if (!cfg.rules_exec_allow.empty()) {
-        engine.set_exec_allowlist(cfg.rules_exec_allow);
-    }
-    engine.set_freeze_enabled(cfg.rules_enable_freeze);
-    if (!cfg.rules_freeze_allow.empty()) {
-        engine.set_freeze_allowlist(cfg.rules_freeze_allow);
-    }
-    if (cfg.rules_path[0] != '\0') {
-        // Distinguish "file just doesn't exist on a fresh install" from
-        // "file is present but won't parse" — only the second is worth
-        // a warning. ::access(R_OK) is the cheapest probe.
-        if (::access(cfg.rules_path, R_OK) == 0) {
+
+    // Both initial setup and SIGHUP reload do the same dance: init the
+    // engine, apply exec/freeze gates + allowlists, load rules (yaml or
+    // lua by extension), register alert channels, then optionally
+    // restore per-rule state from `restore_path` so cooldowns survive.
+    // Factored into a lambda so the reload path can't drift away from
+    // initial setup. Returns the engine.init rc (0 on success).
+    auto setup_engine = [&](const char* restore_path) -> int {
+        if (engine.init(cfg.rules_enable_exec) != 0) return -1;
+        if (!cfg.rules_exec_allow.empty()) {
+            engine.set_exec_allowlist(cfg.rules_exec_allow);
+        }
+        engine.set_freeze_enabled(cfg.rules_enable_freeze);
+        if (!cfg.rules_freeze_allow.empty()) {
+            engine.set_freeze_allowlist(cfg.rules_freeze_allow);
+        }
+        if (cfg.rules_path[0] != '\0' && ::access(cfg.rules_path, R_OK) == 0) {
             // Dispatch by extension: .yaml / .yml goes through the
             // simple-YAML transpiler first, anything else is fed to Lua
             // verbatim. The transpiler emits regular watch() calls, so
@@ -658,36 +663,63 @@ int cmd_serve(int argc, char* argv[]) {
                     cfg.rules_path, rc);
             }
         }
-    }
+        // Restore per-rule cooldown / fire counters. Must come after
+        // load_file/load_string (matches saved entries to rules by name).
+        if (restore_path != nullptr) {
+            engine.load_state(restore_path);
+        }
+        // Register configured alert channels so rules can call
+        // alert(name, severity, message) and reach them. Re-applied on
+        // reload because shutdown() clears the engine's dispatcher.
+        for (const auto& src : cfg.alert_channels) {
+            budyk::AlertChannel ch;
+            ch.name  = src.name;
+            ch.type  = src.type;
+            ch.url   = src.url;
+            ch.topic = src.topic;
+            ch.token = src.token;
+            ch.from  = src.from;
+            engine.alerts().add_channel(std::move(ch));
+        }
+        return 0;
+    };
 
-    // Restore per-rule cooldown / fire counters from the last run so a
-    // restart doesn't re-fire a rule that was mid-cooldown. Must come
-    // after load_file (matches saved entries to rules by name).
+    // Initial: derive state_path now; restore on init.
     std::string state_path;
     if (cfg.rules_persist_state) {
         state_path = cfg.rules_state_path[0] != '\0'
                    ? std::string(cfg.rules_state_path)
                    : std::string(cfg.data_dir) + "/rule_state.tsv";
-        engine.load_state(state_path.c_str());
     }
-
-    // Register configured alert channels with the Lua engine's dispatcher
-    // so rules can call alert(name, severity, message) and reach them.
-    for (const auto& src : cfg.alert_channels) {
-        budyk::AlertChannel ch;
-        ch.name  = src.name;
-        ch.type  = src.type;
-        ch.url   = src.url;
-        ch.topic = src.topic;
-        ch.token = src.token;
-        ch.from  = src.from;
-        engine.alerts().add_channel(std::move(ch));
+    if (setup_engine(state_path.empty() ? nullptr : state_path.c_str()) != 0) {
+        std::fprintf(stderr, "budyk serve: LuaEngine.init failed\n");
+        tm.close();
+        return 1;
     }
     if (!cfg.alert_channels.empty()) {
         std::fprintf(stderr,
             "budyk serve: registered %zu alert channel(s)\n",
             cfg.alert_channels.size());
     }
+
+    // SIGHUP reload: persist current cooldowns to a transient file,
+    // shutdown the engine, set it up again, restore from that file.
+    // Cooldowns / fire_count survive even when rules.persist_state is
+    // disabled — the transient file lives only across the swap.
+    auto reload_rules = [&]() {
+        const std::string rp = std::string(cfg.data_dir) + "/.reload.tsv";
+        engine.save_state(rp.c_str());
+        engine.shutdown();
+        if (setup_engine(rp.c_str()) != 0) {
+            std::fprintf(stderr,
+                "budyk serve: SIGHUP — engine re-init failed; daemon is now ruleless\n");
+        } else {
+            std::fprintf(stderr,
+                "budyk serve: SIGHUP — rules reloaded (%d rule(s))\n",
+                engine.rule_count());
+        }
+        ::unlink(rp.c_str());
+    };
 
     budyk::HttpServer    http;
     budyk::SessionStore  sessions;       // 24-h default TTL
@@ -925,6 +957,14 @@ int cmd_serve(int argc, char* argv[]) {
     time_t next_state_save = ::time(nullptr) + 60;
 
     while (!g_stop) {
+        // SIGHUP latched in the handler — process it at a clean tick
+        // boundary so an in-flight eval_tick / store can't race with
+        // engine.shutdown(). One signal per cycle is plenty.
+        if (g_reload) {
+            g_reload = 0;
+            reload_rules();
+        }
+
         budyk::Sample s{};
         s.timestamp_nanos = now_realtime_ns();
 
