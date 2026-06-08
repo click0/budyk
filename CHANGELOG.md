@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **SIGHUP — rules reload without a restart**. Edit `rules.path`
+  (whether `.lua` or `.yaml`), `kill -HUP $(pidof budyk)`, the new
+  rule set is live within a tick. Per-rule `cooldown_remaining`,
+  `consecutive_hits` and `fire_count` are preserved across the swap
+  by name (via a transient state file), so rules in mid-cooldown stay
+  quiet through the reload. HTTP server, scheduler, alert channels,
+  storage rings, and persistent web sessions are untouched. The
+  signal is latched in a `sig_atomic_t` flag and processed at the
+  top of the tick loop so an in-flight `eval_tick` can't race
+  `engine.shutdown()`. Documented in `budyk(8)`.
+
 - **Simple-YAML rule format** — the long-deferred spec §3.6.2
   YAML-to-Lua transpiler is finally real. A `.yaml` / `.yml` rules
   file is detected by extension at load time and converted to regular
