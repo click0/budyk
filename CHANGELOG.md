@@ -18,7 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   storage rings, and persistent web sessions are untouched. The
   signal is latched in a `sig_atomic_t` flag and processed at the
   top of the tick loop so an in-flight `eval_tick` can't race
-  `engine.shutdown()`. Documented in `budyk(8)`.
+  `engine.shutdown()`. Documented in `budyk(8)`. Alert channels are
+  registered once at startup and deliberately *not* re-registered on
+  reload — the `AlertDispatcher` is a `LuaEngine` member that survives
+  the `shutdown()`/`init()` swap, so re-adding would duplicate every
+  channel and fire each alert N+1 times after N reloads. Regression
+  guard added in `test_lua_engine` (case 24). A failed state snapshot
+  during reload now warns instead of silently zeroing cooldowns.
 
 - **Simple-YAML rule format** — the long-deferred spec §3.6.2
   YAML-to-Lua transpiler is finally real. A `.yaml` / `.yml` rules
