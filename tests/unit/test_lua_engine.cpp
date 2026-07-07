@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #include "core/sample.h"
 #include "rules/lua_engine.h"
+#include "rules/alert.h"
 
 #include <cassert>
 #include <cstdio>
@@ -515,6 +516,32 @@ int main() {
         LuaEngine e;
         assert(e.init(false) == 0);
         assert(e.load_state("/tmp/budyk_state_does_not_exist_zz") == 0);
+        e.shutdown();
+    }
+
+    // 24. Alert channels survive shutdown()/init() — the dispatcher is a
+    //     LuaEngine member, not tied to the Lua state. This is the exact
+    //     invariant the SIGHUP reload path relies on: it must NOT
+    //     re-register channels after the swap, or they duplicate and each
+    //     alert fires N+1 times after N reloads. Regression guard for the
+    //     channel-dup bug shipped in the initial SIGHUP PR.
+    {
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        AlertChannel ch;
+        ch.name = "test";
+        ch.type = "ntfy";
+        ch.url  = "http://127.0.0.1:0";
+        ch.topic = "t";
+        e.alerts().add_channel(ch);
+        assert(e.alerts().channel_count() == 1);
+
+        // Simulate a SIGHUP reload: save state, tear down the Lua VM,
+        // re-init. The dispatcher (and its channels) must be untouched.
+        e.shutdown();
+        assert(e.alerts().channel_count() == 1);   // survives shutdown
+        assert(e.init(false) == 0);
+        assert(e.alerts().channel_count() == 1);   // survives re-init
         e.shutdown();
     }
 

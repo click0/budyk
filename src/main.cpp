@@ -627,11 +627,18 @@ int cmd_serve(int argc, char* argv[]) {
 
     // Both initial setup and SIGHUP reload do the same dance: init the
     // engine, apply exec/freeze gates + allowlists, load rules (yaml or
-    // lua by extension), register alert channels, then optionally
-    // restore per-rule state from `restore_path` so cooldowns survive.
-    // Factored into a lambda so the reload path can't drift away from
-    // initial setup. Returns the engine.init rc (0 on success).
-    auto setup_engine = [&](const char* restore_path) -> int {
+    // lua by extension), optionally register alert channels, then
+    // optionally restore per-rule state from `restore_path` so cooldowns
+    // survive. Factored into a lambda so the reload path can't drift away
+    // from initial setup. Returns the engine.init rc (0 on success).
+    //
+    // register_channels MUST be false on reload: the AlertDispatcher is a
+    // member of LuaEngine and shutdown() does NOT clear it, so the
+    // channels registered at startup are still live after the swap. Alert
+    // channels are config-level (not reloadable) anyway — re-adding them
+    // would append duplicates (add_channel has no dedup), firing every
+    // alert N+1 times after N reloads.
+    auto setup_engine = [&](const char* restore_path, bool register_channels) -> int {
         if (engine.init(cfg.rules_enable_exec) != 0) return -1;
         if (!cfg.rules_exec_allow.empty()) {
             engine.set_exec_allowlist(cfg.rules_exec_allow);
@@ -669,17 +676,20 @@ int cmd_serve(int argc, char* argv[]) {
             engine.load_state(restore_path);
         }
         // Register configured alert channels so rules can call
-        // alert(name, severity, message) and reach them. Re-applied on
-        // reload because shutdown() clears the engine's dispatcher.
-        for (const auto& src : cfg.alert_channels) {
-            budyk::AlertChannel ch;
-            ch.name  = src.name;
-            ch.type  = src.type;
-            ch.url   = src.url;
-            ch.topic = src.topic;
-            ch.token = src.token;
-            ch.from  = src.from;
-            engine.alerts().add_channel(std::move(ch));
+        // alert(name, severity, message) and reach them. Startup only —
+        // see register_channels note above: the dispatcher survives the
+        // reload swap, so re-adding here would duplicate every channel.
+        if (register_channels) {
+            for (const auto& src : cfg.alert_channels) {
+                budyk::AlertChannel ch;
+                ch.name  = src.name;
+                ch.type  = src.type;
+                ch.url   = src.url;
+                ch.topic = src.topic;
+                ch.token = src.token;
+                ch.from  = src.from;
+                engine.alerts().add_channel(std::move(ch));
+            }
         }
         return 0;
     };
@@ -691,7 +701,8 @@ int cmd_serve(int argc, char* argv[]) {
                    ? std::string(cfg.rules_state_path)
                    : std::string(cfg.data_dir) + "/rule_state.tsv";
     }
-    if (setup_engine(state_path.empty() ? nullptr : state_path.c_str()) != 0) {
+    if (setup_engine(state_path.empty() ? nullptr : state_path.c_str(),
+                     /*register_channels=*/true) != 0) {
         std::fprintf(stderr, "budyk serve: LuaEngine.init failed\n");
         tm.close();
         return 1;
@@ -708,9 +719,17 @@ int cmd_serve(int argc, char* argv[]) {
     // disabled — the transient file lives only across the swap.
     auto reload_rules = [&]() {
         const std::string rp = std::string(cfg.data_dir) + "/.reload.tsv";
-        engine.save_state(rp.c_str());
+        // If the snapshot can't be written (disk full, bad perms) the
+        // restore below reads a missing/stale file and silently zeroes
+        // every cooldown — warn so an operator can see why rules that
+        // were mid-cooldown suddenly re-fire after the reload.
+        if (engine.save_state(rp.c_str()) != 0) {
+            std::fprintf(stderr,
+                "budyk serve: SIGHUP — could not snapshot rule state to '%s'; "
+                "cooldowns may reset\n", rp.c_str());
+        }
         engine.shutdown();
-        if (setup_engine(rp.c_str()) != 0) {
+        if (setup_engine(rp.c_str(), /*register_channels=*/false) != 0) {
             std::fprintf(stderr,
                 "budyk serve: SIGHUP — engine re-init failed; daemon is now ruleless\n");
         } else {
