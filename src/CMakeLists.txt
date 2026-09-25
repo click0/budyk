@@ -26,7 +26,13 @@ if(BUDYK_PLATFORM STREQUAL "freebsd")
     )
     # libkvm + libdevstat both in base. kvm for swap accounting,
     # devstat for aggregate disk I/O in collector/freebsd/disk.c.
-    target_link_libraries(budyk_collector PUBLIC kvm devstat)
+    # Listed in dependency order (devstat uses kvm) — it matters for .a.
+    target_link_libraries(budyk_collector PUBLIC devstat kvm)
+    if(STATIC_LINK)
+        # libkvm.a calls into libelf (kvm_open → elf_begin, gelf_getehdr,
+        # ...). libkvm.so pulls it in via DT_NEEDED; the archive doesn't.
+        target_link_libraries(budyk_collector PUBLIC elf)
+    endif()
 elseif(BUDYK_PLATFORM STREQUAL "linux")
     add_library(budyk_collector STATIC
         collector/linux/cpu.c
