@@ -161,7 +161,5 @@ target_link_libraries(budyk PRIVATE
     ${BUDYK_PLATFORM_LIBS}
     ${LUA_LIBRARIES}
 )
-
-if(STATIC_LINK)
-    target_link_options(budyk PRIVATE -static)
-endif()
+# STATIC_LINK's -static is applied to all executables in the top-level
+# CMakeLists.txt, next to the static-archive lookup it depends on.
