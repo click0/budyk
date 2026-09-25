@@ -167,6 +167,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with no `-DSTATIC_LINK` flag, so it tests the actual default, and
   asserts the binary is statically linked. Previously every job passed
   `-DSTATIC_LINK=OFF`, so the default was never built.
+- **Release binaries are now fully static** on Linux and FreeBSD
+  (`-DSTATIC_LINK=ON` in all four release builds, previously `OFF`).
+  Each build fails unless `file` reports "statically linked", so a
+  dynamic binary can't be published.
 
 ## [0.4.0] — 2026-05-07
 

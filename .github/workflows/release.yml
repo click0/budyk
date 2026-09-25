@@ -13,6 +13,10 @@ name: Release binaries
 # Each tarball contains budyk + LICENSE + README.md + CHANGELOG.md +
 # docs/budyk.8 and is accompanied by a .sha256 sidecar.
 #
+# Every binary is fully static (STATIC_LINK=ON, spec: single static binary
+# with no runtime dependencies). The build fails if `file` doesn't report
+# "statically linked", so a dynamic binary can't slip into a release.
+#
 # When the trigger is a tag, all tarballs and their SHA256 sums are attached
 # to the GitHub Release named after the tag.
 
@@ -86,24 +90,26 @@ jobs:
           set -ex
           cmake -B build-release \
             -DBUDYK_PLATFORM=linux \
-            -DSTATIC_LINK=OFF \
+            -DSTATIC_LINK=ON \
             -DBUILD_TESTS=OFF \
             -DCMAKE_BUILD_TYPE=Release
           cmake --build build-release -j"$(nproc)"
           strip build-release/src/budyk || true
           file build-release/src/budyk
+          file build-release/src/budyk | grep -q "statically linked"
 
       - name: Build RelWithDebInfo (debug symbols kept)
         run: |
           set -ex
           cmake -B build-debug \
             -DBUDYK_PLATFORM=linux \
-            -DSTATIC_LINK=OFF \
+            -DSTATIC_LINK=ON \
             -DBUILD_TESTS=OFF \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo
           cmake --build build-debug -j"$(nproc)"
           # Do NOT strip — the debug tarball is for post-mortem / gdb.
           file build-debug/src/budyk
+          file build-debug/src/budyk | grep -q "statically linked"
 
       - name: Stage tarballs
         env:
@@ -187,23 +193,25 @@ jobs:
             echo "::group::Build Release (stripped)"
             cmake -B build-release \
               -DBUDYK_PLATFORM=freebsd \
-              -DSTATIC_LINK=OFF \
+              -DSTATIC_LINK=ON \
               -DBUILD_TESTS=OFF \
               -DCMAKE_BUILD_TYPE=Release
             cmake --build build-release -j"$JOBS"
             strip build-release/src/budyk || true
             file build-release/src/budyk
+            file build-release/src/budyk | grep -q "statically linked"
             echo "::endgroup::"
 
             echo "::group::Build RelWithDebInfo (debug symbols kept)"
             cmake -B build-debug \
               -DBUDYK_PLATFORM=freebsd \
-              -DSTATIC_LINK=OFF \
+              -DSTATIC_LINK=ON \
               -DBUILD_TESTS=OFF \
               -DCMAKE_BUILD_TYPE=RelWithDebInfo
             cmake --build build-debug -j"$JOBS"
             # Do NOT strip.
             file build-debug/src/budyk
+            file build-debug/src/budyk | grep -q "statically linked"
             echo "::endgroup::"
 
             echo "::group::Stage tarballs"
