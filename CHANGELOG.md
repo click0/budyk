@@ -185,6 +185,18 @@ metrics are now collected; they were placeholders before.
   Each build fails unless `file` reports "statically linked", so a
   dynamic binary can't be published.
 
+### Documentation
+
+- **README rewritten, plus a Ukrainian version (`README.uk.md`).** It
+  now covers installation (release binaries, build dependencies,
+  services), configuration, the rule API (`watch()` options, built-in
+  functions, metric globals, the YAML form), alert channels, the HTTP
+  API, signals and supported platforms. Both files ship in the release
+  tarballs. The old README's rule example used `action = alert` and a
+  `severity` field. That form sends nothing: the action is called with
+  no arguments, and `watch()` ignores `severity`. The example now uses
+  a function action that calls `alert(name, severity, message)`.
+
 [0.5.0]: https://github.com/click0/budyk/releases/tag/v0.5.0
 
 ## [0.4.0] — 2026-05-07
