@@ -49,6 +49,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   codec; the on-disk format is unchanged. Before, anything but 1–3 was
   rejected.
 
+### Fixed
+
+- **`collection.hot_buffer.capacity: 0` crashed the daemon** with
+  SIGFPE on the first tick (a modulo by the capacity). An interval of
+  0 or less for L1–L3 would have made the collection loop spin a core.
+  Out-of-range numbers in the config now fall back to their defaults
+  and are logged:
+  - port;
+  - the L1–L3 intervals, hysteresis and grace period;
+  - the hot buffer's capacity and warm grace;
+  - the `tier*_max_mb` sizes.
+  HotBuffer also treats capacity 0 as 1 and can no longer be copied (a
+  copy would double-free its array).
+- **`exec()` leaked memory on every rejected call.** It built its argv
+  in C++ containers, then raised with `luaL_error`, which longjmps past
+  their destructors. This hit a bad argv, a relative path, `..` and
+  allowlist rejections. The error is now raised after cleanup. Found
+  by the new ASan job.
+- **`exec(cmd, timeout)` with a huge timeout** wrapped through `int`,
+  and `timeout + 5` could overflow (undefined behaviour). The timeout
+  is now capped at 86400 s, and the CPU rlimit is computed in `rlim_t`.
+- **`/api/range` number parameters** wrapped around on values past
+  2^64; they now saturate.
+- **`HttpResponse::status` defaulted to an uninitialised value.** The
+  WebSocket upgrade path never set it. It now defaults to 200.
+
+### CI
+
+- **ASan + UBSan job.** It runs every unit test plus
+  `tests/smoke/serve.sh`, a smoke test of the running daemon: every
+  endpoint, a WebSocket client, a dropped connection, garbage input,
+  SIGHUP and a clean SIGTERM. Any sanitizer report fails the job. The
+  new `ENABLE_SANITIZERS` CMake option makes such a build locally; it
+  needs `STATIC_LINK=OFF`.
+- **cppcheck + clang-tidy job.** clang-tidy uses bug-finding checks
+  only (`bugprone-*`, `clang-analyzer-*`, minus the noisy ones, listed
+  with reasons in `.clang-tidy`). Any finding fails the job.
+- **Test asserts stay active in Release builds.** Most tests call the
+  code under test inside `assert()`. With `NDEBUG` those calls were
+  compiled away and the tests passed without running anything; the
+  test targets now build with `-UNDEBUG`.
+
 ## [0.5.0] — 2026-09-26
 
 First release shipped as fully static binaries for Linux and FreeBSD

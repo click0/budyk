@@ -111,6 +111,16 @@ int main() {
         assert(out[299].timestamp_nanos == 1000);
     }
 
+    // Capacity 0 is treated as 1 instead of dividing by zero in push().
+    {
+        HotBuffer hb(0);
+        Sample s{};
+        s.timestamp_nanos = 7;
+        hb.push(s);
+        hb.push(s);
+        assert(hb.size() == 1);
+    }
+
     std::printf("test_hot_buffer: PASS\n");
     return 0;
 }

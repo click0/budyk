@@ -37,8 +37,10 @@ void prepare_child_and_exec(const char* const argv[], int timeout_seconds) {
 
     // CPU time cap — SIGXCPU fires at rlim_cur, SIGKILL at rlim_max.
     struct rlimit cpu {};
-    cpu.rlim_cur = static_cast<rlim_t>(timeout_seconds + 5);
-    cpu.rlim_max = static_cast<rlim_t>(timeout_seconds + 10);
+    // Widen before adding: timeout_seconds + 5 in int could overflow.
+    const rlim_t t = static_cast<rlim_t>(timeout_seconds > 0 ? timeout_seconds : 1);
+    cpu.rlim_cur = t + 5;
+    cpu.rlim_max = t + 10;
     setrlimit(RLIMIT_CPU, &cpu);
 
     // Address space cap — 256 MiB is plenty for a shell-out action, and

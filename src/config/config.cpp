@@ -5,6 +5,7 @@ extern "C" {
 #include <yaml.h>
 }
 
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -184,7 +185,7 @@ void apply_custom_levels(yaml_document_t* d, const yaml_node_t* col,
             reject("'interval' is required: seconds from 0.1 to 86400");
             continue;
         }
-        lv.interval_ms = static_cast<int>(interval_s * 1000.0 + 0.5);
+        lv.interval_ms = static_cast<int>(std::lround(interval_s * 1000.0));
 
         long prio = 0;
         if (!parse_long_full(scalar_str(find_key(d, n, "priority")), &prio) ||
@@ -220,6 +221,32 @@ void apply_custom_levels(yaml_document_t* d, const yaml_node_t* col,
         lv.id = static_cast<uint8_t>(kFirstCustomLevel + dst->size());
         dst->push_back(std::move(lv));
     }
+}
+
+// Replaces an out-of-range value with its default and says so. Values a
+// daemon can't run with (a 0-record hot buffer divides by zero, a 0 s
+// interval spins a core) must never reach it.
+void clamp_int(int* v, int lo, int hi, int fallback, const char* key) {
+    if (*v >= lo && *v <= hi) return;
+    std::fprintf(stderr,
+        "budyk config: %s = %d is out of range (%d..%d); using %d\n",
+        key, *v, lo, hi, fallback);
+    *v = fallback;
+}
+
+void clamp_numbers(Config* c) {
+    const Config d;   // defaults
+    clamp_int(&c->listen_port, 1, 65535, d.listen_port, "port");
+    clamp_int(&c->scheduler.l1_interval_sec, 1, 86400, d.scheduler.l1_interval_sec, "collection.l1.interval");
+    clamp_int(&c->scheduler.l2_interval_sec, 1, 86400, d.scheduler.l2_interval_sec, "collection.l2.interval");
+    clamp_int(&c->scheduler.l3_interval_sec, 1, 86400, d.scheduler.l3_interval_sec, "collection.l3.interval");
+    clamp_int(&c->scheduler.hysteresis_sec,   0, 86400, d.scheduler.hysteresis_sec,   "collection.l2.hysteresis");
+    clamp_int(&c->scheduler.grace_period_sec, 0, 86400, d.scheduler.grace_period_sec, "collection.l3.grace_period");
+    clamp_int(&c->hot_buffer_capacity,   1, 100000, d.hot_buffer_capacity,   "collection.hot_buffer.capacity");
+    clamp_int(&c->hot_buffer_warm_grace, 0, 86400,  d.hot_buffer_warm_grace, "collection.hot_buffer.warm_grace");
+    clamp_int(&c->tier1_max_mb, 1, 100000, d.tier1_max_mb, "storage.tier1_max_mb");
+    clamp_int(&c->tier2_max_mb, 1, 100000, d.tier2_max_mb, "storage.tier2_max_mb");
+    clamp_int(&c->tier3_max_mb, 1, 100000, d.tier3_max_mb, "storage.tier3_max_mb");
 }
 
 // --- Section walkers --------------------------------------------------------
@@ -328,6 +355,7 @@ int parse_document(yaml_parser_t* parser, Config* out) {
     }
 
     yaml_document_delete(&doc);
+    clamp_numbers(out);
     return 0;
 }
 

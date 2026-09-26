@@ -47,6 +47,22 @@ if(STATIC_LINK)
                    "pass -DSTATIC_LINK=OFF to link against shared libraries")
 endif()
 
+# AddressSanitizer + UndefinedBehaviorSanitizer, for CI and debugging. Any
+# report aborts the process (-fno-sanitize-recover), so a test that hits
+# UB or a memory error fails instead of printing and passing. vptr is left
+# out because the project builds with -fno-rtti, which it needs.
+option(ENABLE_SANITIZERS "Build with ASan + UBSan (needs STATIC_LINK=OFF)" OFF)
+if(ENABLE_SANITIZERS)
+    if(STATIC_LINK)
+        message(FATAL_ERROR "ENABLE_SANITIZERS needs -DSTATIC_LINK=OFF: "
+                            "ASan can't be linked into a static binary")
+    endif()
+    add_compile_options(-fsanitize=address,undefined -fno-sanitize=vptr
+                        -fno-sanitize-recover=all -fno-omit-frame-pointer -g)
+    add_link_options(-fsanitize=address,undefined)
+    message(STATUS "Sanitizers: address, undefined")
+endif()
+
 # Find dependencies
 find_package(PkgConfig QUIET)
 

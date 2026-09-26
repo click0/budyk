@@ -5,7 +5,7 @@
 namespace budyk {
 
 HotBuffer::HotBuffer(size_t capacity)
-    : capacity_(capacity), head_(0), count_(0) {
+    : capacity_(capacity > 0 ? capacity : 1), head_(0), count_(0) {
     ring_ = new Sample[capacity_];
 }
 

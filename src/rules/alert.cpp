@@ -72,7 +72,7 @@ std::string url_encode(const std::string& s) {
 
 bool write_tmp(const std::string& body, char* path_out, size_t cap) {
     if (cap < 32) return false;
-    std::strcpy(path_out, "/tmp/budyk_alert_XXXXXX");
+    std::snprintf(path_out, cap, "%s", "/tmp/budyk_alert_XXXXXX");
     int fd = ::mkstemp(path_out);
     if (fd < 0) return false;
     const ssize_t n = ::write(fd, body.data(), body.size());

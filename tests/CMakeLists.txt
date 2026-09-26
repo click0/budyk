@@ -1,6 +1,12 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # TODO: add cmocka (C) and/or gtest (C++) tests
 
+# The tests are plain assert()s, many of which call the code under test.
+# A Release / RelWithDebInfo build defines NDEBUG, which would compile
+# those calls away and let every test pass without running anything.
+# Keep assert() live in the tests whatever the build type.
+add_compile_options(-UNDEBUG)
+
 add_executable(test_codec unit/test_codec.cpp)
 target_link_libraries(test_codec PRIVATE budyk_core)
 target_include_directories(test_codec PRIVATE ${CMAKE_SOURCE_DIR}/src)

@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# clang-tidy settings used by CI (.github/workflows/linux-build.yml).
+# Bug-finding checks only; style is left to review. Disabled:
+#   easily-swappable-parameters   flags most multi-int signatures
+#   narrowing-conversions,
+#   implicit-widening-of-mult...  sizes/counters are converted on purpose
+#                                 throughout the codecs and collectors
+#   assignment-in-if-condition    `if ((v = f()) != nullptr)` is the
+#                                 config parser's idiom
+#   DeprecatedOrUnsafeBufferHandling
+#                                 asks for C11 Annex K (fscanf_s, ...),
+#                                 which neither glibc nor FreeBSD libc has
+Checks: >
+  -*,
+  bugprone-*,
+  clang-analyzer-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions,
+  -bugprone-implicit-widening-of-multiplication-result,
+  -bugprone-assignment-in-if-condition,
+  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling
+WarningsAsErrors: '*'
+HeaderFilterRegex: 'src/.*'
