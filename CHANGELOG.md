@@ -170,6 +170,23 @@ metrics are now collected; they were placeholders before.
   static binary); and static ncurses gets `libtinfo` appended. Result: a
   fully static `budyk`, ~3.0 MB stripped on amd64. `STATIC_LINK=OFF` is
   unchanged.
+- **Opening the dashboard never switched to L3.**
+  `Scheduler::client_connected()` existed but nothing called it, so
+  the client count stayed 0. The level also only changed after the
+  collection loop woke from `nanosleep`, which at L1 takes up to
+  5 min. A connected dashboard got one sample per L1/L2 interval
+  instead of 1 Hz, confirmed with a live WebSocket client. Now:
+  - before every tick the loop sets the client count to the open
+    WebSockets plus one for a `/api/samples` poll in the last 5 s
+    (the TUI), through the new `Scheduler::set_client_count()`;
+  - the loop sleeps in `poll()` on a self-pipe, and a new WebSocket
+    client or a newly appearing poller wakes it at once.
+  The first live L3 sample now reaches a new dashboard at once, then
+  1 Hz; spec §5 asks for ≤ 2 s. After the last client leaves, the
+  grace period applies and the level steps back to L1.
+- **SIGHUP is applied immediately.** It used to wait for the current
+  sleep to end, up to 5 min at L1. It now wakes the loop, like
+  SIGTERM / SIGINT.
 - **Rules without a function action sent nothing.** `watch()` stored
   `action = "alert"` / `"log"` and the default (no `action`) as a tag,
   but nothing acted on the tag. `action = alert` (the form in the
@@ -217,7 +234,12 @@ metrics are now collected; they were placeholders before.
   tarballs. The old README's rule example used `action = alert` and a
   `severity` field. That form sends nothing: the action is called with
   no arguments, and `watch()` ignores `severity`. The example now uses
-  a working form. See Fixed below for the engine side.
+  a working form. See Fixed below for the engine side. A "How it works"
+  section (both languages) shows the data path: one daemon per server
+  serves its own dashboard, with no central collector. It also shows
+  when each level applies, how the dashboard and TUI get samples, and
+  that each level has its own ring file (tier 1 = L3 samples, 2 = L2,
+  3 = L1; these are not aggregates).
 
 [0.5.0]: https://github.com/click0/budyk/releases/tag/v0.5.0
 

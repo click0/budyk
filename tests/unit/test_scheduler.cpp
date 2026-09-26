@@ -132,6 +132,26 @@ int main() {
         assert(sch.tick(hot) == Level::L3);
     }
 
+    // 8. set_client_count() — what the serve loop calls before every tick
+    //    with the clients it can see. It replaces the count (no drift),
+    //    drives L3, and dropping to 0 goes through grace back to L1.
+    //    Negative input clamps to 0.
+    {
+        Scheduler sch(cfg);
+        assert(sch.tick(at(0)) == Level::L1);
+        sch.set_client_count(2);
+        assert(sch.client_count() == 2);
+        assert(sch.tick(at(1)) == Level::L3);
+        sch.set_client_count(1);
+        assert(sch.client_count() == 1);
+        assert(sch.tick(at(2)) == Level::L3);
+        sch.set_client_count(0);
+        assert(sch.tick(at(30))  == Level::L3);   // within 60 s grace
+        assert(sch.tick(at(100)) == Level::L1);
+        sch.set_client_count(-3);
+        assert(sch.client_count() == 0);
+    }
+
     std::printf("test_scheduler: PASS\n");
     return 0;
 }
