@@ -656,18 +656,26 @@ int cmd_serve(int argc, char* argv[]) {
             const bool   is_yaml =
                 (plen >= 5 && std::strcmp(cfg.rules_path + plen - 5, ".yaml") == 0) ||
                 (plen >= 4 && std::strcmp(cfg.rules_path + plen - 4, ".yml")  == 0);
-            int rc;
+            int         rc  = 0;
+            std::string err;
             if (is_yaml) {
                 std::string lua_src;
-                rc = budyk::yaml_rules_to_lua_file(cfg.rules_path, &lua_src);
-                if (rc == 0) rc = engine.load_string(lua_src.c_str());
-            } else {
-                rc = engine.load_file(cfg.rules_path);
+                if (budyk::yaml_rules_to_lua_file(cfg.rules_path, &lua_src) != 0) {
+                    rc  = -1;
+                    err = "YAML parse error";
+                } else if ((rc = engine.load_string(lua_src.c_str())) != 0) {
+                    err = engine.last_error();
+                }
+            } else if ((rc = engine.load_file(cfg.rules_path)) != 0) {
+                err = engine.last_error();
             }
             if (rc != 0) {
+                // Loading stops at the first error; rules defined above it
+                // stay registered, so report how many are actually active.
                 std::fprintf(stderr,
-                    "budyk serve: rules file '%s' failed to load (rc=%d) — continuing without rules\n",
-                    cfg.rules_path, rc);
+                    "budyk serve: rules file '%s' failed to load: %s "
+                    "(%d rule(s) before the error remain active)\n",
+                    cfg.rules_path, err.c_str(), engine.rule_count());
             }
         }
         // Restore per-rule cooldown / fire counters. Must come after

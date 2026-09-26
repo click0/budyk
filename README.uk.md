@@ -144,17 +144,34 @@ web:
 ```lua
 watch("high_cpu", {
     when      = function() return cpu.total_percent > 90 end,
-    for_ticks = 5,       -- скільки тіків поспіль має виконуватись умова (за замовч. 1)
-    cooldown  = 60,      -- скільки тіків мовчати після спрацювання (за замовч. = for_ticks)
-    action    = function()
-        alert("high_cpu", "warning",
-              string.format("CPU at %.0f%%", cpu.total_percent))
+    for_ticks = 5,           -- скільки тіків поспіль має виконуватись умова (за замовч. 1)
+    cooldown  = 60,          -- скільки тіків мовчати після спрацювання (за замовч. 0)
+    severity  = "warning",   -- "info" | "warning" (за замовч.) | "critical"
+    message   = "CPU above 90%",   -- за замовч. — ім'я правила
+})
+
+-- Дія-функція — для всього, що складніше за фіксоване повідомлення:
+watch("swap_under_load", {
+    when   = function() return swap.used_percent > 80 and load.avg_1m > cpu.count end,
+    action = function()
+        alert("swap_under_load", "critical",
+              string.format("swap %.0f%% used, load %.2f", swap.used_percent, load.avg_1m))
     end,
 })
 ```
 
-`when` обов'язкове. `action` має бути **функцією**: правило без неї лише
-рахує спрацювання і нічого не робить.
+`when` обов'язкове. `action` може бути:
+
+| `action` | При спрацюванні |
+|----------|-----------------|
+| `"alert"` (за замовч.) | Надсилає `message` з важливістю `severity` в усі канали сповіщень. |
+| `"log"` | Пише `[budyk] <message>` у журнал демона. |
+| функція | Викликає її без аргументів. `severity` і `message` не використовуються. |
+
+Будь-що інше, зокрема таблиця дій, — помилка: завантаження зупиняється
+на цьому правилі, а в журналі демона видно файл, рядок та ім'я правила.
+Правила, описані вище за нього, лишаються активними. Більше прикладів — у
+[`rules/examples.lua`](rules/examples.lua).
 
 Функції, доступні в правилах:
 

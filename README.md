@@ -137,17 +137,34 @@ cooldowns carry over the reload.
 ```lua
 watch("high_cpu", {
     when      = function() return cpu.total_percent > 90 end,
-    for_ticks = 5,       -- consecutive ticks the condition must hold (default 1)
-    cooldown  = 60,      -- ticks to stay quiet after firing (default = for_ticks)
-    action    = function()
-        alert("high_cpu", "warning",
-              string.format("CPU at %.0f%%", cpu.total_percent))
+    for_ticks = 5,           -- consecutive ticks the condition must hold (default 1)
+    cooldown  = 60,          -- ticks to stay quiet after firing (default 0)
+    severity  = "warning",   -- "info" | "warning" (default) | "critical"
+    message   = "CPU above 90%",   -- default: the rule name
+})
+
+-- A function action, for anything beyond a fixed message:
+watch("swap_under_load", {
+    when   = function() return swap.used_percent > 80 and load.avg_1m > cpu.count end,
+    action = function()
+        alert("swap_under_load", "critical",
+              string.format("swap %.0f%% used, load %.2f", swap.used_percent, load.avg_1m))
     end,
 })
 ```
 
-`when` is required. `action` has to be a **function**: a rule without
-one counts its firings but does nothing.
+`when` is required. `action` is one of:
+
+| `action` | On fire |
+|----------|---------|
+| `"alert"` (default) | Sends `message` with `severity` to every alert channel. |
+| `"log"` | Writes `[budyk] <message>` to the daemon log. |
+| a function | Calls it with no arguments. `severity` and `message` aren't used. |
+
+Anything else, including a table of actions, is an error: loading stops
+at that rule, and the daemon log shows the file, line and rule name.
+Rules defined above it stay active.
+[`rules/examples.lua`](rules/examples.lua) has more examples.
 
 Functions available to rules:
 

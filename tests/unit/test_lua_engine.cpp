@@ -545,6 +545,102 @@ int main() {
         e.shutdown();
     }
 
+    // 25. Default action (no `action`) sends alert(name, severity, message)
+    //     using the rule's severity / message. Before this was fixed, the
+    //     "alert" tag was stored but never acted on: rules fired, nothing
+    //     was sent.
+    {
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        assert(e.load_string(
+            "watch('hot', {\n"
+            "  when     = function() return cpu.total_percent > 90 end,\n"
+            "  severity = 'critical',\n"
+            "  message  = 'CPU pegged',\n"
+            "})\n") == 0);
+        assert(e.eval_tick(mk(95, 50, 1, 0)) == 1);
+        assert(e.alerts().dispatch_calls() == 1);
+        assert(e.alerts().last_event().severity == AlertSeverity::Critical);
+        assert(e.alerts().last_event().rule     == "hot");
+        assert(e.alerts().last_event().message  == "CPU pegged");
+        // Not firing → nothing sent.
+        assert(e.eval_tick(mk(10, 50, 1, 0)) == 0);
+        assert(e.alerts().dispatch_calls() == 1);
+        e.shutdown();
+    }
+
+    // 26. `action = alert` (the builtin itself, the form the shipped
+    //     examples and the old README used) means the "alert" action.
+    //     Previously alert() was called with no arguments, raised inside
+    //     pcall, and nothing was sent. Message defaults to the rule name;
+    //     severity defaults to warning.
+    {
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        assert(e.load_string(
+            "watch('bare', { when = function() return true end,"
+            "                action = alert })\n") == 0);
+        assert(e.eval_tick(mk(0, 50, 0, 0)) == 1);
+        assert(e.alerts().dispatch_calls() == 1);
+        assert(e.alerts().last_event().severity == AlertSeverity::Warning);
+        assert(e.alerts().last_event().message  == "bare");
+        e.shutdown();
+    }
+
+    // 27. action = "log" fires without dispatching an alert; a function
+    //     action is still called and does its own thing.
+    {
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        assert(e.load_string(
+            "hits = 0\n"
+            "watch('l', { when = function() return true end, action = 'log' })\n"
+            "watch('f', { when = function() return true end,\n"
+            "             action = function() hits = hits + 1 end })\n") == 0);
+        assert(e.eval_tick(mk(0, 50, 0, 0)) == 2);
+        assert(e.alerts().dispatch_calls() == 0);
+        assert(e.load_string("assert(hits == 1)") == 0);
+        e.shutdown();
+    }
+
+    // 28. Invalid rules fail at load time instead of silently doing
+    //     nothing: an action table (the old `{ alert, escalate }` form),
+    //     an unknown action string, an unknown severity, a non-string
+    //     message. None of them registers a rule.
+    {
+        const char* bad[] = {
+            "watch('t', { when = function() return true end, action = { alert } })",
+            "watch('t', { when = function() return true end, action = 'page' })",
+            "watch('t', { when = function() return true end, severity = 'high' })",
+            "watch('t', { when = function() return true end, message = 42 })",
+        };
+        for (const char* code : bad) {
+            LuaEngine e;
+            assert(e.init(false) == 0);
+            assert(e.load_string(code) != 0);
+            assert(e.rule_count() == 0);
+            // The error text is kept so the daemon can log it.
+            assert(std::strstr(e.last_error().c_str(), "watch(t):") != nullptr);
+            e.shutdown();
+        }
+    }
+
+    // 29. severity is case-insensitive; cooldown defaults to 0, so a
+    //     for_ticks = 1 rule fires on every hot tick.
+    {
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        assert(e.load_string(
+            "watch('i', { when = function() return true end,"
+            "             severity = 'INFO' })\n") == 0);
+        assert(e.rules()[0].cooldown_ticks == 0);
+        assert(e.eval_tick(mk(0, 50, 0, 0)) == 1);
+        assert(e.eval_tick(mk(0, 50, 0, 0)) == 1);
+        assert(e.alerts().dispatch_calls() == 2);
+        assert(e.alerts().last_event().severity == AlertSeverity::Info);
+        e.shutdown();
+    }
+
     std::printf("test_lua_engine: PASS\n");
     return 0;
 }

@@ -170,6 +170,28 @@ metrics are now collected; they were placeholders before.
   static binary); and static ncurses gets `libtinfo` appended. Result: a
   fully static `budyk`, ~3.0 MB stripped on amd64. `STATIC_LINK=OFF` is
   unchanged.
+- **Rules without a function action sent nothing.** `watch()` stored
+  `action = "alert"` / `"log"` and the default (no `action`) as a tag,
+  but nothing acted on the tag. `action = alert` (the form in the
+  shipped examples and the old README) called `alert()` with no
+  arguments, which raised inside `pcall`. `severity` was never read.
+  In all these cases the rule fired and was counted, and no
+  notification went out. Now:
+  - `"alert"` and the default send `message` (default: the rule name)
+    with `severity` (default: warning) to every channel;
+  - `"log"` writes `[budyk] <message>`;
+  - `action = alert` means `"alert"`.
+  An action table, an unknown action or severity, or a non-string
+  message is now a load error instead of a silent no-op.
+  `rules/examples.lua` and `rules/freebsd-defaults.lua`, which used
+  `action = { alert, escalate }`, are rewritten and load cleanly.
+- **Rule load errors are logged with their cause.** The daemon used to
+  print only `failed to load (rc=-2)`. It now prints the Lua error
+  (file, line, rule name) and how many rules above the error are still
+  active. Before, it said "continuing without rules" even when some
+  rules had loaded.
+- **`cooldown` default documented correctly.** It is 0. The comment in
+  `watch()` said it defaulted to `for_ticks`.
 - **Missing Lua 5.4 now fails at configure time** with an install hint,
   instead of printing "will use vendored copy from third_party/" (no such
   copy exists) and failing later on a missing `lauxlib.h`.
@@ -195,7 +217,7 @@ metrics are now collected; they were placeholders before.
   tarballs. The old README's rule example used `action = alert` and a
   `severity` field. That form sends nothing: the action is called with
   no arguments, and `watch()` ignores `severity`. The example now uses
-  a function action that calls `alert(name, severity, message)`.
+  a working form. See Fixed below for the engine side.
 
 [0.5.0]: https://github.com/click0/budyk/releases/tag/v0.5.0
 
