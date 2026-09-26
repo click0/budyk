@@ -18,19 +18,79 @@ looking. budyk switches between three collection levels:
 | Level | Cadence | When |
 |-------|---------|------|
 | **L1 Heartbeat** | every 5 min | nobody is watching and the system is healthy |
-| **L2 Watchful** | 15–60 s | a threshold (load, CPU, swap) is crossed |
+| **L2 Watchful** | 30 s | a threshold (load, CPU, swap) is crossed |
 | **L3 Active** | 1 Hz | a dashboard or TUI client is connected |
 
-It escalates the moment an anomaly shows up or someone opens the
-dashboard, and steps back down after a hysteresis period. On a quiet
-host budyk mostly sleeps.
+Opening the dashboard switches to L3 at once. A crossed threshold is
+seen at the next tick and switches to L2. Each level steps back down
+after a hold period: 60 s after the last client leaves, 5 min after the
+threshold clears. All intervals and thresholds are set in the config.
+On a quiet host budyk mostly sleeps.
+
+## How it works
+
+budyk has no central server. Each server runs its own `budyk serve`,
+and that one process collects the metrics, stores them, evaluates the
+rules and serves its own dashboard. A browser or `budyk tui` connects
+straight to it.
+
+```
+budyk serve (one process per server)
+│
+│  collection loop, one pass per tick; the level sets the gap (defaults):
+│  L1 5 min · L2 30 s · L3 1 s
+│
+│  collectors ─► sample ─► scheduler picks the level ─┬─► ring file for that level ─► GET /api/range
+│  (sysctl,                                           ├─► hot buffer (RAM, 300)    ─► GET /api/samples
+│   /proc)                                            ├─► rule engine              ─► alert channels
+│                                                     └─► WebSocket push           ─► open dashboards
+│
+└─ HTTP server (own thread, :8080): dashboard page, REST API, /api/ws
+     a new WebSocket client or TUI poll wakes the loop ─► L3 immediately
+```
+
+On each tick the collection loop:
+
+1. reads the kernel counters (`sysctl`, devstat and kvm on FreeBSD,
+   `/proc` and `/sys` on Linux) into one sample;
+2. asks the scheduler for the level: **L3** while a dashboard or TUI is
+   connected and for `grace_period` (60 s) after it leaves, **L2** while
+   a load, CPU or swap threshold is crossed and for `hysteresis` (5 min)
+   after, **L1** otherwise;
+3. appends the sample to the ring file for that level (tier 1 for L3,
+   2 for L2, 3 for L1), each record tagged with its level;
+4. keeps the last 300 samples in an in-memory hot buffer;
+5. evaluates the rules and sends any alerts;
+6. pushes the sample to every open WebSocket;
+7. sleeps until the next tick.
+
+**How the dashboard gets its data.** The daemon serves the dashboard
+page itself. The page:
+
+- calls `/api/samples` first to check the session, and shows the login
+  form if the answer is 401;
+- opens a WebSocket at `/api/ws`. The first frame is the hot-buffer
+  history, then one frame arrives per tick;
+- loads the history chart from `/api/range` and refreshes it every
+  minute.
+
+Opening the WebSocket wakes the loop, so the level moves to L3 and
+samples arrive every second from the first frame on. When the last
+dashboard closes, the daemon stays at L3 for the grace period and then
+steps back down. `budyk tui` has no WebSocket: it polls `/api/samples`
+every second, and a poll counts as a connected client.
+
+**Several servers.** Run budyk on each one and open each server's own
+dashboard, for example through an SSH tunnel or a reverse proxy. A
+single dashboard that combines servers isn't part of budyk yet.
 
 ## Features
 
 - **Metrics:** CPU, memory, swap, load average, disk I/O, network,
   processes, entropy, temperature, uptime, and budyk's own CPU/RSS.
-- **Tiered storage:** raw 1 Hz samples plus 1-minute and 5-minute
-  aggregates in size-capped ring files, with no database.
+- **Ring-file storage:** one size-capped file per level, so 1 Hz detail
+  from busy or watched periods sits next to sparse 5-minute heartbeats.
+  No database.
 - **Web dashboard:** live charts over WebSocket, plus a history view
   over the stored tiers. Optional password login (Argon2id).
 - **Terminal UI:** `budyk tui`.
@@ -246,7 +306,7 @@ needs.
 | `POST` | `/api/auth/login` | no | body `{"password": "..."}`; sets the `budyk_session` cookie |
 | `POST` | `/api/auth/logout` | no | clears the session |
 | `GET` | `/api/samples` | yes | recent samples from the in-memory buffer |
-| `GET` | `/api/range` | yes | stored history: `since`, `until` (nanoseconds since the epoch), `tier` (`1` raw, `2` 1-min, `3` 5-min), `limit` (up to 5000) |
+| `GET` | `/api/range` | yes | stored history: `since`, `until` (nanoseconds since the epoch), `tier` (`1` = L3 samples, `2` = L2, `3` = L1), `limit` (up to 5000) |
 | `GET` | `/api/ws` | yes | WebSocket live stream |
 
 "Auth" applies only when `web.auth.enabled` is `true`.
