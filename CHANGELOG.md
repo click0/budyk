@@ -146,6 +146,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `smtp_message` (full RFC 5322 blob with `Date:` / `MIME-Version:` /
   `Content-Type:`), `twilio_form` (URL-encoded `From/To/Body`).
 
+### Fixed
+
+- **Default build (`STATIC_LINK=ON`) failed to link on Linux.** `-static`
+  was passed, but every dependency (Lua, Argon2, libyaml, ncurses)
+  resolved to its shared object, so the link died with "attempted static
+  link of dynamic object". With `STATIC_LINK=ON`, library lookup is now
+  restricted to static archives; `-static` applies to every executable,
+  tests included (glibc's `libm.a`, pulled in via Lua, only links into a
+  static binary); and static ncurses gets `libtinfo` appended. Result: a
+  fully static `budyk`, ~3.0 MB stripped on amd64. `STATIC_LINK=OFF` is
+  unchanged.
+- **Missing Lua 5.4 now fails at configure time** with an install hint,
+  instead of printing "will use vendored copy from third_party/" (no such
+  copy exists) and failing later on a missing `lauxlib.h`.
+
+### CI
+
+- Linux workflow builds both link modes. The `static` leg configures
+  with no `-DSTATIC_LINK` flag, so it tests the actual default, and
+  asserts the binary is statically linked. Previously every job passed
+  `-DSTATIC_LINK=OFF`, so the default was never built.
+- **Release binaries are now fully static** on Linux and FreeBSD
+  (`-DSTATIC_LINK=ON` in all four release builds, previously `OFF`).
+  Each build fails unless `file` reports "statically linked", so a
+  dynamic binary can't be published.
+
 ## [0.4.0] — 2026-05-07
 
 Closes the entire spec §3.3.3 metric set — the `Sample` struct now

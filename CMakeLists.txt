@@ -25,14 +25,37 @@ option(ENABLE_EXEC "Enable exec() action in Lua rules (security-sensitive)" OFF)
 option(BUILD_TESTS "Build test suite" ON)
 option(STATIC_LINK "Static linking for single-binary deployment" ON)
 
+# -static on the final link only works if every dependency resolves to a
+# static archive. By default find_library / find_package prefer the shared
+# object (liblua5.4.so, libargon2.so, ...), and the link dies with
+# "attempted static link of dynamic object". Restrict the search to .a
+# before any find_* runs; the setting is inherited by src/ and tests/.
+#
+# -static applies to every executable, tests included: once dependencies
+# are archives, a dynamic test binary can't take them (glibc's libm.a,
+# pulled in via LUA_LIBRARIES, only links into a static executable), and
+# the tests then exercise the same link mode that ships.
+if(STATIC_LINK)
+    set(CMAKE_FIND_LIBRARY_SUFFIXES ".a")
+    add_link_options(-static)
+    # Static ncurses on Debian/Ubuntu (and FreeBSD) is split into
+    # libncurses + libtinfo; the shared lib pulls tinfo in via DT_NEEDED,
+    # the archive does not. With NEED_NCURSES, FindCurses probes the
+    # ncurses archive for cbreak() and appends libtinfo when it's missing.
+    set(CURSES_NEED_NCURSES TRUE)
+    message(STATUS "STATIC_LINK=ON: resolving dependencies to static archives (.a) only; "
+                   "pass -DSTATIC_LINK=OFF to link against shared libraries")
+endif()
+
 # Find dependencies
 find_package(PkgConfig QUIET)
 
-# Lua 5.4 — rule engine
+# Lua 5.4 — rule engine. No vendored copy is shipped, so a missing Lua must
+# fail here rather than surface later as a missing lauxlib.h.
 find_package(Lua 5.4 QUIET)
 if(NOT LUA_FOUND)
-    message(STATUS "Lua 5.4 not found, will use vendored copy from third_party/")
-    # TODO: add_subdirectory(third_party/lua)
+    message(FATAL_ERROR "Lua 5.4 not found (install liblua5.4-dev on Debian/Ubuntu, "
+                        "lua54 on FreeBSD; with STATIC_LINK=ON its static archive is required)")
 endif()
 
 # Sources

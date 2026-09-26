@@ -27,7 +27,15 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    name: Linux build + ctest
+    strategy:
+      fail-fast: false
+      matrix:
+        # static — the project default (STATIC_LINK=ON): configured with no
+        #          -DSTATIC_LINK flag so the real default is what gets built.
+        #          Nothing else in CI builds it, which is how it once rotted.
+        # shared — STATIC_LINK=OFF, the mode the FreeBSD and release jobs use.
+        link: [static, shared]
+    name: Linux build + ctest (${{ matrix.link }})
     steps:
       - uses: actions/checkout@v4
 
@@ -44,13 +52,25 @@ jobs:
       - name: Configure
         run: |
           set -ex
+          LINK_FLAGS=""
+          if [ "${{ matrix.link }}" = "shared" ]; then
+            LINK_FLAGS="-DSTATIC_LINK=OFF"
+          fi
           cmake -B build \
             -DBUDYK_PLATFORM=linux \
-            -DSTATIC_LINK=OFF \
+            $LINK_FLAGS \
             -DBUILD_TESTS=ON
 
       - name: Build
         run: cmake --build build -j"$(nproc)"
+
+      - name: Check binary link mode
+        run: |
+          set -ex
+          file build/src/budyk
+          if [ "${{ matrix.link }}" = "static" ]; then
+            file build/src/budyk | grep -q "statically linked"
+          fi
 
       - name: Run ctest
         run: ctest --test-dir build --output-on-failure
@@ -59,7 +79,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: ctest-logs-linux
+          name: ctest-logs-linux-${{ matrix.link }}
           path: build/Testing/
           if-no-files-found: ignore
           retention-days: 7
