@@ -223,6 +223,9 @@ metrics are now collected; they were placeholders before.
   (`-DSTATIC_LINK=ON` in all four release builds, previously `OFF`).
   Each build fails unless `file` reports "statically linked", so a
   dynamic binary can't be published.
+- **Release notes are the version's CHANGELOG section**, not the whole
+  file. A tag whose version has no `## [X.Y.Z]` section fails the
+  release instead of publishing without notes.
 
 ### Documentation
 
