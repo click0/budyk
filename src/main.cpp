@@ -365,15 +365,6 @@ void install_signal_handlers() {
     ::sigaction(SIGPIPE, &ign, nullptr);
 }
 
-int level_interval_sec(budyk::Level lv, const budyk::SchedulerConfig& sc) {
-    switch (lv) {
-        case budyk::Level::L1: return sc.l1_interval_sec;
-        case budyk::Level::L2: return sc.l2_interval_sec;
-        case budyk::Level::L3: return sc.l3_interval_sec;
-    }
-    return sc.l3_interval_sec;
-}
-
 // Collect one tick into `s`. Stateful collectors (CPU / disk / net) keep
 // their delta context across ticks via the budyk_*_ctx_c args.
 void collect_one(budyk::Sample* s,
@@ -521,20 +512,36 @@ uint64_t query_u64(const std::string& query, const char* key, uint64_t fallback)
     return fallback;
 }
 
-// Sleep for at most `seconds`, returning early when:
+// Raw value of `key` in a query string ("" if absent). No percent-decoding:
+// callers only look up level names, which are [A-Za-z0-9_-].
+std::string query_str(const std::string& query, const char* key) {
+    const std::string needle = std::string(key) + "=";
+    size_t p = 0;
+    while (p < query.size()) {
+        size_t amp = query.find('&', p);
+        if (amp == std::string::npos) amp = query.size();
+        if (query.compare(p, needle.size(), needle) == 0) {
+            return query.substr(p + needle.size(), amp - p - needle.size());
+        }
+        p = amp + 1;
+    }
+    return std::string();
+}
+
+// Sleep for at most `ms` milliseconds, returning early when:
 //   * a signal sets g_stop (shutdown) or g_reload (SIGHUP; the reload is
 //     applied at the top of the next tick, so it no longer waits out an
 //     L1 sleep);
 //   * wake_collection_loop() is called (a client connected).
 // poll() is interrupted by signals because the handlers are installed
-// without SA_RESTART. Safe to call with seconds <= 0 (no-op).
-void interruptible_sleep(int seconds) {
-    if (seconds <= 0 || g_stop || g_reload) return;
+// without SA_RESTART. Safe to call with ms <= 0 (no-op).
+void interruptible_sleep(int ms) {
+    if (ms <= 0 || g_stop || g_reload) return;
     struct timespec ts{};
     ::clock_gettime(CLOCK_MONOTONIC, &ts);
     const int64_t deadline_ms = static_cast<int64_t>(ts.tv_sec) * 1000 +
                                 ts.tv_nsec / 1000000 +
-                                static_cast<int64_t>(seconds) * 1000;
+                                static_cast<int64_t>(ms);
     for (;;) {
         ::clock_gettime(CLOCK_MONOTONIC, &ts);
         const int64_t now_ms = static_cast<int64_t>(ts.tv_sec) * 1000 +
@@ -658,11 +665,26 @@ int cmd_serve(int argc, char* argv[]) {
     }
 
     budyk::TierManager tm;
+    std::vector<budyk::LevelRingSpec> level_rings;
+    for (const auto& lv : cfg.scheduler.custom_levels) {
+        level_rings.push_back(budyk::LevelRingSpec{lv.id, lv.name, lv.storage_mb});
+    }
     if (tm.init(cfg.data_dir,
-                cfg.tier1_max_mb, cfg.tier2_max_mb, cfg.tier3_max_mb) != 0) {
+                cfg.tier1_max_mb, cfg.tier2_max_mb, cfg.tier3_max_mb,
+                level_rings) != 0) {
+        // A ring whose size no longer matches its storage_mb / tierN_max_mb
+        // won't reopen: move the file aside or restore the old size.
         std::fprintf(stderr,
-            "budyk serve: TierManager.init('%s') failed\n", cfg.data_dir);
+            "budyk serve: TierManager.init('%s') failed "
+            "(a ring file may not match its configured size)\n", cfg.data_dir);
         return 1;
+    }
+    for (const auto& lv : cfg.scheduler.custom_levels) {
+        std::fprintf(stderr,
+            "budyk serve: level '%s' (id %u): every %d ms, priority %d%s%s\n",
+            lv.name.c_str(), static_cast<unsigned>(lv.id), lv.interval_ms,
+            lv.priority, lv.when.empty() ? "" : ", when: ",
+            lv.when.c_str());
     }
 
     budyk::HotBuffer hot(static_cast<size_t>(cfg.hot_buffer_capacity));
@@ -695,6 +717,22 @@ int cmd_serve(int argc, char* argv[]) {
             engine.set_exec_allowlist(cfg.rules_exec_allow);
         }
         engine.set_freeze_enabled(cfg.rules_enable_freeze);
+        {
+            // Names escalate() accepts, and the custom levels' `when`
+            // conditions. Re-applied on reload: shutdown() drops both.
+            std::vector<std::string> names = {"L1", "L2", "L3"};
+            for (const auto& lv : cfg.scheduler.custom_levels) {
+                names.push_back(lv.name);
+                if (lv.when.empty()) continue;
+                if (engine.add_level_condition(lv.id, lv.when) != 0) {
+                    std::fprintf(stderr,
+                        "budyk serve: level '%s': 'when' doesn't compile: %s; "
+                        "the level can still be entered with escalate()\n",
+                        lv.name.c_str(), engine.last_error().c_str());
+                }
+            }
+            engine.set_level_names(std::move(names));
+        }
         if (!cfg.rules_freeze_allow.empty()) {
             engine.set_freeze_allowlist(cfg.rules_freeze_allow);
         }
@@ -820,7 +858,9 @@ int cmd_serve(int argc, char* argv[]) {
         return !tok.empty() && sessions.verify(tok);
     };
 
-    auto router = [&cfg, &hot, &hot_mtx, &tm, &sessions, &ws, &authed](const budyk::HttpRequest& req) {
+    // The HTTP thread only reads sched's level table (names, intervals,
+    // priorities), which is fixed at construction, never its live state.
+    auto router = [&cfg, &hot, &hot_mtx, &tm, &sessions, &ws, &authed, &sched](const budyk::HttpRequest& req) {
         // Static SPA — served at /, /index.html and /budyk for the
         // browser-friendly entry. Always public; the JS itself does
         // the auth-probe + login round-trip.
@@ -939,10 +979,28 @@ int cmd_serve(int argc, char* argv[]) {
                 uint64_t limit       = query_u64(rquery, "limit", kMaxLimit);
                 if (tier < 1 || tier > 3) tier = 1;
                 if (limit == 0 || limit > kMaxLimit) limit = kMaxLimit;
+                // level=<name> (L1..L3 or a custom level) takes precedence
+                // over tier and is the only way to read a custom level;
+                // level=all merges every ring (see TierManager::query_all).
+                const std::string level_name = query_str(rquery, "level");
 
                 std::vector<budyk::Sample> out;
-                const int n = tm.query(static_cast<int>(tier), since, until,
+                int n = -1;
+                if (level_name == "all") {
+                    n = tm.query_all(since, until, static_cast<size_t>(limit), &out);
+                } else if (!level_name.empty()) {
+                    budyk::Level lv;
+                    if (!sched.level_by_name(level_name, &lv)) {
+                        return budyk::HttpResponse{
+                            404, "application/json",
+                            "{\"error\":\"unknown level\"}\n", {}, {}};
+                    }
+                    n = tm.query_level(lv, since, until,
                                        static_cast<size_t>(limit), &out);
+                } else {
+                    n = tm.query(static_cast<int>(tier), since, until,
+                                 static_cast<size_t>(limit), &out);
+                }
                 if (n < 0) {
                     return budyk::HttpResponse{
                         400, "application/json",
@@ -954,6 +1012,39 @@ int cmd_serve(int argc, char* argv[]) {
                 r.body         = budyk::samples_to_json(out.data(), out.size());
                 return r;
             }
+        }
+
+        // Level table, so clients can name the `level` id carried by every
+        // sample: [{"id","name","interval_ms","priority","builtin"}, ...].
+        if (req.method == "GET" && req.path == "/api/levels") {
+            if (!authed(req)) {
+                return budyk::HttpResponse{
+                    401, "application/json", "{\"error\":\"unauthenticated\"}\n", {}, {}};
+            }
+            std::string body = "[";
+            auto add = [&](budyk::Level lv, bool builtin) {
+                if (body.size() > 1) body += ",";
+                char buf[256];
+                std::snprintf(buf, sizeof(buf),
+                    "{\"id\":%u,\"name\":\"%s\",\"interval_ms\":%d,"
+                    "\"priority\":%d,\"builtin\":%s}",
+                    static_cast<unsigned>(lv), sched.level_name(lv),
+                    sched.interval_ms(lv), sched.priority(lv),
+                    builtin ? "true" : "false");
+                body += buf;
+            };
+            add(budyk::Level::L1, true);
+            add(budyk::Level::L2, true);
+            add(budyk::Level::L3, true);
+            for (const auto& c : sched.custom_levels()) {
+                add(static_cast<budyk::Level>(c.id), false);
+            }
+            body += "]\n";
+            budyk::HttpResponse r;
+            r.status       = 200;
+            r.content_type = "application/json";
+            r.body         = body;
+            return r;
         }
 
         if (req.path == "/api/ws") {
@@ -1045,6 +1136,14 @@ int cmd_serve(int argc, char* argv[]) {
     // decrement — acceptable, and erring toward "still in cooldown".
     time_t next_state_save = ::time(nullptr) + 60;
 
+    // Hold time per custom level id, and a reusable list of the levels
+    // whose `when` holds on the current sample.
+    uint64_t level_hold_ns[budyk::kMaxLevelId + 1] = {};
+    for (const auto& lv : cfg.scheduler.custom_levels) {
+        level_hold_ns[lv.id] = static_cast<uint64_t>(lv.hold_sec) * 1000000000ULL;
+    }
+    std::vector<uint8_t> level_hits;
+
     while (!g_stop) {
         // SIGHUP latched in the handler — process it at a clean tick
         // boundary so an in-flight eval_tick / store can't race with
@@ -1091,6 +1190,13 @@ int cmd_serve(int argc, char* argv[]) {
             }
             sched.set_client_count(clients);
         }
+        // Custom levels whose `when` holds on this sample stay requested
+        // for their hold time (0 = this tick only).
+        engine.eval_level_conditions(s, &level_hits);
+        for (uint8_t id : level_hits) {
+            sched.request(static_cast<budyk::Level>(id),
+                          s.timestamp_nanos + level_hold_ns[id]);
+        }
         s.level = sched.tick(s);
         tm.store(s);
         {
@@ -1099,6 +1205,10 @@ int cmd_serve(int argc, char* argv[]) {
         }
 
         engine.eval_tick(s);
+        for (const auto& e : engine.take_escalations()) {
+            sched.request_by_name(e.level, now_realtime_ns() +
+                static_cast<uint64_t>(e.seconds) * 1000000000ULL);
+        }
 
         if (cfg.rules_persist_state) {
             const time_t now = ::time(nullptr);
@@ -1112,7 +1222,11 @@ int cmd_serve(int argc, char* argv[]) {
         // Failed sends are evicted by the hub itself.
         ws.broadcast(budyk::samples_to_json(&s, 1));
 
-        interruptible_sleep(level_interval_sec(s.level, cfg.scheduler));
+        // Re-select after the rules ran, so an escalate() takes effect for
+        // this sleep, not only from the next tick. The sample's own level
+        // holds until the next tick re-checks its condition.
+        const budyk::Level next = sched.higher(s.level, sched.select(now_realtime_ns()));
+        interruptible_sleep(sched.interval_ms(next));
     }
 
     std::fprintf(stderr, "budyk serve: shutting down\n");

@@ -6,6 +6,13 @@ namespace budyk {
 
 enum class Level : uint8_t { L1 = 1, L2 = 2, L3 = 3 };
 
+// Built-in levels are 1..3. User-defined levels (collection.levels in the
+// config) get ids kFirstCustomLevel, kFirstCustomLevel + 1, ... in config
+// order. The id is what a stored record's level byte holds.
+constexpr uint8_t kFirstCustomLevel = 4;
+constexpr uint8_t kMaxCustomLevels  = 16;
+constexpr uint8_t kMaxLevelId       = kFirstCustomLevel + kMaxCustomLevels - 1;
+
 struct CpuStats   { double total_percent; uint32_t count; };
 struct MemStats   { uint64_t total; uint64_t available; double available_percent; };
 struct SwapStats  { uint64_t total; uint64_t used; double used_percent; };

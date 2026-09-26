@@ -66,6 +66,7 @@ h1 .host { color: var(--muted); margin-left: .6rem; font-weight: 400; }
 <div id="dash" class="hidden">
   <h1>budyk <span class="host" id="host"></span></h1>
   <div class="panel">
+    <div class="row"><span class="label">Level</span>    <span class="muted" id="level">--</span>       <span class="value">&nbsp;</span></div>
     <div class="row"><span class="label">CPU</span>      <div class="bar"><i id="cpuBar"></i></div>     <span class="value" id="cpu">--</span></div>
     <div class="row"><span class="label">Memory</span>   <div class="bar"><i id="memBar"></i></div>     <span class="value" id="mem">--</span></div>
     <div class="row"><span class="label">Swap</span>     <div class="bar"><i id="swapBar"></i></div>    <span class="value" id="swap">--</span></div>
@@ -117,6 +118,17 @@ function spark(arr) {
 // glance and small enough to never feel laggy.
 const FW_HIST_MAX = 30;
 let fileWatchHist = [];
+// Level table from /api/levels: id -> { name, interval_ms }. Samples carry
+// only the id; custom levels are defined in the daemon's config.
+let levels = {};
+
+function fmtLevel(id) {
+  const lv = levels[id];
+  if (!lv) return id == null ? "--" : "level " + id;
+  const s = lv.interval_ms / 1000;
+  const every = s >= 60 ? (s / 60) + " min" : s + " s";
+  return `${lv.name} (every ${every})`;
+}
 
 function fmtBytes(b) {
   if (b == null) return "--";
@@ -147,6 +159,7 @@ function setBar(id, pct, warnAt = 70, critAt = 90) {
 
 function render(s) {
   if (!s) return;
+  $("level").textContent = fmtLevel(s.level);
   $("cpu").textContent = (s.cpu.total_percent ?? 0).toFixed(1) + "% / " + (s.cpu.count ?? 0) + " cores";
   setBar("cpuBar", s.cpu.total_percent ?? 0);
 
@@ -236,15 +249,13 @@ const METRICS = {
                                          (s.net?.tx_bytes_per_sec ?? 0),
           fmt: v => fmtBytes(v) + "/s" },
 };
-// Range presets → window in ms + the tier to query first. Short windows
-// prefer raw L3 (tier 1); longer ones use the 5-min L1 ring (tier 3),
-// which has continuous coverage. loadHistory falls back to the other
-// tier when the first returns nothing.
+// Range presets → window in ms. loadHistory reads every level's ring for
+// the window (level=all), thinned server-side to fit the chart.
 const RANGES = {
-  "1h":  { ms: 3600e3,    tier: 1 },
-  "6h":  { ms: 21600e3,   tier: 3 },
-  "24h": { ms: 86400e3,   tier: 3 },
-  "7d":  { ms: 604800e3,  tier: 3 },
+  "1h":  { ms: 3600e3 },
+  "6h":  { ms: 21600e3 },
+  "24h": { ms: 86400e3 },
+  "7d":  { ms: 604800e3 },
 };
 let histMetric = "cpu";
 let histRange  = "6h";
@@ -310,8 +321,10 @@ function drawChart(samples) {
     `<text x="${W - padR}" y="${H - 4}" class="axis" text-anchor="end">${tfmt(t1)}</text>`;
 }
 
-async function fetchRange(tier, sinceNs) {
-  const url = `/api/range?tier=${tier}&since=${sinceNs}&limit=5000`;
+// Every level's ring merged by time (level=all), thinned server-side to
+// at most 5000 points spread over the whole window.
+async function fetchRange(sinceNs) {
+  const url = `/api/range?level=all&since=${sinceNs}&limit=5000`;
   const r = await fetch(url, { credentials: "same-origin" });
   if (!r.ok) throw new Error("range " + r.status);
   const doc = await r.json();
@@ -327,17 +340,9 @@ async function loadHistory() {
   const sinceNs = (BigInt(Date.now()) - BigInt(r.ms)) * 1000000n;
   $("histInfo").textContent = "loading…";
   try {
-    let samples = await fetchRange(r.tier, sinceNs.toString());
-    let usedTier = r.tier;
-    if (samples.length === 0) {                 // fall back to the other ring
-      const alt = r.tier === 1 ? 3 : 1;
-      const more = await fetchRange(alt, sinceNs.toString());
-      if (more.length) { samples = more; usedTier = alt; }
-    }
+    const samples = await fetchRange(sinceNs.toString());
     drawChart(samples);
-    const tierName = { 1: "raw", 2: "1-min", 3: "5-min" }[usedTier] || "";
-    $("histInfo").textContent = samples.length
-      ? `${samples.length} pts · ${tierName}` : "no data";
+    $("histInfo").textContent = samples.length ? `${samples.length} pts` : "no data";
   } catch (e) {
     $("histInfo").textContent = "error";
     drawChart([]);
@@ -426,6 +431,10 @@ async function start() {
     return showLogin();
   }
   showDash();
+  try {
+    const lr = await fetch("/api/levels", { credentials: "same-origin" });
+    if (lr.ok) for (const lv of await lr.json()) levels[lv.id] = lv;
+  } catch (_) {}
   // Wire + populate the history chart (independent of the live WS feed).
   wireHistoryControls();
   loadHistory();

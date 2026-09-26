@@ -160,15 +160,22 @@ int main() {
         size_t  len = 0;
         assert(record_encode(in, buf, sizeof(buf), &len) == 0);
 
-        // Set level to 9 in BOTH framing offset and payload, then fix CRC.
-        buf[8] = 9;
-        // Recompute CRC over header + payload.
-        uint32_t c1 = crc32c(buf, 10);
-        uint32_t c2 = crc32c(buf + kRecordHeaderSize,
-                             sample_max_encoded_size(), c1);
-        std::memcpy(buf + 10, &c2, 4);
+        // Set the framing level byte, then fix the CRC. The framing byte is
+        // the source of truth: a custom-level id (up to kMaxLevelId)
+        // decodes, one above it doesn't.
+        auto set_level = [&](uint8_t lv) {
+            buf[8] = lv;
+            uint32_t c1 = crc32c(buf, 10);
+            uint32_t c2 = crc32c(buf + kRecordHeaderSize,
+                                 sample_max_encoded_size(), c1);
+            std::memcpy(buf + 10, &c2, 4);
+        };
 
         Sample out{};
+        set_level(kMaxLevelId);
+        assert(record_decode(buf, len, &out) == 0);
+        assert(static_cast<uint8_t>(out.level) == kMaxLevelId);
+        set_level(kMaxLevelId + 1);
         assert(record_decode(buf, len, &out) != 0);
     }
 

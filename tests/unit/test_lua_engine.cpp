@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstring>
 #include <unistd.h>
+#include <vector>
 
 using namespace budyk;
 
@@ -638,6 +639,51 @@ int main() {
         assert(e.eval_tick(mk(0, 50, 0, 0)) == 1);
         assert(e.alerts().dispatch_calls() == 2);
         assert(e.alerts().last_event().severity == AlertSeverity::Info);
+        e.shutdown();
+    }
+
+    // 30. Custom-level conditions: compiled as `return (<expr>)` against
+    //     the sample; true ones are reported by id, a compile error is
+    //     reported, a runtime error counts as false.
+    {
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        assert(e.add_level_condition(4, "cpu.total_percent > 90") == 0);
+        assert(e.add_level_condition(5, "load.avg_1m >= 0") == 0);
+        assert(e.add_level_condition(6, "nosuch.field > 1") == 0);   // raises at runtime
+        assert(e.add_level_condition(7, "cpu.total_percent >") == -2);
+        assert(!e.last_error().empty());
+        std::vector<uint8_t> active;
+        e.eval_level_conditions(mk(95, 50, 1, 0), &active);
+        assert(active.size() == 2 && active[0] == 4 && active[1] == 5);
+        e.eval_level_conditions(mk(10, 50, 1, 0), &active);
+        assert(active.size() == 1 && active[0] == 5);
+        e.shutdown();
+    }
+
+    // 31. escalate(level, seconds): known names (case-insensitive) queue a
+    //     request that take_escalations() hands over once; an unknown
+    //     level or a bad duration raises, so the action fails and nothing
+    //     is queued.
+    {
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        e.set_level_names({"L1", "L2", "L3", "burst"});
+        assert(e.load_string(
+            "watch('a', { when = function() return true end,"
+            "             action = function() escalate('BURST', 5) end })\n"
+            "watch('b', { when = function() return true end,"
+            "             action = function() escalate('L3') end })\n"
+            "watch('c', { when = function() return true end,"
+            "             action = function() escalate('nope', 5) end })\n"
+            "watch('d', { when = function() return true end,"
+            "             action = function() escalate('burst', 0) end })\n") == 0);
+        assert(e.eval_tick(mk(0, 50, 0, 0)) == 4);
+        auto esc = e.take_escalations();
+        assert(esc.size() == 2);
+        assert(esc[0].level == "BURST" && esc[0].seconds == 5);
+        assert(esc[1].level == "L3"    && esc[1].seconds == 60);   // default
+        assert(e.take_escalations().empty());
         e.shutdown();
     }
 

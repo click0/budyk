@@ -9,6 +9,8 @@ extern "C" {
 #include <cstdlib>
 #include <cstring>
 
+#include <strings.h>
+
 namespace budyk {
 
 namespace {
@@ -109,6 +111,117 @@ void apply_alert_channels(yaml_document_t* d, const yaml_node_t* m,
     }
 }
 
+// Whole-string numeric parses: "30s" or "" is not a number.
+bool parse_long_full(const char* v, long* out) {
+    if (v == nullptr || *v == '\0') return false;
+    char* end = nullptr;
+    const long n = std::strtol(v, &end, 10);
+    if (end == v || *end != '\0') return false;
+    *out = n;
+    return true;
+}
+
+bool parse_double_full(const char* v, double* out) {
+    if (v == nullptr || *v == '\0') return false;
+    char* end = nullptr;
+    const double x = std::strtod(v, &end);
+    if (end == v || *end != '\0') return false;
+    *out = x;
+    return true;
+}
+
+bool valid_level_name(const std::string& n) {
+    if (n.empty() || n.size() > 32) return false;
+    for (char c : n) {
+        const bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                        (c >= '0' && c <= '9') || c == '_' || c == '-';
+        if (!ok) return false;
+    }
+    return true;
+}
+
+// collection.levels: a sequence of user-defined levels. Each needs name,
+// interval (seconds, fractions allowed, 0.1 .. 86400) and priority; when,
+// hold (seconds >= 0) and storage_mb (>= 1) are optional. A level that
+// fails validation is logged and skipped — the rest still load — and
+// accepted levels get ids kFirstCustomLevel, kFirstCustomLevel + 1, ...
+void apply_custom_levels(yaml_document_t* d, const yaml_node_t* col,
+                         std::vector<CustomLevel>* dst) {
+    const yaml_node_t* seq = find_key(d, col, "levels");
+    if (seq == nullptr || seq->type != YAML_SEQUENCE_NODE) return;
+    dst->clear();
+    size_t index = 0;
+    for (auto* item = seq->data.sequence.items.start;
+         item     != seq->data.sequence.items.top; ++item, ++index) {
+        const yaml_node_t* n = yaml_document_get_node(d, *item);
+        const char* nm = n != nullptr && n->type == YAML_MAPPING_NODE
+                       ? scalar_str(find_key(d, n, "name")) : nullptr;
+        auto reject = [&](const char* why) {
+            std::fprintf(stderr,
+                "budyk config: collection.levels[%zu] (%s): %s; level ignored\n",
+                index, nm != nullptr ? nm : "?", why);
+        };
+        if (n == nullptr || n->type != YAML_MAPPING_NODE) { reject("not a mapping"); continue; }
+
+        CustomLevel lv;
+        if (nm == nullptr || !valid_level_name(nm)) {
+            reject("'name' is required: 1-32 letters, digits, '_' or '-'");
+            continue;
+        }
+        lv.name = nm;
+        if (::strcasecmp(nm, "L1") == 0 || ::strcasecmp(nm, "L2") == 0 ||
+            ::strcasecmp(nm, "L3") == 0) {
+            reject("L1, L2 and L3 are built-in names");
+            continue;
+        }
+        bool dup = false;
+        for (const auto& other : *dst) dup = dup || ::strcasecmp(other.name.c_str(), nm) == 0;
+        if (dup) { reject("duplicate name"); continue; }
+
+        double interval_s = 0;
+        if (!parse_double_full(scalar_str(find_key(d, n, "interval")), &interval_s) ||
+            interval_s < 0.1 || interval_s > 86400) {
+            reject("'interval' is required: seconds from 0.1 to 86400");
+            continue;
+        }
+        lv.interval_ms = static_cast<int>(interval_s * 1000.0 + 0.5);
+
+        long prio = 0;
+        if (!parse_long_full(scalar_str(find_key(d, n, "priority")), &prio) ||
+            prio < -1000 || prio > 1000) {
+            reject("'priority' is required: an integer (L1 = 0, L2 = 20, L3 = 30)");
+            continue;
+        }
+        lv.priority = static_cast<int>(prio);
+
+        if (const char* w = scalar_str(find_key(d, n, "when"))) lv.when = w;
+
+        if (const yaml_node_t* h = find_key(d, n, "hold")) {
+            long hold = 0;
+            if (!parse_long_full(scalar_str(h), &hold) || hold < 0 || hold > 86400) {
+                reject("'hold' must be whole seconds from 0 to 86400");
+                continue;
+            }
+            lv.hold_sec = static_cast<int>(hold);
+        }
+        if (const yaml_node_t* s = find_key(d, n, "storage_mb")) {
+            long mb = 0;
+            if (!parse_long_full(scalar_str(s), &mb) || mb < 1 || mb > 100000) {
+                reject("'storage_mb' must be an integer from 1 to 100000");
+                continue;
+            }
+            lv.storage_mb = static_cast<int>(mb);
+        }
+
+        if (dst->size() >= kMaxCustomLevels) {
+            reject("too many levels (at most 16)");
+            continue;
+        }
+        lv.id = static_cast<uint8_t>(kFirstCustomLevel + dst->size());
+        dst->push_back(std::move(lv));
+    }
+}
+
 // --- Section walkers --------------------------------------------------------
 
 void apply_collection(yaml_document_t* d, const yaml_node_t* col, Config* out) {
@@ -131,6 +244,8 @@ void apply_collection(yaml_document_t* d, const yaml_node_t* col, Config* out) {
         apply_int(d, l3, "interval",     &out->scheduler.l3_interval_sec);
         apply_int(d, l3, "grace_period", &out->scheduler.grace_period_sec);
     }
+    apply_custom_levels(d, col, &out->scheduler.custom_levels);
+
     if (auto* hb = find_key(d, col, "hot_buffer")) {
         apply_int(d, hb, "capacity",    &out->hot_buffer_capacity);
         apply_int(d, hb, "warm_grace",  &out->hot_buffer_warm_grace);

@@ -8,6 +8,7 @@
 #include <cstring>
 #include <string>
 #include <unistd.h>
+#include <vector>
 
 using namespace budyk;
 
@@ -202,6 +203,105 @@ int main() {
             std::vector<Sample> out;
             assert(tm.query(1, 0, 0, 100, &out) == -1);
         }
+        rmrf(d);
+    }
+
+    // N. Custom-level rings: a sample at a custom level goes to its own
+    //    level-<name>.ring and comes back through query_level(). The ring
+    //    is found by name, so after a config reorder gives the level a new
+    //    id, its old samples are reported with the new id.
+    {
+        const std::string d = mkdtmp();
+        {
+            TierManager tm;
+            assert(tm.init(d.c_str(), 1, 1, 1, {LevelRingSpec{4, "burst", 1}}) == 0);
+            assert(::access((d + "/level-burst.ring").c_str(), F_OK) == 0);
+            assert(tm.store(mk(static_cast<Level>(4), 100)) == 0);
+            assert(tm.store(mk(static_cast<Level>(4), 200)) == 0);
+            assert(tm.store(mk(static_cast<Level>(5), 300)) == -2);   // no ring for 5
+            std::vector<Sample> out;
+            assert(tm.query_level(static_cast<Level>(4), 0, 0, 10, &out) == 2);
+            assert(out[0].timestamp_nanos == 100 && out[1].timestamp_nanos == 200);
+            assert(out[0].level == static_cast<Level>(4));
+            std::vector<Sample> none;
+            assert(tm.query_level(static_cast<Level>(7), 0, 0, 10, &none) == -1);
+            // Built-ins through query_level map to the right tier.
+            assert(tm.store(mk(Level::L3, 400)) == 0);
+            std::vector<Sample> l3;
+            assert(tm.query_level(Level::L3, 0, 0, 10, &l3) == 1);
+            tm.close();
+        }
+        {
+            TierManager tm;   // same name, new id
+            assert(tm.init(d.c_str(), 1, 1, 1, {LevelRingSpec{6, "burst", 1}}) == 0);
+            std::vector<Sample> out;
+            assert(tm.query_level(static_cast<Level>(6), 0, 0, 10, &out) == 2);
+            assert(out[0].level == static_cast<Level>(6));
+            tm.close();
+        }
+        rmrf(d);
+    }
+
+    // N+1. query_all(): every ring merged oldest-first with each sample's
+    //      level; over the limit it's thinned by time, keeping both ends
+    //      of the window rather than only the newest samples.
+    {
+        const std::string d = mkdtmp();
+        TierManager tm;
+        assert(tm.init(d.c_str(), 1, 1, 1, {LevelRingSpec{4, "burst", 1}}) == 0);
+        assert(tm.store(mk(Level::L1, 100)) == 0);
+        assert(tm.store(mk(static_cast<Level>(4), 150)) == 0);
+        assert(tm.store(mk(Level::L2, 200)) == 0);
+        assert(tm.store(mk(Level::L3, 300)) == 0);
+        std::vector<Sample> out;
+        assert(tm.query_all(0, 0, 10, &out) == 4);
+        assert(out[0].timestamp_nanos == 100 && out[0].level == Level::L1);
+        assert(out[1].timestamp_nanos == 150 && out[1].level == static_cast<Level>(4));
+        assert(out[2].level == Level::L2 && out[3].level == Level::L3);
+        std::vector<Sample> win;
+        assert(tm.query_all(150, 250, 10, &win) == 2);    // window bounds
+
+        // 100 raw samples, limit 10 → 10 points spread over the window.
+        for (uint64_t i = 0; i < 100; ++i) {
+            assert(tm.store(mk(Level::L3, 1000 + i)) == 0);
+        }
+        std::vector<Sample> thin;
+        const int n = tm.query_all(1000, 0, 10, &thin);
+        assert(n > 0 && n <= 10);
+        assert(thin.front().timestamp_nanos < 1020);       // start covered
+        assert(thin.back().timestamp_nanos == 1099);       // end covered
+        for (size_t i = 1; i < thin.size(); ++i) {
+            assert(thin[i - 1].timestamp_nanos < thin[i].timestamp_nanos);
+        }
+        tm.close();
+        rmrf(d);
+    }
+
+    // N+2. query_all() on a ring that has wrapped: the binary search finds
+    //      exact window bounds, and an unbounded window starts at the
+    //      oldest record still in the ring.
+    {
+        const std::string d = mkdtmp();
+        TierManager tm;
+        assert(tm.init(d.c_str(), 1, 1, 1) == 0);         // 1 MiB ≈ 3.8k records
+        const uint64_t n = 5000;
+        for (uint64_t i = 0; i < n; ++i) {
+            assert(tm.store(mk(Level::L3, 10000 + i)) == 0);
+        }
+        std::vector<Sample> win;
+        assert(tm.query_all(12000, 12100, 500, &win) == 101);
+        assert(win.front().timestamp_nanos == 12000);
+        assert(win.back().timestamp_nanos  == 12100);
+
+        std::vector<Sample> all;
+        const int k = tm.query_all(0, 0, 10, &all);
+        assert(k > 0 && k <= 10);
+        assert(all.back().timestamp_nanos == 10000 + n - 1);
+        std::vector<Sample> oldest;                        // oldest surviving record
+        assert(tm.query(1, 0, 0, 100000, &oldest) > 0);
+        assert(all.front().timestamp_nanos == oldest.front().timestamp_nanos);
+        assert(oldest.front().timestamp_nanos > 10000);   // the ring did wrap
+        tm.close();
         rmrf(d);
     }
 
