@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Custom collection levels.** `collection.levels` defines up to 16
+  levels of your own next to L1–L3, each with its own cadence, for
+  example 2 Hz under pressure or every 30 min on an idle box. Each level
+  has:
+  - `name`, `interval` (seconds, fractions allowed, 0.1–86400) and
+    `priority` (required);
+  - an optional `when`, a Lua expression over the metric globals, and
+    `hold`, seconds to stay active after `when` was last true;
+  - an optional `storage_mb` for the level's own ring file
+    `level-<name>.ring`.
+  The active level with the highest priority wins, ties going to the
+  shorter interval. Built-ins: L1 = 0 (always active), L2 = 20,
+  L3 = 30. An invalid level is skipped with a logged reason; the rest
+  load.
+- **`escalate(level, seconds)` works.** It was a no-op. A rule can now
+  keep a custom level, `"L2"` or `"L3"` active for `seconds` (default
+  60), starting with the current sleep. An unknown level raises.
+- **`GET /api/levels`** returns the level table (`id`, `name`,
+  `interval_ms`, `priority`, `builtin`), so clients can name the
+  `level` id every sample carries.
+- **`/api/range?level=`** takes `L1`–`L3`, a custom level's name, or
+  `all`. `all` merges every ring. Past the limit it's thinned by time
+  across the whole window, not cut to the newest samples. Each ring is
+  read with a binary search for the window bounds plus evenly spread
+  reads, so the cost doesn't grow with the window.
+- **Dashboard:** a "Level" row shows the current level by name and
+  interval. The history chart reads `level=all`, so it covers every
+  level. Before, it read only the L3 and L1 rings and ignored L2.
+
+### Changed
+
+- **Rule errors are logged.** A `when` or function action that raises
+  used to be dropped silently by `pcall`. It's now logged as
+  `budyk: rule '<name>' when|action failed: <error>`, once per distinct
+  error, so a failing condition doesn't flood the log. A custom level's
+  `when` condition is logged the same way.
+- **Level ids 4–19 are valid** in stored records and in the sample
+  codec; the on-disk format is unchanged. Before, anything but 1–3 was
+  rejected.
+
 ## [0.5.0] — 2026-09-26
 
 First release shipped as fully static binaries for Linux and FreeBSD

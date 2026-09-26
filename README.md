@@ -24,7 +24,8 @@ looking. budyk switches between three collection levels:
 Opening the dashboard switches to L3 at once. A crossed threshold is
 seen at the next tick and switches to L2. Each level steps back down
 after a hold period: 60 s after the last client leaves, 5 min after the
-threshold clears. All intervals and thresholds are set in the config.
+threshold clears. All intervals and thresholds are set in the config,
+and you can add your own levels (see [Custom levels](#custom-levels)).
 On a quiet host budyk mostly sleeps.
 
 ## How it works
@@ -38,7 +39,7 @@ straight to it.
 budyk serve (one process per server)
 │
 │  collection loop, one pass per tick; the level sets the gap (defaults):
-│  L1 5 min · L2 30 s · L3 1 s
+│  L1 5 min · L2 30 s · L3 1 s · custom levels: your own
 │
 │  collectors ─► sample ─► scheduler picks the level ─┬─► ring file for that level ─► GET /api/range
 │  (sysctl,                                           ├─► hot buffer (RAM, 300)    ─► GET /api/samples
@@ -56,9 +57,11 @@ On each tick the collection loop:
 2. asks the scheduler for the level: **L3** while a dashboard or TUI is
    connected and for `grace_period` (60 s) after it leaves, **L2** while
    a load, CPU or swap threshold is crossed and for `hysteresis` (5 min)
-   after, **L1** otherwise;
+   after, **L1** otherwise, or a [custom level](#custom-levels) whose
+   priority is higher;
 3. appends the sample to the ring file for that level (tier 1 for L3,
-   2 for L2, 3 for L1), each record tagged with its level;
+   2 for L2, 3 for L1, `level-<name>.ring` for a custom level), each
+   record tagged with its level;
 4. keeps the last 300 samples in an in-memory hot buffer;
 5. evaluates the rules and sends any alerts;
 6. pushes the sample to every open WebSocket;
@@ -71,8 +74,8 @@ page itself. The page:
   form if the answer is 401;
 - opens a WebSocket at `/api/ws`. The first frame is the hot-buffer
   history, then one frame arrives per tick;
-- loads the history chart from `/api/range` and refreshes it every
-  minute.
+- loads the history chart from `/api/range?level=all` (every level's
+  ring, merged and thinned to fit) and refreshes it every minute.
 
 Opening the WebSocket wakes the loop, so the level moves to L3 and
 samples arrive every second from the first frame on. When the last
@@ -94,6 +97,9 @@ single dashboard that combines servers isn't part of budyk yet.
 - **Web dashboard:** live charts over WebSocket, plus a history view
   over the stored tiers. Optional password login (Argon2id).
 - **Terminal UI:** `budyk tui`.
+- **Custom levels:** your own cadences next to L1–L3, such as 2 Hz
+  under pressure or 30 min on an idle box, switched on by a condition or
+  by a rule.
 - **Rules:** Lua `watch()` rules or a simple YAML form, reloaded on
   `SIGHUP` without a restart. Cooldowns survive restarts.
 - **Alert channels:** ntfy, Discord, Telegram, SMTP e-mail, Twilio SMS.
@@ -186,6 +192,64 @@ web:
 All settings are documented in
 [`config.example.yaml`](config.example.yaml).
 
+## Custom levels
+
+Besides L1, L2 and L3 you can define up to 16 levels of your own under
+`collection.levels`:
+
+```yaml
+collection:
+  levels:
+    - name: burst          # 2 Hz while the box is under real pressure
+      interval: 0.5        # seconds between ticks; fractions allowed
+      priority: 40         # above L3, so it beats an open dashboard too
+      when: "cpu.total_percent > 95 or load.avg_1m > cpu.count * 2"
+      hold: 120            # stay 2 min after the condition clears
+      storage_mb: 100      # its own ring file, level-burst.ring
+    - name: deep_sleep     # slower than L1 on a truly idle box
+      interval: 1800
+      priority: 5          # above L1 only: any anomaly or client wins
+      when: "load.avg_1m < 0.05 and cpu.total_percent < 2"
+```
+
+**Which level runs.** Every level is either active or not, and the
+active level with the highest `priority` wins. On a tie, the shorter
+interval wins. The built-ins have fixed priorities:
+
+| Level | Priority | Active when |
+|-------|----------|-------------|
+| L1 | 0 | always (the fallback) |
+| L2 | 20 | a threshold is crossed, and for `hysteresis` after |
+| L3 | 30 | a dashboard or TUI is connected, and for `grace_period` after |
+| custom | yours | its `when` is true (and for `hold` seconds after), or a rule called `escalate()` |
+
+So `burst` (40) wins even while someone watches the dashboard, and
+`deep_sleep` (5) only runs when nothing else is active.
+
+**Switching a level on from a rule.** Leave `when` out and call
+`escalate()` from any rule:
+
+```lua
+watch("disk_storm", {
+    when   = function() return disk.write_bytes_per_sec > 500 * 1024 * 1024 end,
+    action = function() escalate("burst", 300) end,   -- 5 minutes of 2 Hz
+})
+```
+
+**Fields.** `name`, `interval` and `priority` are required. `name` uses
+letters, digits, `_` or `-`, can't be L1–L3, and must be unique.
+`interval` is 0.1–86400 s. `when`, `hold` (default 0) and `storage_mb`
+(default 50) are optional. An invalid level is skipped with a message
+in the daemon log, and the other levels still load. A `when` that
+doesn't compile is also logged; that level can then only be switched on
+with `escalate()`.
+
+**Where the data goes.** Samples taken at a custom level are stored in
+that level's own ring file and carry its id in their `level` field.
+`/api/levels` maps ids to names, and `/api/range?level=<name>` reads one
+level. The dashboard shows the current level and includes every level
+in its history chart.
+
 ## Rules
 
 Point `rules.path` at a `.lua` or `.yaml` file. After editing it, send
@@ -234,7 +298,7 @@ Functions available to rules:
 | `print(...)` | Write to the daemon log. |
 | `exec(cmd [, timeout_s])` | Run a program: a string or an argv table, absolute path, 30 s timeout by default. **Off by default.** Enable with `rules.exec.enabled` or `--enable-exec`, and restrict it with `rules.exec.allow`. Returns `{ ok, exit_status, signal, timed_out, elapsed_seconds }`. |
 | `freeze(pid)` / `unfreeze(pid)` | Send `SIGSTOP` / `SIGCONT`. **Off by default.** Enable with `rules.freeze.enabled` or `--enable-freeze`, and restrict by process name with `rules.freeze.allow`. |
-| `escalate()` | Reserved. It currently does nothing. |
+| `escalate(level [, seconds])` | Keep a collection level active for `seconds` (default 60): a [custom level](#custom-levels)'s name, `"L2"` or `"L3"`. Takes effect for the current sleep. Raises for an unknown level. |
 
 Metrics are refreshed every tick as globals:
 
@@ -306,7 +370,8 @@ needs.
 | `POST` | `/api/auth/login` | no | body `{"password": "..."}`; sets the `budyk_session` cookie |
 | `POST` | `/api/auth/logout` | no | clears the session |
 | `GET` | `/api/samples` | yes | recent samples from the in-memory buffer |
-| `GET` | `/api/range` | yes | stored history: `since`, `until` (nanoseconds since the epoch), `tier` (`1` = L3 samples, `2` = L2, `3` = L1), `limit` (up to 5000) |
+| `GET` | `/api/range` | yes | stored history: `since`, `until` (nanoseconds since the epoch), `limit` (up to 5000), and either `level` (`L1`–`L3`, a custom level's name, or `all` for every level merged and thinned over the window) or `tier` (`1` = L3 samples, `2` = L2, `3` = L1) |
+| `GET` | `/api/levels` | yes | every level: `id` (the value of a sample's `level`), `name`, `interval_ms`, `priority`, `builtin` |
 | `GET` | `/api/ws` | yes | WebSocket live stream |
 
 "Auth" applies only when `web.auth.enabled` is `true`.
