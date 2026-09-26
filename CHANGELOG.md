@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-09-26
+
+First release shipped as fully static binaries for Linux and FreeBSD
+14.2 / 15.0, a single file with no runtime library dependencies.
+Operationally: rules reload on SIGHUP and can be written in a simple
+YAML form, alerts go out to external channels (ntfy, Discord,
+Telegram, SMTP, Twilio), and a file-change watcher plus
+`freeze()` / `unfreeze()` rule actions add an incident-response
+surface. On the dashboard: a history chart over
+the on-disk tiers (`GET /api/range`), and web sessions that survive
+a restart. On FreeBSD, the disk, running-process and self-RSS
+metrics are now collected; they were placeholders before.
+
 ### Added
 
 - **SIGHUP — rules reload without a restart**. Edit `rules.path`
@@ -171,6 +184,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`-DSTATIC_LINK=ON` in all four release builds, previously `OFF`).
   Each build fails unless `file` reports "statically linked", so a
   dynamic binary can't be published.
+
+[0.5.0]: https://github.com/click0/budyk/releases/tag/v0.5.0
 
 ## [0.4.0] — 2026-05-07
 
