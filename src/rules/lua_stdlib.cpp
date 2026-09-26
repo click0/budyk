@@ -33,44 +33,110 @@ int opt_int_field(lua_State* L, int tbl, const char* key, int fallback) {
     return v;
 }
 
+int l_alert(lua_State* L);   // defined below; watch() recognises it as an action
+
+// watch(name, opts) — registers a rule. opts:
+//   when      — required function; the rule fires when it returns true
+//   action    — optional:
+//                 function  called with no arguments on fire
+//                 "alert"   alert(name, severity, message)   (the default)
+//                 "log"     print "[budyk] <message>"
+//               `action = alert` (the builtin itself) means "alert", so
+//               the rule's severity/message are used instead of calling
+//               alert() with no arguments.
+//   severity  — "info" / "warning" (default) / "critical"; "alert" only
+//   message   — string; default is the rule name
+//   for_ticks — consecutive true evaluations needed to fire (default 1)
+//   cooldown  — ticks to skip after firing (default 0)
+// Anything else in action / severity is an error at load time, so a
+// misconfigured rule fails loudly instead of silently doing nothing.
 int l_watch(lua_State* L) {
     const char* name = luaL_checkstring(L, 1);
     luaL_checktype(L, 2, LUA_TTABLE);
 
-    // opts.when — required, must be a function
+    // Validate every field before creating any registry ref or C++ object:
+    // luaL_error longjmps, which would leak a ref and skip destructors.
     lua_getfield(L, 2, "when");
-    if (!lua_isfunction(L, -1)) {
+    const bool when_ok = lua_isfunction(L, -1);
+    lua_pop(L, 1);
+    if (!when_ok) {
         return luaL_error(L, "watch(%s): 'when' must be a function", name);
     }
-    const int when_ref = luaL_ref(L, LUA_REGISTRYINDEX);
 
-    // opts.action — optional; function, string ("alert"/"log"), or nil (default alert)
+    enum class Action { Function, Alert, Log, Invalid };
+    Action action = Action::Invalid;
     lua_getfield(L, 2, "action");
-    int         action_ref = LUA_REFNIL;
-    std::string action_tag;
-    if (lua_isfunction(L, -1)) {
-        action_ref = luaL_ref(L, LUA_REGISTRYINDEX);
-    } else if (lua_isstring(L, -1)) {
-        action_tag = lua_tostring(L, -1);
-        lua_pop(L, 1);
-    } else {
-        lua_pop(L, 1);
-        action_tag = "alert";
+    switch (lua_type(L, -1)) {
+        case LUA_TNIL:
+            action = Action::Alert;
+            break;
+        case LUA_TFUNCTION:
+            action = lua_tocfunction(L, -1) == l_alert ? Action::Alert
+                                                       : Action::Function;
+            break;
+        case LUA_TSTRING: {
+            const char* tag = lua_tostring(L, -1);
+            if      (std::strcmp(tag, "alert") == 0) action = Action::Alert;
+            else if (std::strcmp(tag, "log")   == 0) action = Action::Log;
+            break;
+        }
+        default:
+            break;
+    }
+    lua_pop(L, 1);
+    if (action == Action::Invalid) {
+        return luaL_error(L,
+            "watch(%s): 'action' must be a function, \"alert\" or \"log\"", name);
     }
 
-    // opts.for_ticks + opts.cooldown — optional integers. for_ticks
-    // defaults to 1 (fire immediately). cooldown defaults to for_ticks.
-    const int for_ticks      = opt_int_field(L, 2, "for_ticks", 1);
-    const int cooldown_ticks = opt_int_field(L, 2, "cooldown",  -1);
+    budyk::AlertSeverity severity = budyk::AlertSeverity::Warning;
+    lua_getfield(L, 2, "severity");
+    const int  sev_type = lua_type(L, -1);
+    const bool sev_ok   = sev_type == LUA_TNIL ||
+        (sev_type == LUA_TSTRING &&
+         budyk::parse_severity(lua_tostring(L, -1), &severity));
+    lua_pop(L, 1);
+    if (!sev_ok) {
+        return luaL_error(L,
+            "watch(%s): 'severity' must be \"info\", \"warning\" or \"critical\"", name);
+    }
+
+    lua_getfield(L, 2, "message");
+    const int msg_type = lua_type(L, -1);
+    lua_pop(L, 1);
+    if (msg_type != LUA_TNIL && msg_type != LUA_TSTRING) {
+        return luaL_error(L, "watch(%s): 'message' must be a string", name);
+    }
 
     auto* eng = engine_from(L);
     if (eng == nullptr) {
-        if (when_ref   != LUA_REFNIL) luaL_unref(L, LUA_REGISTRYINDEX, when_ref);
-        if (action_ref != LUA_REFNIL) luaL_unref(L, LUA_REGISTRYINDEX, action_ref);
         return luaL_error(L, "watch: engine not bound");
     }
 
-    eng->add_rule(name, when_ref, action_ref, action_tag, for_ticks, cooldown_ticks);
+    // Nothing below raises.
+    const int for_ticks      = opt_int_field(L, 2, "for_ticks", 1);
+    const int cooldown_ticks = opt_int_field(L, 2, "cooldown",  0);
+
+    std::string message = name;
+    if (msg_type == LUA_TSTRING) {
+        lua_getfield(L, 2, "message");
+        message = lua_tostring(L, -1);
+        lua_pop(L, 1);
+    }
+
+    lua_getfield(L, 2, "when");
+    const int when_ref   = luaL_ref(L, LUA_REGISTRYINDEX);
+    int       action_ref = LUA_REFNIL;
+    if (action == Action::Function) {
+        lua_getfield(L, 2, "action");
+        action_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    }
+    const char* action_tag = action == Action::Alert ? "alert"
+                           : action == Action::Log   ? "log"
+                           : "";
+
+    eng->add_rule(name, when_ref, action_ref, action_tag, severity, message,
+                  for_ticks, cooldown_ticks);
     return 0;
 }
 
@@ -86,13 +152,10 @@ int l_alert(lua_State* L) {
     const char* sev_str = lua_tostring(L, 2);
     const char* msg     = lua_tostring(L, 3);
 
+    // Lenient on purpose: an unknown severity falls back to warning rather
+    // than failing the action mid-incident.
     budyk::AlertSeverity sev = budyk::AlertSeverity::Warning;
-    if (sev_str != nullptr) {
-        if (std::strcmp(sev_str, "info")     == 0 ||
-            std::strcmp(sev_str, "INFO")     == 0) sev = budyk::AlertSeverity::Info;
-        else if (std::strcmp(sev_str, "critical") == 0 ||
-                 std::strcmp(sev_str, "CRITICAL") == 0) sev = budyk::AlertSeverity::Critical;
-    }
+    budyk::parse_severity(sev_str, &sev);
 
     const int ok = eng->alerts().dispatch(sev, name, msg ? msg : "");
     lua_pushinteger(L, ok);

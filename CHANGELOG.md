@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-09-26
+
+First release shipped as fully static binaries for Linux and FreeBSD
+14.2 / 15.0, a single file with no runtime library dependencies.
+Operationally: rules reload on SIGHUP and can be written in a simple
+YAML form, alerts go out to external channels (ntfy, Discord,
+Telegram, SMTP, Twilio), and a file-change watcher plus
+`freeze()` / `unfreeze()` rule actions add an incident-response
+surface. On the dashboard: a history chart over
+the on-disk tiers (`GET /api/range`), and web sessions that survive
+a restart. On FreeBSD, the disk, running-process and self-RSS
+metrics are now collected; they were placeholders before.
+
 ### Added
 
 - **SIGHUP — rules reload without a restart**. Edit `rules.path`
@@ -157,6 +170,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   static binary); and static ncurses gets `libtinfo` appended. Result: a
   fully static `budyk`, ~3.0 MB stripped on amd64. `STATIC_LINK=OFF` is
   unchanged.
+- **Opening the dashboard never switched to L3.**
+  `Scheduler::client_connected()` existed but nothing called it, so
+  the client count stayed 0. The level also only changed after the
+  collection loop woke from `nanosleep`, which at L1 takes up to
+  5 min. A connected dashboard got one sample per L1/L2 interval
+  instead of 1 Hz, confirmed with a live WebSocket client. Now:
+  - before every tick the loop sets the client count to the open
+    WebSockets plus one for a `/api/samples` poll in the last 5 s
+    (the TUI), through the new `Scheduler::set_client_count()`;
+  - the loop sleeps in `poll()` on a self-pipe, and a new WebSocket
+    client or a newly appearing poller wakes it at once.
+  The first live L3 sample now reaches a new dashboard at once, then
+  1 Hz; spec §5 asks for ≤ 2 s. After the last client leaves, the
+  grace period applies and the level steps back to L1.
+- **SIGHUP is applied immediately.** It used to wait for the current
+  sleep to end, up to 5 min at L1. It now wakes the loop, like
+  SIGTERM / SIGINT.
+- **Rules without a function action sent nothing.** `watch()` stored
+  `action = "alert"` / `"log"` and the default (no `action`) as a tag,
+  but nothing acted on the tag. `action = alert` (the form in the
+  shipped examples and the old README) called `alert()` with no
+  arguments, which raised inside `pcall`. `severity` was never read.
+  In all these cases the rule fired and was counted, and no
+  notification went out. Now:
+  - `"alert"` and the default send `message` (default: the rule name)
+    with `severity` (default: warning) to every channel;
+  - `"log"` writes `[budyk] <message>`;
+  - `action = alert` means `"alert"`.
+  An action table, an unknown action or severity, or a non-string
+  message is now a load error instead of a silent no-op.
+  `rules/examples.lua` and `rules/freebsd-defaults.lua`, which used
+  `action = { alert, escalate }`, are rewritten and load cleanly.
+- **Rule load errors are logged with their cause.** The daemon used to
+  print only `failed to load (rc=-2)`. It now prints the Lua error
+  (file, line, rule name) and how many rules above the error are still
+  active. Before, it said "continuing without rules" even when some
+  rules had loaded.
+- **`cooldown` default documented correctly.** It is 0. The comment in
+  `watch()` said it defaulted to `for_ticks`.
 - **Missing Lua 5.4 now fails at configure time** with an install hint,
   instead of printing "will use vendored copy from third_party/" (no such
   copy exists) and failing later on a missing `lauxlib.h`.
@@ -171,6 +223,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`-DSTATIC_LINK=ON` in all four release builds, previously `OFF`).
   Each build fails unless `file` reports "statically linked", so a
   dynamic binary can't be published.
+
+### Documentation
+
+- **README rewritten, plus a Ukrainian version (`README.uk.md`).** It
+  now covers installation (release binaries, build dependencies,
+  services), configuration, the rule API (`watch()` options, built-in
+  functions, metric globals, the YAML form), alert channels, the HTTP
+  API, signals and supported platforms. Both files ship in the release
+  tarballs. The old README's rule example used `action = alert` and a
+  `severity` field. That form sends nothing: the action is called with
+  no arguments, and `watch()` ignores `severity`. The example now uses
+  a working form. See Fixed below for the engine side. A "How it works"
+  section (both languages) shows the data path: one daemon per server
+  serves its own dashboard, with no central collector. It also shows
+  when each level applies, how the dashboard and TUI get samples, and
+  that each level has its own ring file (tier 1 = L3 samples, 2 = L2,
+  3 = L1; these are not aggregates).
+
+[0.5.0]: https://github.com/click0/budyk/releases/tag/v0.5.0
 
 ## [0.4.0] — 2026-05-07
 

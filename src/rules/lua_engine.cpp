@@ -74,7 +74,9 @@ void LuaEngine::shutdown() {
 int LuaEngine::load_string(const char* code) {
     if (L_ == nullptr || code == nullptr) return -1;
     if (luaL_dostring(L_, code) != LUA_OK) {
-        lua_pop(L_, 1); // error message
+        const char* msg = lua_tostring(L_, -1);
+        last_error_ = msg != nullptr ? msg : "unknown Lua error";
+        lua_pop(L_, 1);
         return -2;
     }
     return 0;
@@ -83,6 +85,8 @@ int LuaEngine::load_string(const char* code) {
 int LuaEngine::load_file(const char* path) {
     if (L_ == nullptr || path == nullptr) return -1;
     if (luaL_dofile(L_, path) != LUA_OK) {
+        const char* msg = lua_tostring(L_, -1);
+        last_error_ = msg != nullptr ? msg : "unknown Lua error";
         lua_pop(L_, 1);
         return -2;
     }
@@ -207,12 +211,19 @@ int LuaEngine::eval_tick(const Sample& s) {
             if (lua_pcall(L_, 0, 0, 0) != LUA_OK) {
                 lua_pop(L_, 1);
             }
+        } else if (r.action_tag == "alert") {
+            alerts_.dispatch(r.severity, r.name, r.message);
+        } else if (r.action_tag == "log") {
+            // Same stream and format as Lua's print() / the YAML "log" action.
+            std::printf("[budyk] %s\n", r.message.c_str());
+            std::fflush(stdout);
         }
     }
     return last_fire_count_;
 }
 
 int  LuaEngine::rule_count()      const { return static_cast<int>(rules_.size()); }
+const std::string& LuaEngine::last_error() const { return last_error_; }
 int  LuaEngine::last_fire_count() const { return last_fire_count_; }
 bool LuaEngine::exec_enabled()    const { return exec_enabled_; }
 bool LuaEngine::freeze_enabled()  const { return freeze_enabled_; }
@@ -252,11 +263,12 @@ const FileWatchState& LuaEngine::file_state()     const { return file_state_; }
 
 void LuaEngine::add_rule(const std::string& name, int when_ref, int action_ref,
                          const std::string& action_tag,
+                         AlertSeverity severity, const std::string& message,
                          int for_ticks, int cooldown_ticks) {
     if (for_ticks      < 1) for_ticks      = 1;
     if (cooldown_ticks < 0) cooldown_ticks = 0;   // default: no cooldown
     rules_.push_back(LuaRule{
-        name, when_ref, action_ref, action_tag,
+        name, when_ref, action_ref, action_tag, severity, message,
         /*fire_count*/ 0,
         for_ticks, cooldown_ticks,
         /*consecutive_hits*/ 0, /*cooldown_remaining*/ 0

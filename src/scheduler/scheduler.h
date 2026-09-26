@@ -36,6 +36,10 @@ public:
 
     void client_connected();
     void client_disconnected();
+    // Replaces the count outright. The serve loop calls this before every
+    // tick with the number of clients it can actually see, so the count
+    // can't drift the way paired connected/disconnected calls can.
+    void set_client_count(int n);
 
     Level        current_level()   const;
     AnomalyState current_anomaly() const;

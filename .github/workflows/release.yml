@@ -10,8 +10,8 @@ name: Release binaries
 #                                              / lldb(1) post-mortem / crash-dump
 #                                              analysis.
 #
-# Each tarball contains budyk + LICENSE + README.md + CHANGELOG.md +
-# docs/budyk.8 and is accompanied by a .sha256 sidecar.
+# Each tarball contains budyk + LICENSE + README.md + README.uk.md +
+# CHANGELOG.md + docs/budyk.8 and is accompanied by a .sha256 sidecar.
 #
 # Every binary is fully static (STATIC_LINK=ON, spec: single static binary
 # with no runtime dependencies). The build fails if `file` doesn't report
@@ -128,6 +128,7 @@ jobs:
             cp "$SRC" "$STAGE/"
             cp LICENSE "$STAGE/"
             [ -f README.md    ] && cp README.md    "$STAGE/" || true
+            [ -f README.uk.md ] && cp README.uk.md "$STAGE/" || true
             [ -f CHANGELOG.md ] && cp CHANGELOG.md "$STAGE/" || true
             mkdir -p "$STAGE/docs"
             [ -f docs/budyk.8 ] && cp docs/budyk.8 "$STAGE/docs/" || true
@@ -227,6 +228,7 @@ jobs:
               cp "$SRC" "$STAGE/"
               cp LICENSE "$STAGE/"
               [ -f README.md    ] && cp README.md    "$STAGE/" || true
+              [ -f README.uk.md ] && cp README.uk.md "$STAGE/" || true
               [ -f CHANGELOG.md ] && cp CHANGELOG.md "$STAGE/" || true
               mkdir -p "$STAGE/docs"
               [ -f docs/budyk.8 ] && cp docs/budyk.8 "$STAGE/docs/" || true

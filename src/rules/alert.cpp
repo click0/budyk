@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #include "rules/alert.h"
 
+#include <strings.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -248,6 +249,14 @@ const char* severity_name(AlertSeverity s) {
     return "warning";
 }
 
+bool parse_severity(const char* s, AlertSeverity* out) {
+    if (s == nullptr || out == nullptr) return false;
+    if (::strcasecmp(s, "info")     == 0) { *out = AlertSeverity::Info;     return true; }
+    if (::strcasecmp(s, "warning")  == 0) { *out = AlertSeverity::Warning;  return true; }
+    if (::strcasecmp(s, "critical") == 0) { *out = AlertSeverity::Critical; return true; }
+    return false;
+}
+
 std::string ntfy_payload(AlertSeverity, const std::string&,
                          const std::string& message) {
     // ntfy.sh accepts a plain-text body — title / priority / tags are
@@ -351,9 +360,17 @@ void AlertDispatcher::add_channel(AlertChannel ch) {
 
 size_t AlertDispatcher::channel_count() const { return channels_.size(); }
 
+uint64_t AlertDispatcher::dispatch_calls() const { return dispatch_calls_; }
+const AlertDispatcher::Event& AlertDispatcher::last_event() const { return last_event_; }
+
 int AlertDispatcher::dispatch(AlertSeverity sev,
                               const std::string& rule_name,
                               const std::string& message) {
+    ++dispatch_calls_;
+    last_event_.severity = sev;
+    last_event_.rule     = rule_name;
+    last_event_.message  = message;
+
     int succeeded = 0;
     for (const auto& ch : channels_) {
         int rc = -1;

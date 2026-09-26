@@ -63,6 +63,7 @@ Level Scheduler::tick(const Sample& current) {
 
 void Scheduler::client_connected()    { ++client_count_; }
 void Scheduler::client_disconnected() { if (client_count_.load() > 0) --client_count_; }
+void Scheduler::set_client_count(int n) { client_count_.store(n > 0 ? n : 0); }
 
 Level        Scheduler::current_level()   const { return level_; }
 AnomalyState Scheduler::current_anomaly() const { return anomaly_; }

@@ -17,6 +17,8 @@ struct LuaRule {
     int         when_ref;          // LUA_REGISTRYINDEX ref
     int         action_ref;        // LUA_REGISTRYINDEX ref, or LUA_REFNIL
     std::string action_tag;        // "alert" / "log" / "" if action_ref is set
+    AlertSeverity severity;        // used by the "alert" tag
+    std::string   message;         // used by the "alert" / "log" tags
     uint64_t    fire_count;
 
     int         for_ticks;         // consecutive true evaluations needed to fire
@@ -35,6 +37,10 @@ public:
 
     int  load_string(const char* code);
     int  load_file  (const char* path);
+
+    // Lua error text from the last failed load_string / load_file, e.g.
+    // "rules.lua:2: watch(x): 'action' must be a function, ...".
+    const std::string& last_error() const;
 
     // Persist / restore per-rule runtime state (cooldown_remaining,
     // consecutive_hits, fire_count) keyed by rule name. Purpose: a
@@ -94,6 +100,7 @@ public:
     // the engine via the Lua registry without any friendship gymnastics.
     void add_rule(const std::string& name, int when_ref, int action_ref,
                   const std::string& action_tag,
+                  AlertSeverity severity, const std::string& message,
                   int for_ticks, int cooldown_ticks);
 
 private:
@@ -105,6 +112,7 @@ private:
     bool                     freeze_enabled_  = false;
     std::vector<std::string> freeze_allowlist_;
     AlertDispatcher          alerts_;
+    std::string              last_error_;
     bool                     has_file_state_  = false;
     FileWatchState           file_state_;
 };

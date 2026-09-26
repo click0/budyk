@@ -44,6 +44,8 @@
 #include <string>
 #include <vector>
 
+#include <fcntl.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <termios.h>
 #include <unistd.h>
@@ -330,6 +332,25 @@ extern "C" void serve_signal_handler(int sig) {
     else               g_stop   = 1;
 }
 
+// Self-pipe that wakes the collection loop out of interruptible_sleep().
+// A dashboard or TUI that connects while the loop sleeps at L1 (up to
+// 5 min) must see L3 samples at once, not after the sleep ends. Written
+// from the HTTP server thread; a non-blocking write() on a pipe is
+// thread-safe, and a full pipe (EAGAIN) means a wake-up is pending anyway.
+static int g_wake_pipe[2] = {-1, -1};
+
+void wake_collection_loop() {
+    if (g_wake_pipe[1] < 0) return;
+    const char b = 1;
+    (void)!::write(g_wake_pipe[1], &b, 1);
+}
+
+// Realtime ns of the last authenticated GET /api/samples. The TUI (and
+// any other poller) has no WebSocket, so a poll within kPollerWindowNs
+// counts as one connected client for the scheduler.
+static std::atomic<uint64_t> g_last_poll_ns{0};
+constexpr uint64_t kPollerWindowNs = 5ULL * 1000000000ULL;
+
 void install_signal_handlers() {
     struct sigaction sa{};
     sa.sa_handler = serve_signal_handler;
@@ -500,14 +521,36 @@ uint64_t query_u64(const std::string& query, const char* key, uint64_t fallback)
     return fallback;
 }
 
-// Sleep for at most `seconds` real-time, returning early if a signal sets
-// g_stop. Safe to call with seconds <= 0 (no-op).
+// Sleep for at most `seconds`, returning early when:
+//   * a signal sets g_stop (shutdown) or g_reload (SIGHUP; the reload is
+//     applied at the top of the next tick, so it no longer waits out an
+//     L1 sleep);
+//   * wake_collection_loop() is called (a client connected).
+// poll() is interrupted by signals because the handlers are installed
+// without SA_RESTART. Safe to call with seconds <= 0 (no-op).
 void interruptible_sleep(int seconds) {
-    if (seconds <= 0 || g_stop) return;
-    struct timespec req{seconds, 0}, rem{};
-    while (::nanosleep(&req, &rem) != 0) {
-        if (errno != EINTR || g_stop) return;
-        req = rem;
+    if (seconds <= 0 || g_stop || g_reload) return;
+    struct timespec ts{};
+    ::clock_gettime(CLOCK_MONOTONIC, &ts);
+    const int64_t deadline_ms = static_cast<int64_t>(ts.tv_sec) * 1000 +
+                                ts.tv_nsec / 1000000 +
+                                static_cast<int64_t>(seconds) * 1000;
+    for (;;) {
+        ::clock_gettime(CLOCK_MONOTONIC, &ts);
+        const int64_t now_ms = static_cast<int64_t>(ts.tv_sec) * 1000 +
+                               ts.tv_nsec / 1000000;
+        if (now_ms >= deadline_ms) return;
+
+        struct pollfd pfd{g_wake_pipe[0], POLLIN, 0};
+        const int rc = ::poll(&pfd, g_wake_pipe[0] >= 0 ? 1 : 0,
+                              static_cast<int>(deadline_ms - now_ms));
+        if (rc > 0) {
+            char buf[64];
+            while (::read(g_wake_pipe[0], buf, sizeof(buf)) > 0) {}
+            return;
+        }
+        if (rc < 0 && errno != EINTR) return;
+        if (g_stop || g_reload) return;
     }
 }
 
@@ -605,6 +648,14 @@ int cmd_serve(int argc, char* argv[]) {
     if (cli_enable_freeze) cfg.rules_enable_freeze = true;
 
     install_signal_handlers();
+    if (::pipe2(g_wake_pipe, O_NONBLOCK | O_CLOEXEC) != 0) {
+        // Not fatal: without it a new client waits for the current sleep
+        // to end before the level steps up to L3.
+        std::fprintf(stderr,
+            "budyk serve: wake pipe unavailable (errno=%d); clients will "
+            "switch the level to L3 on the next tick\n", errno);
+        g_wake_pipe[0] = g_wake_pipe[1] = -1;
+    }
 
     budyk::TierManager tm;
     if (tm.init(cfg.data_dir,
@@ -656,18 +707,26 @@ int cmd_serve(int argc, char* argv[]) {
             const bool   is_yaml =
                 (plen >= 5 && std::strcmp(cfg.rules_path + plen - 5, ".yaml") == 0) ||
                 (plen >= 4 && std::strcmp(cfg.rules_path + plen - 4, ".yml")  == 0);
-            int rc;
+            int         rc  = 0;
+            std::string err;
             if (is_yaml) {
                 std::string lua_src;
-                rc = budyk::yaml_rules_to_lua_file(cfg.rules_path, &lua_src);
-                if (rc == 0) rc = engine.load_string(lua_src.c_str());
-            } else {
-                rc = engine.load_file(cfg.rules_path);
+                if (budyk::yaml_rules_to_lua_file(cfg.rules_path, &lua_src) != 0) {
+                    rc  = -1;
+                    err = "YAML parse error";
+                } else if ((rc = engine.load_string(lua_src.c_str())) != 0) {
+                    err = engine.last_error();
+                }
+            } else if ((rc = engine.load_file(cfg.rules_path)) != 0) {
+                err = engine.last_error();
             }
             if (rc != 0) {
+                // Loading stops at the first error; rules defined above it
+                // stay registered, so report how many are actually active.
                 std::fprintf(stderr,
-                    "budyk serve: rules file '%s' failed to load (rc=%d) — continuing without rules\n",
-                    cfg.rules_path, rc);
+                    "budyk serve: rules file '%s' failed to load: %s "
+                    "(%d rule(s) before the error remain active)\n",
+                    cfg.rules_path, err.c_str(), engine.rule_count());
             }
         }
         // Restore per-rule cooldown / fire counters. Must come after
@@ -781,7 +840,7 @@ int cmd_serve(int argc, char* argv[]) {
             r.content_type = "application/json";
             r.body =
                 "{\"status\":\"ok\","
-                "\"version\":\"0.4.0\","
+                "\"version\":\"0.5.0\","
                 "\"data_dir\":\"" + std::string(cfg.data_dir) + "\"}\n";
             return r;
         }
@@ -833,6 +892,16 @@ int cmd_serve(int argc, char* argv[]) {
             if (!authed(req)) {
                 return budyk::HttpResponse{
                     401, "application/json", "{\"error\":\"unauthenticated\"}\n", {}, {}};
+            }
+            // A poller (the TUI) counts as a connected client. Wake the loop
+            // only when one appears, not on every poll, so an L3 cadence
+            // isn't disturbed by extra ticks.
+            {
+                const uint64_t now  = now_realtime_ns();
+                const uint64_t prev = g_last_poll_ns.exchange(now);
+                if (prev == 0 || now < prev || now - prev > kPollerWindowNs) {
+                    wake_collection_loop();
+                }
             }
             std::vector<budyk::Sample> snap;
             {
@@ -923,6 +992,7 @@ int cmd_serve(int argc, char* argv[]) {
                     return;
                 }
                 ws.add(fd);
+                wake_collection_loop();   // step up to L3 now, not after the sleep
             };
             return r;
         }
@@ -1010,6 +1080,17 @@ int cmd_serve(int argc, char* argv[]) {
             s.file_watch.present = true;
         }
 
+        // Clients that hold the level at L3: every open WebSocket (the
+        // dashboard) plus one for a recent /api/samples poller (the TUI).
+        {
+            int clients = static_cast<int>(ws.size());
+            const uint64_t last_poll = g_last_poll_ns.load();
+            if (last_poll != 0 && s.timestamp_nanos >= last_poll &&
+                s.timestamp_nanos - last_poll < kPollerWindowNs) {
+                ++clients;
+            }
+            sched.set_client_count(clients);
+        }
         s.level = sched.tick(s);
         tm.store(s);
         {
@@ -1066,7 +1147,7 @@ int main(int argc, char* argv[]) {
     const char* cmd = argv[1];
 
     if (std::strcmp(cmd, "version") == 0) {
-        std::printf("budyk 0.4.0\n");
+        std::printf("budyk 0.5.0\n");
         return 0;
     }
 

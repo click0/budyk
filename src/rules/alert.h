@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #pragma once
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -15,6 +16,10 @@ enum class AlertSeverity : int {
 };
 
 const char* severity_name(AlertSeverity s);
+
+// Parses "info" / "warning" / "critical" (any case). Returns false and
+// leaves *out untouched for anything else.
+bool parse_severity(const char* s, AlertSeverity* out);
 
 // One configured destination — ntfy.sh / Discord / Telegram / SMTP /
 // Twilio. The `type` field selects the dispatcher backend; the other
@@ -53,8 +58,21 @@ public:
 
     size_t channel_count() const;
 
+    // Bookkeeping over every dispatch() call, counted whether or not any
+    // channel is configured or succeeds, so callers (and tests) can see
+    // what fired without a network round-trip.
+    struct Event {
+        AlertSeverity severity = AlertSeverity::Warning;
+        std::string   rule;
+        std::string   message;
+    };
+    uint64_t     dispatch_calls() const;
+    const Event& last_event()     const;
+
 private:
     std::vector<AlertChannel> channels_;
+    uint64_t                  dispatch_calls_ = 0;
+    Event                     last_event_;
 };
 
 // --- Payload builders (exported for tests; no network) ---------------
