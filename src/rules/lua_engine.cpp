@@ -11,6 +11,7 @@ extern "C" {
 }
 
 #include <cerrno>
+#include <strings.h>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -21,6 +22,17 @@ namespace budyk {
 namespace {
 
 constexpr const char* kEngineRegKey = "budyk.engine";
+
+// Logs a rule's runtime error the first time it appears, so a `when`
+// that raises on every tick doesn't flood the log but a new error (or the
+// same one after the rule recovered) still shows up. `last` is per rule.
+void log_rule_error(std::string* last, const char* rule, const char* part,
+                    const char* msg) {
+    const char* m = msg != nullptr ? msg : "unknown error";
+    if (*last == m) return;
+    *last = m;
+    std::fprintf(stderr, "budyk: rule '%s' %s failed: %s\n", rule, part, m);
+}
 
 void open_sandbox_libs(lua_State* L) {
     // Only the safe subset: base + math + string + table.
@@ -66,6 +78,12 @@ void LuaEngine::shutdown() {
         }
     }
     rules_.clear();
+    for (const auto& c : level_conditions_) {
+        luaL_unref(L_, LUA_REGISTRYINDEX, c.ref);
+    }
+    level_conditions_.clear();
+    escalations_.clear();
+    level_names_.clear();
     lua_close(L_);
     L_ = nullptr;
     last_fire_count_ = 0;
@@ -186,12 +204,14 @@ int LuaEngine::eval_tick(const Sample& s) {
 
         lua_rawgeti(L_, LUA_REGISTRYINDEX, r.when_ref);
         if (lua_pcall(L_, 0, 1, 0) != LUA_OK) {
+            log_rule_error(&r.last_error, r.name.c_str(), "when", lua_tostring(L_, -1));
             lua_pop(L_, 1);
             r.consecutive_hits = 0;
             continue;
         }
         const bool hit = lua_toboolean(L_, -1) != 0;
         lua_pop(L_, 1);
+        r.last_error.clear();
 
         if (!hit) {
             r.consecutive_hits = 0;
@@ -209,6 +229,7 @@ int LuaEngine::eval_tick(const Sample& s) {
         if (r.action_ref != LUA_REFNIL) {
             lua_rawgeti(L_, LUA_REGISTRYINDEX, r.action_ref);
             if (lua_pcall(L_, 0, 0, 0) != LUA_OK) {
+                log_rule_error(&r.last_error, r.name.c_str(), "action", lua_tostring(L_, -1));
                 lua_pop(L_, 1);
             }
         } else if (r.action_tag == "alert") {
@@ -260,6 +281,71 @@ void LuaEngine::set_file_state(const FileWatchState& s) {
 
 bool                  LuaEngine::has_file_state() const { return has_file_state_; }
 const FileWatchState& LuaEngine::file_state()     const { return file_state_; }
+
+int LuaEngine::add_level_condition(uint8_t level_id, const std::string& expr) {
+    if (L_ == nullptr) return -1;
+    const std::string chunk = "return (" + expr + ")";
+    const std::string name  = "=level " + std::to_string(level_id) + " when";
+    if (luaL_loadbuffer(L_, chunk.data(), chunk.size(), name.c_str()) != LUA_OK) {
+        const char* msg = lua_tostring(L_, -1);
+        last_error_ = msg != nullptr ? msg : "unknown Lua error";
+        lua_pop(L_, 1);
+        return -2;
+    }
+    level_conditions_.push_back(
+        LevelCondition{level_id, luaL_ref(L_, LUA_REGISTRYINDEX), std::string()});
+    return 0;
+}
+
+void LuaEngine::eval_level_conditions(const Sample& s, std::vector<uint8_t>* active) {
+    if (active == nullptr) return;
+    active->clear();
+    if (L_ == nullptr || level_conditions_.empty()) return;
+
+    budyk_lua_bind_sample(L_, s);
+    if (has_file_state_) {
+        budyk_lua_bind_files(L_, file_state_);
+    }
+    for (auto& c : level_conditions_) {
+        lua_rawgeti(L_, LUA_REGISTRYINDEX, c.ref);
+        if (lua_pcall(L_, 0, 1, 0) != LUA_OK) {
+            const char* m = lua_tostring(L_, -1);
+            const std::string msg = m != nullptr ? m : "unknown error";
+            if (c.last_error != msg) {
+                c.last_error = msg;
+                std::fprintf(stderr, "budyk: level %u condition failed: %s\n",
+                             static_cast<unsigned>(c.level_id), msg.c_str());
+            }
+            lua_pop(L_, 1);
+            continue;
+        }
+        c.last_error.clear();
+        if (lua_toboolean(L_, -1) != 0) active->push_back(c.level_id);
+        lua_pop(L_, 1);
+    }
+}
+
+void LuaEngine::set_level_names(std::vector<std::string> names) {
+    level_names_ = std::move(names);
+}
+
+bool LuaEngine::is_level_name(const char* name) const {
+    if (name == nullptr) return false;
+    for (const auto& n : level_names_) {
+        if (::strcasecmp(n.c_str(), name) == 0) return true;
+    }
+    return false;
+}
+
+void LuaEngine::push_escalation(const char* level, int seconds) {
+    escalations_.push_back(Escalation{level != nullptr ? level : "", seconds});
+}
+
+std::vector<Escalation> LuaEngine::take_escalations() {
+    std::vector<Escalation> out;
+    out.swap(escalations_);
+    return out;
+}
 
 void LuaEngine::add_rule(const std::string& name, int when_ref, int action_ref,
                          const std::string& action_tag,

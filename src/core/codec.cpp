@@ -188,7 +188,7 @@ int sample_decode(const void* buf, size_t len, Sample* out) {
 
     out->timestamp_nanos = get_u64(p);
     uint8_t lv = get_u8(p);
-    if (lv < 1 || lv > 3) return -5;
+    if (lv < 1 || lv > kMaxLevelId) return -5;
     out->level = static_cast<Level>(lv);
     skip(p, 7);
 

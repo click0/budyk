@@ -4,6 +4,7 @@
 #include <cassert>
 #include <cstdint>
 #include <cstdio>
+#include <string>
 
 using namespace budyk;
 
@@ -150,6 +151,73 @@ int main() {
         assert(sch.tick(at(100)) == Level::L1);
         sch.set_client_count(-3);
         assert(sch.client_count() == 0);
+    }
+
+    // 9. Custom levels: the active level with the highest priority wins,
+    //    ties go to the shorter interval, requests expire at their
+    //    deadline, and higher() / select() follow the same rule.
+    {
+        SchedulerConfig c = cfg;
+        CustomLevel deep;  deep.id  = 4; deep.name  = "deep";  deep.interval_ms  = 1800000; deep.priority  = 5;
+        CustomLevel burst; burst.id = 5; burst.name = "burst"; burst.interval_ms = 500;     burst.priority = 40;
+        CustomLevel tie;   tie.id   = 6; tie.name   = "tie";   tie.interval_ms   = 200;     tie.priority   = 30;
+        c.custom_levels = {deep, burst, tie};
+        Scheduler sch(c);
+
+        // Table lookups.
+        assert(sch.interval_ms(Level::L1) == 300000);
+        assert(sch.interval_ms(static_cast<Level>(5)) == 500);
+        assert(sch.priority(static_cast<Level>(4)) == 5);
+        assert(std::string(sch.level_name(static_cast<Level>(6))) == "tie");
+        assert(std::string(sch.level_name(static_cast<Level>(9))) == "?");
+        Level lv;
+        assert(sch.level_by_name("l3", &lv) && lv == Level::L3);   // case-insensitive built-ins
+        assert(sch.level_by_name("burst", &lv) && static_cast<int>(lv) == 5);
+        assert(!sch.level_by_name("nope", &lv));
+
+        // Nothing requested → L1.
+        assert(sch.tick(at(0)) == Level::L1);
+
+        // deep (5) beats L1 (0) while requested, then expires.
+        sch.request(static_cast<Level>(4), 10 * kSec);
+        assert(sch.tick(at(1))  == static_cast<Level>(4));
+        assert(sch.tick(at(10)) == static_cast<Level>(4));          // deadline is inclusive
+        assert(sch.tick(at(11)) == Level::L1);
+
+        // An anomaly (L2, 20) beats deep (5).
+        sch.request(static_cast<Level>(4), 100 * kSec);
+        Sample hot = at(12); hot.cpu.total_percent = 90.0;
+        assert(sch.tick(hot) == Level::L2);
+
+        // burst (40) beats a connected client (L3, 30).
+        sch.set_client_count(1);
+        assert(sch.tick(at(13)) == Level::L3);
+        sch.request_by_name("burst", 20 * kSec);
+        assert(sch.tick(at(14)) == static_cast<Level>(5));
+
+        // A later deadline extends, an earlier one doesn't shorten.
+        sch.request(static_cast<Level>(5), 15 * kSec);
+        assert(sch.tick(at(19)) == static_cast<Level>(5));
+        assert(sch.tick(at(21)) == Level::L3);
+
+        // Equal priority (tie 30 vs L3 30): the shorter interval wins.
+        sch.request(static_cast<Level>(6), 30 * kSec);
+        assert(sch.tick(at(22)) == static_cast<Level>(6));
+
+        // Unknown names / ids are ignored.
+        assert(!sch.request_by_name("nope", 99 * kSec));
+        sch.request(static_cast<Level>(9), 99 * kSec);
+        assert(sch.select(40 * kSec) != static_cast<Level>(9));
+
+        // higher(): priority first, then interval.
+        assert(sch.higher(Level::L1, static_cast<Level>(4)) == static_cast<Level>(4));
+        assert(sch.higher(Level::L3, static_cast<Level>(6)) == static_cast<Level>(6));
+        assert(sch.higher(static_cast<Level>(5), Level::L3) == static_cast<Level>(5));
+
+        // select() reads state without changing the level tick() set.
+        const Level before = sch.current_level();
+        (void)sch.select(1000 * kSec);
+        assert(sch.current_level() == before);
     }
 
     std::printf("test_scheduler: PASS\n");

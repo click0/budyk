@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <string>
 
 using namespace budyk;
 
@@ -291,6 +292,49 @@ int main() {
         assert(config_load(tmpl, &c) == 0);
         assert(c.listen_port == 7070);
         std::remove(tmpl);
+    }
+
+    // N. collection.levels: valid levels get ids from kFirstCustomLevel in
+    //    order; invalid ones are skipped (and logged) without affecting
+    //    the rest.
+    {
+        Config c;
+        const char* y =
+            "collection:\n"
+            "  levels:\n"
+            "    - { name: burst, interval: 0.5, priority: 40, when: \"cpu.total_percent > 95\", hold: 30, storage_mb: 10 }\n"
+            "    - { name: deep, interval: 1800, priority: 5 }\n"
+            "    - { name: 'bad name', interval: 1, priority: 1 }\n"
+            "    - { name: noint, priority: 1 }\n"
+            "    - { name: fast, interval: 0.01, priority: 1 }\n"
+            "    - { name: noprio, interval: 1 }\n"
+            "    - { name: L3, interval: 1, priority: 1 }\n"
+            "    - { name: DEEP, interval: 1, priority: 1 }\n"
+            "    - { name: badhold, interval: 1, priority: 1, hold: -1 }\n"
+            "    - { name: badmb, interval: 1, priority: 1, storage_mb: 0 }\n"
+            "    - { name: '30s', interval: 30s, priority: 1 }\n";
+        assert(config_load_string(y, &c) == 0);
+        const auto& lv = c.scheduler.custom_levels;
+        assert(lv.size() == 2);
+        assert(lv[0].id == kFirstCustomLevel && lv[0].name == "burst");
+        assert(lv[0].interval_ms == 500 && lv[0].priority == 40);
+        assert(lv[0].when == "cpu.total_percent > 95");
+        assert(lv[0].hold_sec == 30 && lv[0].storage_mb == 10);
+        assert(lv[1].id == kFirstCustomLevel + 1 && lv[1].name == "deep");
+        assert(lv[1].interval_ms == 1800000 && lv[1].priority == 5);
+        assert(lv[1].when.empty() && lv[1].hold_sec == 0 && lv[1].storage_mb == 50);
+    }
+
+    // N+1. At most kMaxCustomLevels levels are accepted.
+    {
+        std::string y = "collection:\n  levels:\n";
+        for (int i = 0; i < 20; ++i) {
+            y += "    - { name: l" + std::to_string(i + 10) + ", interval: 1, priority: 1 }\n";
+        }
+        Config c;
+        assert(config_load_string(y.c_str(), &c) == 0);
+        assert(c.scheduler.custom_levels.size() == kMaxCustomLevels);
+        assert(c.scheduler.custom_levels.back().id == kMaxLevelId);
     }
 
     std::printf("test_config: PASS\n");

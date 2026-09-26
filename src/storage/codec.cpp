@@ -95,7 +95,7 @@ int record_decode(const void* buf, size_t len, Sample* out) {
     // Record framing is the source of truth for ts / level.
     out->timestamp_nanos = get_u64_le(base);
     uint8_t lv = base[8];
-    if (lv < 1 || lv > 3)                  return -5;
+    if (lv < 1 || lv > kMaxLevelId)                  return -5;
     out->level = static_cast<Level>(lv);
     return 0;
 }

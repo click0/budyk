@@ -15,7 +15,7 @@ namespace {
 // File header layout (64 bytes total, spec §3.5):
 //   +0   u8[8]  magic  "BDYKRB\0\x01"
 //   +8   u32    version
-//   +12  u8     tier (1|2|3)
+//   +12  u8     tier (1|2|3; 0x80 for custom-level rings)
 //   +13  u8[3]  pad
 //   +16  u32    record_size
 //   +20  u64    capacity

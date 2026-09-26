@@ -162,10 +162,25 @@ int l_alert(lua_State* L) {
     return 1;
 }
 
+// escalate(level, seconds?) — keep a collection level active for
+// `seconds` (default 60, 1..86400) from now: a custom level's name, or
+// "L2" / "L3". The serve loop hands the request to the scheduler after the
+// rules have run, so it also shortens the current sleep. Returns true;
+// raises for an unknown level or a bad duration.
 int l_escalate(lua_State* L) {
-    // Signal to scheduler — wired in a later PR.
-    (void)L;
-    return 0;
+    const char*       level   = luaL_checkstring(L, 1);
+    const lua_Integer seconds = luaL_optinteger(L, 2, 60);
+    if (seconds < 1 || seconds > 86400) {
+        return luaL_error(L, "escalate: seconds must be 1..86400");
+    }
+    auto* eng = engine_from(L);
+    if (eng == nullptr) return luaL_error(L, "escalate: engine not bound");
+    if (!eng->is_level_name(level)) {
+        return luaL_error(L, "escalate: unknown level '%s'", level);
+    }
+    eng->push_escalation(level, static_cast<int>(seconds));
+    lua_pushboolean(L, 1);
+    return 1;
 }
 
 int l_exec(lua_State* L) {

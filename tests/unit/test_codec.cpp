@@ -167,14 +167,21 @@ int main() {
         assert(sample_decode(buf, len, &out) != 0);
     }
 
-    // 7. Out-of-range level — rejected. Level is at offset 8+4+4+8 = 24.
+    // 7. Level range. Level is at offset 8+4+4+8 = 24. Custom-level ids
+    //    (kFirstCustomLevel..kMaxLevelId) decode; 0 and above-max don't.
     {
         Sample in = make_sample();
         uint8_t buf[512] = {0};
         size_t len = 0;
         assert(sample_encode(&in, buf, sizeof(buf), &len) == 0);
-        buf[24] = 9;
         Sample out{};
+        buf[24] = kFirstCustomLevel;
+        assert(sample_decode(buf, len, &out) == 0);
+        assert(static_cast<uint8_t>(out.level) == kFirstCustomLevel);
+        buf[24] = kMaxLevelId;
+        assert(sample_decode(buf, len, &out) == 0);
+        assert(static_cast<uint8_t>(out.level) == kMaxLevelId);
+        buf[24] = kMaxLevelId + 1;
         assert(sample_decode(buf, len, &out) != 0);
         buf[24] = 0;
         assert(sample_decode(buf, len, &out) != 0);

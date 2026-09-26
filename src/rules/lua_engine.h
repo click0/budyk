@@ -25,6 +25,14 @@ struct LuaRule {
     int         cooldown_ticks;    // ticks to skip after firing (default: for_ticks)
     int         consecutive_hits;  // runtime: current streak of true evaluations
     int         cooldown_remaining;// runtime: ticks left before rule becomes active again
+    std::string last_error;        // last logged when/action error, to log each one once
+};
+
+// A request made by escalate() in a rule: keep `level` active for
+// `seconds` from now. The serve loop hands these to the scheduler.
+struct Escalation {
+    std::string level;
+    int         seconds;
 };
 
 // Embedded Lua 5.4 rule engine (spec §3.6).
@@ -59,6 +67,24 @@ public:
     // Binds `s` as read-only Lua globals and calls every rule's `when()`.
     // Returns the number of rules that fired, or -1 if not initialised.
     int  eval_tick(const Sample& s);
+
+    // Custom-level entry conditions (collection.levels[].when). The
+    // expression is compiled as `return (<expr>)` in the rules sandbox.
+    // Add after init(), and again after a reload. Returns 0, -1 if the
+    // engine isn't initialised, -2 on a compile error (see last_error()).
+    int  add_level_condition(uint8_t level_id, const std::string& expr);
+    // Binds `s` and evaluates every condition. *active is cleared, then
+    // gets the id of each level whose expression is true. A condition
+    // that raises counts as false and is logged once per distinct error.
+    void eval_level_conditions(const Sample& s, std::vector<uint8_t>* active);
+
+    // Level names escalate() accepts ("L1".."L3" and the custom names).
+    void set_level_names(std::vector<std::string> names);
+    bool is_level_name(const char* name) const;
+    // Called by the escalate() binding.
+    void push_escalation(const char* level, int seconds);
+    // escalate() requests made since the last call, oldest first.
+    std::vector<Escalation> take_escalations();
 
     int  rule_count()      const;
     int  last_fire_count() const;
@@ -113,6 +139,14 @@ private:
     std::vector<std::string> freeze_allowlist_;
     AlertDispatcher          alerts_;
     std::string              last_error_;
+    struct LevelCondition {
+        uint8_t     level_id;
+        int         ref;
+        std::string last_error;
+    };
+    std::vector<LevelCondition> level_conditions_;
+    std::vector<std::string>    level_names_;
+    std::vector<Escalation>     escalations_;
     bool                     has_file_state_  = false;
     FileWatchState           file_state_;
 };

@@ -31,6 +31,29 @@ collection:
     capacity: 300          # records held in RAM for WS catch-up
     warm_grace: 60         # seconds
 
+  # Custom levels, in addition to L1/L2/L3 (at most 16). The active level
+  # with the highest priority wins; built-ins are L1 = 0 (always active),
+  # L2 = 20, L3 = 30. On a tie the shorter interval wins.
+  #   name        required  letters, digits, '_' or '-' (not L1/L2/L3)
+  #   interval    required  seconds between ticks; fractions allowed (0.1 .. 86400)
+  #   priority    required  integer
+  #   when        optional  Lua expression over the metric globals, like a
+  #                         YAML rule's `when`; the level is active while true
+  #   hold        optional  seconds to stay active after `when` was last true (0)
+  #   storage_mb  optional  size of the level's ring file, level-<name>.ring (50)
+  # A rule can also switch a level on: escalate("burst", 120).
+  # levels:
+  #   - name: burst           # 2 Hz while the box is under real pressure
+  #     interval: 0.5
+  #     priority: 40          # above L3: beats an open dashboard too
+  #     when: "cpu.total_percent > 95 or load.avg_1m > cpu.count * 2"
+  #     hold: 120
+  #     storage_mb: 100
+  #   - name: deep_sleep      # slower than L1 on a box that is truly idle
+  #     interval: 1800
+  #     priority: 5           # above L1 only; any anomaly or client wins
+  #     when: "load.avg_1m < 0.05 and cpu.total_percent < 2"
+
 # ---- Storage rings -------------------------------------------------------
 storage:
   tier1_max_mb: 250        # raw L3 samples
