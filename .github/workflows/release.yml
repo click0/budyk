@@ -272,6 +272,25 @@ jobs:
           ls -la dist/
           cat dist/*.sha256 || true
 
+      # Release notes are this version's CHANGELOG section only: from its
+      # "## [X.Y.Z]" heading up to the next "## [" heading, without the
+      # "[X.Y.Z]: <url>" link line. A tag with no section fails the run
+      # rather than publishing a release without notes.
+      - name: Extract release notes from CHANGELOG
+        env:
+          VER: ${{ needs.meta.outputs.version }}
+        run: |
+          set -eu
+          awk -v ver="$VER" '
+            /^## \[/ { if (found) exit; if (index($0, "## [" ver "]") == 1) { found = 1; next } }
+            found && index($0, "[" ver "]: ") != 1 { print }
+          ' CHANGELOG.md > release-notes.md
+          if ! grep -q '[^[:space:]]' release-notes.md; then
+            echo "::error::CHANGELOG.md has no '## [$VER]' section"
+            exit 1
+          fi
+          wc -l release-notes.md
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -280,7 +299,7 @@ jobs:
           draft: false
           prerelease: false
           generate_release_notes: true
-          body_path: ${{ github.workspace }}/CHANGELOG.md
+          body_path: ${{ github.workspace }}/release-notes.md
           files: |
             dist/*.tar.gz
             dist/*.tar.gz.sha256
