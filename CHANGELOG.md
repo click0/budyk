@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-09-27
+
+Custom collection levels: your own cadences next to L1–L3, such as
+2 Hz under pressure or every 30 min on an idle box. Each one is switched
+on by a Lua condition or by `escalate()` from a rule, and has its own
+ring file. The active level with the highest priority wins. Also a
+security fix: alert channel settings could run shell commands, because
+curl ran through `system()`; curl now runs without a shell. CI now runs
+ASan/UBSan, a smoke test of the live daemon, cppcheck and clang-tidy on
+every change. Those runs found a crash on `hot_buffer.capacity: 0`, a
+memory leak in `exec()` and an integer overflow, all fixed here.
+
 ### Added
 
 - **Custom collection levels.** `collection.levels` defines up to 16
@@ -111,6 +123,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   code under test inside `assert()`. With `NDEBUG` those calls were
   compiled away and the tests passed without running anything; the
   test targets now build with `-UNDEBUG`.
+
+[0.6.0]: https://github.com/click0/budyk/releases/tag/v0.6.0
 
 ## [0.5.0] — 2026-09-26
 
