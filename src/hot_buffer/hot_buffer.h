@@ -9,8 +9,12 @@ namespace budyk {
 // Never writes to disk. Ephemeral.
 class HotBuffer {
 public:
+    // capacity 0 is treated as 1: push() works modulo the capacity.
     explicit HotBuffer(size_t capacity = 300);
     ~HotBuffer();
+    // Owns a raw array; a copy would double-free it.
+    HotBuffer(const HotBuffer&)            = delete;
+    HotBuffer& operator=(const HotBuffer&) = delete;
 
     void push(const Sample& s);
 

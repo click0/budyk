@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 #include <cerrno>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -119,7 +120,7 @@ std::string bar(double pct, int cells) {
     if (pct < 0)        pct = 0;
     if (pct > 100)      pct = 100;
     if (cells < 2)      cells = 2;
-    int filled = static_cast<int>((pct / 100.0) * cells + 0.5);
+    int filled = static_cast<int>(std::lround((pct / 100.0) * cells));
     if (filled > cells) filled = cells;
     std::string out;
     out.reserve(static_cast<size_t>(cells) + 2);

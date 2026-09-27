@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #include "storage/tier_aggregator.h"
 
-#include <cstring>
+#include <cmath>
+
 
 namespace budyk {
 
@@ -20,7 +21,7 @@ void TierAggregator::reset() {
     load_1m_sum_                = 0.0;
     load_5m_sum_                = 0.0;
     load_15m_sum_               = 0.0;
-    std::memset(&last_, 0, sizeof(last_));
+    last_ = Sample{};
 }
 
 void TierAggregator::add(const Sample& s) {
@@ -52,11 +53,11 @@ bool TierAggregator::fold(Sample* out) {
     r.cpu.count         = last_.cpu.count;
 
     r.mem.total             = last_.mem.total;
-    r.mem.available         = static_cast<uint64_t>(mem_available_sum_ * inv_n + 0.5);
+    r.mem.available         = static_cast<uint64_t>(std::llround(mem_available_sum_ * inv_n));
     r.mem.available_percent = mem_available_percent_sum_ * inv_n;
 
     r.swap.total        = last_.swap.total;
-    r.swap.used         = static_cast<uint64_t>(swap_used_sum_ * inv_n + 0.5);
+    r.swap.used         = static_cast<uint64_t>(std::llround(swap_used_sum_ * inv_n));
     r.swap.used_percent = swap_used_percent_sum_ * inv_n;
 
     r.load.avg_1m  = load_1m_sum_  * inv_n;

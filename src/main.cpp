@@ -503,7 +503,9 @@ uint64_t query_u64(const std::string& query, const char* key, uint64_t fallback)
             uint64_t out = 0;
             for (char c : val) {
                 if (c < '0' || c > '9') return fallback;
-                out = out * 10 + static_cast<uint64_t>(c - '0');
+                const uint64_t digit = static_cast<uint64_t>(c - '0');
+                if (out > (UINT64_MAX - digit) / 10) return UINT64_MAX;   // saturate
+                out = out * 10 + digit;
             }
             return out;
         }
@@ -966,6 +968,8 @@ int cmd_serve(int argc, char* argv[]) {
         {
             std::string rpath, rquery;
             split_target(req.path, &rpath, &rquery);
+            // cppcheck can't see split_target fill rpath through the pointer.
+            // cppcheck-suppress knownConditionTrueFalse
             if (req.method == "GET" && rpath == "/api/range") {
                 if (!authed(req)) {
                     return budyk::HttpResponse{

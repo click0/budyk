@@ -337,6 +337,27 @@ int main() {
         assert(c.scheduler.custom_levels.back().id == kMaxLevelId);
     }
 
+    // Out-of-range numbers fall back to their defaults: a 0-record hot
+    // buffer used to crash the daemon with SIGFPE, a 0 s interval would
+    // spin a core.
+    {
+        Config c;
+        assert(config_load_string(
+            "port: 70000\n"
+            "collection:\n"
+            "  l1: { interval: -5 }\n"
+            "  l3: { interval: 0, grace_period: -1 }\n"
+            "  hot_buffer: { capacity: 0 }\n"
+            "storage: { tier1_max_mb: 0 }\n", &c) == 0);
+        const Config d;
+        assert(c.listen_port                == d.listen_port);
+        assert(c.scheduler.l1_interval_sec  == d.scheduler.l1_interval_sec);
+        assert(c.scheduler.l3_interval_sec  == d.scheduler.l3_interval_sec);
+        assert(c.scheduler.grace_period_sec == d.scheduler.grace_period_sec);
+        assert(c.hot_buffer_capacity        == d.hot_buffer_capacity);
+        assert(c.tier1_max_mb               == d.tier1_max_mb);
+    }
+
     std::printf("test_config: PASS\n");
     return 0;
 }

@@ -32,7 +32,7 @@ struct HttpRequest {
 };
 
 struct HttpResponse {
-    int         status;       // 200, 404, ...
+    int         status = 200; // 200, 404, ...
     std::string content_type; // "application/json", "text/plain"
     std::string body;
     // Extra response headers — written verbatim after Content-Length.

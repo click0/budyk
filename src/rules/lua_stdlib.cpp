@@ -183,31 +183,37 @@ int l_escalate(lua_State* L) {
     return 1;
 }
 
-int l_exec(lua_State* L) {
-    auto* eng = engine_from(L);
-    if (eng == nullptr || !eng->exec_enabled()) {
-        return luaL_error(L, "exec is disabled (enable with --enable-exec)");
-    }
-
+// Does the work of exec(). Returns 1 (result table pushed) or -1 with a
+// message in err. It never raises: luaL_error longjmps past C++
+// destructors, and this function owns std::string / std::vector objects,
+// so l_exec raises only after they are gone. Raw table access keeps
+// metamethods from raising in here too.
+int exec_impl(lua_State* L, budyk::LuaEngine* eng, char* err, size_t err_cap) {
     // Accept either exec("/path/to/cmd")          (single-arg form)
     //            or exec({"/bin/sh", "-c", "..."}) (argv table form).
     std::vector<std::string> argv_storage;
     if (lua_isstring(L, 1)) {
         argv_storage.emplace_back(lua_tostring(L, 1));
     } else if (lua_istable(L, 1)) {
-        const lua_Integer n = luaL_len(L, 1);
-        if (n <= 0) return luaL_error(L, "exec: empty argv table");
+        const lua_Integer n = static_cast<lua_Integer>(lua_rawlen(L, 1));
+        if (n <= 0) {
+            std::snprintf(err, err_cap, "exec: empty argv table");
+            return -1;
+        }
         for (lua_Integer i = 1; i <= n; ++i) {
-            lua_geti(L, 1, i);
+            lua_rawgeti(L, 1, i);
             if (!lua_isstring(L, -1)) {
-                return luaL_error(L, "exec: argv[%d] is not a string",
+                lua_pop(L, 1);
+                std::snprintf(err, err_cap, "exec: argv[%d] is not a string",
                                   static_cast<int>(i));
+                return -1;
             }
             argv_storage.emplace_back(lua_tostring(L, -1));
             lua_pop(L, 1);
         }
     } else {
-        return luaL_error(L, "exec: expected string or argv table");
+        std::snprintf(err, err_cap, "exec: expected string or argv table");
+        return -1;
     }
 
     // --- Hardening -----------------------------------------------------
@@ -224,7 +230,8 @@ int l_exec(lua_State* L) {
     // -------------------------------------------------------------------
     const std::string& cmd = argv_storage.front();
     if (cmd.empty() || cmd.front() != '/') {
-        return luaL_error(L, "exec: argv[0] must be an absolute path");
+        std::snprintf(err, err_cap, "exec: argv[0] must be an absolute path");
+        return -1;
     }
     // A '/..' substring is only a traversal if it sits on a path-segment
     // boundary — i.e. it's followed by '/' (middle of path) or end of string.
@@ -238,14 +245,16 @@ int l_exec(lua_State* L) {
         return false;
     };
     if (contains_traversal(cmd)) {
-        return luaL_error(L, "exec: path traversal (..) forbidden in argv[0]");
+        std::snprintf(err, err_cap, "exec: path traversal (..) forbidden in argv[0]");
+        return -1;
     }
     const auto& allow = eng->exec_allowlist();
     if (!allow.empty()) {
         bool found = false;
         for (const auto& a : allow) if (a == cmd) { found = true; break; }
         if (!found) {
-            return luaL_error(L, "exec: '%s' not in allowlist", cmd.c_str());
+            std::snprintf(err, err_cap, "exec: '%s' not in allowlist", cmd.c_str());
+            return -1;
         }
     }
 
@@ -254,11 +263,12 @@ int l_exec(lua_State* L) {
     for (const auto& s : argv_storage) argv_ptrs.push_back(s.c_str());
     argv_ptrs.push_back(nullptr);
 
-    // Optional second argument: timeout in seconds (default 30).
+    // Optional second argument: timeout in seconds (default 30, at most a
+    // day). Clamped here so a huge Lua integer can't wrap through the int.
     int timeout_s = 30;
     if (lua_isnumber(L, 2)) {
         const lua_Integer t = lua_tointeger(L, 2);
-        if (t > 0) timeout_s = static_cast<int>(t);
+        if (t > 0) timeout_s = static_cast<int>(t < 86400 ? t : 86400);
     }
 
     budyk::ExecResult res{};
@@ -278,6 +288,17 @@ int l_exec(lua_State* L) {
         lua_pushinteger(L, rc); lua_setfield(L, -2, "error");
     }
     return 1;
+}
+
+int l_exec(lua_State* L) {
+    auto* eng = engine_from(L);
+    if (eng == nullptr || !eng->exec_enabled()) {
+        return luaL_error(L, "exec is disabled (enable with --enable-exec)");
+    }
+    char err[512] = "";
+    const int n = exec_impl(L, eng, err, sizeof(err));
+    if (n < 0) return luaL_error(L, "%s", err);
+    return n;
 }
 
 // Shared implementation of freeze() and unfreeze(). `stop == true` sends
