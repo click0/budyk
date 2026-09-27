@@ -7,7 +7,10 @@
 
 #include <cassert>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
+
+#include <unistd.h>
 
 using namespace budyk;
 
@@ -163,6 +166,42 @@ int main() {
         const int ok = d.dispatch(AlertSeverity::Info, "x", "y");
         assert(ok == 0);
         assert(d.channel_count() == 1);
+    }
+
+    // 14. Channel fields never reach a shell. curl used to run through
+    //     system() with the URL unquoted and SMTP addresses in single
+    //     quotes, so a `;`, `$(...)` or `'` in the config ran commands as
+    //     the daemon. Each backend gets fields that would `touch` a marker
+    //     file through a shell; the file must not appear. (This holds
+    //     whether or not curl is installed: the shell ran the touch
+    //     either way.)
+    {
+        char dir_tmpl[] = "/tmp/budyk_inj_XXXXXX";
+        const char* dir = ::mkdtemp(dir_tmpl);
+        assert(dir != nullptr);
+        const std::string marker = std::string(dir) + "/PWNED";
+        const std::string inject = ";touch " + marker + ";";
+        const std::string quoted = "x@y.com'; touch " + marker + "; echo '";
+
+        AlertDispatcher d;
+        auto add = [&](const char* type, const std::string& url,
+                       const std::string& from, const std::string& topic,
+                       const std::string& token) {
+            AlertChannel ch;
+            ch.name = type; ch.type = type; ch.url = url;
+            ch.from = from; ch.topic = topic; ch.token = token;
+            d.add_channel(std::move(ch));
+        };
+        add("ntfy",    "http://127.0.0.1:1/" + inject, "", "t", "");
+        add("discord", "http://127.0.0.1:1/$(touch " + marker + ")", "", "", "");
+        add("twilio",  "http://127.0.0.1:1/" + inject, "+1", "+2", "AC:" + inject);
+        add("smtp",    "smtp://127.0.0.1:1", quoted, quoted, "");
+        add("ntfy",    "-o" + marker, "", "t", "");   // not an option either
+        d.dispatch(AlertSeverity::Info, "r", "m");
+
+        assert(::access(marker.c_str(), F_OK) != 0);
+        ::unlink(marker.c_str());
+        ::rmdir(dir);
     }
 
     std::printf("test_alert: PASS\n");

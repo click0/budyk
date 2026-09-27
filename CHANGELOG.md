@@ -49,6 +49,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   codec; the on-disk format is unchanged. Before, anything but 1–3 was
   rejected.
 
+### Security
+
+- **Alert channel settings could run shell commands.** Alerts ran curl
+  through `system()`:
+  - ntfy, Discord and Telegram put the channel URL into the command
+    unquoted;
+  - Twilio did the same;
+  - SMTP put `from` / `topic` in single quotes.
+  A `;`, `$(...)` or `'` in those config fields therefore ran commands
+  as the daemon user. Confirmed live: an ntfy URL of
+  `http://…/;touch FILE;` created FILE. curl is now started directly
+  with `fork` + `execvp` (via `exec_command`), each value one argv
+  entry, and every URL passed with `--url`, so one starting with `-`
+  can't become an option. The fields are config-only, so an attacker
+  needed write access to the config, but a stray quote in an e-mail
+  address or token also broke delivery. Checked live that ntfy (with
+  its Title / Priority headers), Twilio (netrc basic auth with a `'`
+  in the token) and SMTP (a fake server received `o'brien@…`
+  verbatim) still deliver. `test_alert` case 14 fails against the old
+  code.
+
 ### Fixed
 
 - **`collection.hot_buffer.capacity: 0` crashed the daemon** with

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #include "rules/alert.h"
+#include "rules/exec_action.h"
 
 #include <strings.h>
 #include <sys/stat.h>
@@ -12,6 +13,7 @@
 #include <ctime>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace budyk {
 
@@ -100,6 +102,23 @@ const char* ntfy_priority(AlertSeverity s) {
     return "3";
 }
 
+// Runs curl with `args` as its argv, directly (fork + execvp, no shell).
+// A URL, address or token with spaces, quotes, `;` or `$(...)` stays one
+// argument and is never parsed as shell syntax; each URL goes through
+// --url so one starting with '-' can't become an option either. stdio is
+// /dev/null and the run is killed after timeout_s (see exec_command).
+// Returns 0 when curl exits 0.
+int run_curl(const std::vector<std::string>& args, int timeout_s) {
+    std::vector<const char*> argv;
+    argv.reserve(args.size() + 2);
+    argv.push_back("curl");
+    for (const auto& a : args) argv.push_back(a.c_str());
+    argv.push_back(nullptr);
+    ExecResult res{};
+    if (exec_command(argv.data(), timeout_s, &res) != 0) return -1;
+    return res.exit_status == 0 && res.signal == 0 && !res.timed_out ? 0 : -2;
+}
+
 // Shared scaffold for the curl invocations below: writes body+headers
 // to /tmp, runs curl with --max-time 10, returns rc==0 on HTTP success
 // (curl already maps 4xx/5xx to non-zero via -f… but we don't use -f
@@ -122,12 +141,10 @@ int curl_post(const char* url,
         return -2;
     }
 
-    char cmd[2048];
-    std::snprintf(cmd, sizeof(cmd),
-        "curl -sS -X POST -H @%s -d @%s --max-time 10 %s >/dev/null 2>&1",
-        hdr_path, body_path, url);
-
-    const int rc = std::system(cmd);
+    const int rc = run_curl({"-sS", "-X", "POST",
+                             "-H", std::string("@") + hdr_path,
+                             "-d", std::string("@") + body_path,
+                             "--max-time", "10", "--url", url}, 15);
     ::unlink(body_path);
     ::unlink(hdr_path);
     return rc == 0 ? 0 : -3;
@@ -169,14 +186,10 @@ int curl_basic_form_post(const char* url,
     }
     ::chmod(netrc_path, 0600);
 
-    char cmd[2048];
-    std::snprintf(cmd, sizeof(cmd),
-        "curl -sS -X POST --netrc-file %s "
-        "-H 'Content-Type: application/x-www-form-urlencoded' "
-        "-d @%s --max-time 10 %s >/dev/null 2>&1",
-        netrc_path, body_path, url);
-
-    const int rc = std::system(cmd);
+    const int rc = run_curl({"-sS", "-X", "POST", "--netrc-file", netrc_path,
+                             "-H", "Content-Type: application/x-www-form-urlencoded",
+                             "-d", std::string("@") + body_path,
+                             "--max-time", "10", "--url", url}, 15);
     ::unlink(body_path);
     ::unlink(netrc_path);
     return rc == 0 ? 0 : -4;
@@ -196,7 +209,6 @@ int curl_smtp(const char* url,
     char body_path[64];
     if (!write_tmp(message, body_path, sizeof(body_path))) return -1;
 
-    std::string auth_args;
     char netrc_path[64] = {0};
     if (!user_pass.empty()) {
         const auto colon = user_pass.find(':');
@@ -221,18 +233,16 @@ int curl_smtp(const char* url,
             return -4;
         }
         ::chmod(netrc_path, 0600);
-        auth_args = "--netrc-file ";
-        auth_args += netrc_path;
-        auth_args += " ";
     }
 
-    char cmd[2048];
-    std::snprintf(cmd, sizeof(cmd),
-        "curl -sS %s--mail-from '%s' --mail-rcpt '%s' "
-        "-T %s --max-time 15 %s >/dev/null 2>&1",
-        auth_args.c_str(), from.c_str(), to.c_str(), body_path, url);
-
-    const int rc = std::system(cmd);
+    std::vector<std::string> args = {"-sS"};
+    if (netrc_path[0] != '\0') {
+        args.push_back("--netrc-file");
+        args.push_back(netrc_path);
+    }
+    args.insert(args.end(), {"--mail-from", from, "--mail-rcpt", to,
+                             "-T", body_path, "--max-time", "15", "--url", url});
+    const int rc = run_curl(args, 20);
     ::unlink(body_path);
     if (netrc_path[0] != '\0') ::unlink(netrc_path);
     return rc == 0 ? 0 : -5;
