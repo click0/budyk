@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`budyk tui` didn't work with a password-protected dashboard.** It
+  called the API without logging in, got 401, and drew made-up zeros
+  (0% CPU, 0 cores, "free 0B / 0B") as if they were real readings. It
+  now asks for the password once at startup (no echo), logs in, and
+  sends the session cookie with every request. When the session
+  expires, for example after a daemon restart with
+  `persist_sessions: false`, it logs in again on its own. A wrong
+  password exits with a clear message. Any other non-200 answer is
+  shown on screen instead of zeros.
+- **The TUI read the wrong numbers.** Each value came from the last
+  occurrence of its key anywhere in the response. The memory total
+  therefore came from `proc.total`, the process count, and "cores"
+  could come from another section. Values are now looked up within
+  their own section of the newest sample.
+- **The TUI's memory line ran off the screen.** The bar was sized
+  `COLS - 30`, but the memory line needs 40 columns besides the bar, so
+  the memory total was cut off at every terminal width. That is also
+  why the wrong total above was never visible.
+
 ### CI
 
 - **Compiler warnings are on, and fatal in CI.** `-Wall -Wextra` is

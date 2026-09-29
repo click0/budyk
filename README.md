@@ -186,8 +186,9 @@ web:
     password_hash: "$argon2id$v=19$..."   # keep the quotes
 ```
 
-> The TUI calls the HTTP API without logging in, so it only works while
-> `web.auth.enabled` is `false`.
+If the dashboard is password-protected, `budyk tui` asks for the password
+once at startup (without echoing it) and logs in. If the session later
+expires, for example after a daemon restart, it logs in again by itself.
 
 All settings are documented in
 [`config.example.yaml`](config.example.yaml).

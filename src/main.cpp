@@ -1286,7 +1286,10 @@ int main(int argc, char* argv[]) {
                 return 1;
             }
         }
-        return budyk::tui_run(host, port) == 0 ? 0 : 1;
+        // Asked only if the daemon answers 401 (web.auth.enabled).
+        return budyk::tui_run(host, port, [] {
+            return read_password("budyk password: ");
+        }) == 0 ? 0 : 1;
     }
 
     if (std::strcmp(cmd, "hash-password") == 0) {
