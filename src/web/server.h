@@ -32,6 +32,10 @@ struct HttpRequest {
 };
 
 struct HttpResponse {
+    HttpResponse() = default;
+    HttpResponse(int s, std::string type, std::string text)
+        : status(s), content_type(std::move(type)), body(std::move(text)) {}
+
     int         status = 200; // 200, 404, ...
     std::string content_type; // "application/json", "text/plain"
     std::string body;

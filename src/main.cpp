@@ -890,24 +890,24 @@ int cmd_serve(int argc, char* argv[]) {
         if (req.method == "POST" && req.path == "/api/auth/login") {
             if (!cfg.auth_enabled || cfg.password_hash[0] == '\0') {
                 return budyk::HttpResponse{
-                    403, "text/plain", "auth disabled\n", {}};
+                    403, "text/plain", "auth disabled\n"};
             }
             std::string pw;
             if (!json_get_string(req.body, "password", &pw) || pw.empty()) {
                 return budyk::HttpResponse{
                     400, "application/json",
-                    "{\"error\":\"missing password\"}\n", {}};
+                    "{\"error\":\"missing password\"}\n"};
             }
             if (budyk::argon2_verify(pw, cfg.password_hash) != 0) {
                 return budyk::HttpResponse{
                     401, "application/json",
-                    "{\"error\":\"invalid credentials\"}\n", {}};
+                    "{\"error\":\"invalid credentials\"}\n"};
             }
             const std::string tok = sessions.create();
             if (tok.empty()) {
                 return budyk::HttpResponse{
                     500, "application/json",
-                    "{\"error\":\"entropy unavailable\"}\n", {}};
+                    "{\"error\":\"entropy unavailable\"}\n"};
             }
             budyk::HttpResponse r;
             r.status       = 200;
@@ -924,7 +924,7 @@ int cmd_serve(int argc, char* argv[]) {
                 const std::string tok = cookie_value(c, "budyk_session");
                 if (!tok.empty()) sessions.revoke(tok);
             }
-            budyk::HttpResponse r{200, "application/json", "{\"ok\":true}\n", {}};
+            budyk::HttpResponse r{200, "application/json", "{\"ok\":true}\n"};
             r.extra_headers.push_back({"Set-Cookie",
                 "budyk_session=; HttpOnly; Path=/; Max-Age=0"});
             return r;
@@ -933,7 +933,7 @@ int cmd_serve(int argc, char* argv[]) {
         if (req.method == "GET" && req.path == "/api/samples") {
             if (!authed(req)) {
                 return budyk::HttpResponse{
-                    401, "application/json", "{\"error\":\"unauthenticated\"}\n", {}, {}};
+                    401, "application/json", "{\"error\":\"unauthenticated\"}\n"};
             }
             // A poller (the TUI) counts as a connected client. Wake the loop
             // only when one appears, not on every poll, so an L3 cadence
@@ -974,7 +974,7 @@ int cmd_serve(int argc, char* argv[]) {
                 if (!authed(req)) {
                     return budyk::HttpResponse{
                         401, "application/json",
-                        "{\"error\":\"unauthenticated\"}\n", {}, {}};
+                        "{\"error\":\"unauthenticated\"}\n"};
                 }
                 constexpr uint64_t kMaxLimit = 5000;
                 const uint64_t since = query_u64(rquery, "since", 0);
@@ -997,7 +997,7 @@ int cmd_serve(int argc, char* argv[]) {
                     if (!sched.level_by_name(level_name, &lv)) {
                         return budyk::HttpResponse{
                             404, "application/json",
-                            "{\"error\":\"unknown level\"}\n", {}, {}};
+                            "{\"error\":\"unknown level\"}\n"};
                     }
                     n = tm.query_level(lv, since, until,
                                        static_cast<size_t>(limit), &out);
@@ -1008,7 +1008,7 @@ int cmd_serve(int argc, char* argv[]) {
                 if (n < 0) {
                     return budyk::HttpResponse{
                         400, "application/json",
-                        "{\"error\":\"bad range query\"}\n", {}, {}};
+                        "{\"error\":\"bad range query\"}\n"};
                 }
                 budyk::HttpResponse r;
                 r.status       = 200;
@@ -1023,7 +1023,7 @@ int cmd_serve(int argc, char* argv[]) {
         if (req.method == "GET" && req.path == "/api/levels") {
             if (!authed(req)) {
                 return budyk::HttpResponse{
-                    401, "application/json", "{\"error\":\"unauthenticated\"}\n", {}, {}};
+                    401, "application/json", "{\"error\":\"unauthenticated\"}\n"};
             }
             std::string body = "[";
             auto add = [&](budyk::Level lv, bool builtin) {
@@ -1054,11 +1054,11 @@ int cmd_serve(int argc, char* argv[]) {
         if (req.path == "/api/ws") {
             if (!budyk::is_websocket_upgrade(req)) {
                 return budyk::HttpResponse{
-                    400, "text/plain", "expected websocket upgrade\n", {}, {}};
+                    400, "text/plain", "expected websocket upgrade\n"};
             }
             if (!authed(req)) {
                 return budyk::HttpResponse{
-                    401, "text/plain", "unauthenticated\n", {}, {}};
+                    401, "text/plain", "unauthenticated\n"};
             }
             const std::string key = req.header("Sec-WebSocket-Key");
             const std::string handshake = budyk::ws_handshake_response(key);
@@ -1091,7 +1091,7 @@ int cmd_serve(int argc, char* argv[]) {
             };
             return r;
         }
-        return budyk::HttpResponse{404, "text/plain", "not found\n", {}, {}};
+        return budyk::HttpResponse{404, "text/plain", "not found\n"};
     };
     if (http.start(cfg.listen_addr, cfg.listen_port, router) != 0) {
         std::fprintf(stderr,

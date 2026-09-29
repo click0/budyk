@@ -357,7 +357,8 @@ void LuaEngine::add_rule(const std::string& name, int when_ref, int action_ref,
         name, when_ref, action_ref, action_tag, severity, message,
         /*fire_count*/ 0,
         for_ticks, cooldown_ticks,
-        /*consecutive_hits*/ 0, /*cooldown_remaining*/ 0
+        /*consecutive_hits*/ 0, /*cooldown_remaining*/ 0,
+        /*last_error*/ std::string()
     });
 }
 

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### CI
+
+- **Compiler warnings are on, and fatal in CI.** `-Wall -Wextra` is
+  now always enabled. Before, not even `-Wall` was on. A new
+  `ENABLE_WERROR` option turns warnings into errors. CI sets it on the
+  Linux static/shared, sanitizer and FreeBSD lite/full builds, but not
+  the release build, so a warning from a newer compiler can't block a
+  release. The only warnings were `-Wmissing-field-initializers` from
+  aggregate initialisation, where omitted fields took safe defaults.
+  `HttpResponse` gains a (status, type, body) constructor instead of
+  trailing `{}`s, and `LuaRule` initialises `last_error` explicitly.
+  GCC 13 and Clang 18 build with 0 warnings.
+
 ## [0.6.0] — 2026-09-27
 
 Custom collection levels: your own cadences next to L1–L3, such as

@@ -251,7 +251,7 @@ bool HttpServer::handle_client(int client_fd) {
 
     HttpRequest req;
     if (!parse_headers(buf.data(), static_cast<size_t>(hdr_end), &req)) {
-        send_response(client_fd, HttpResponse{400, "text/plain", "bad request\n", {}, {}});
+        send_response(client_fd, HttpResponse{400, "text/plain", "bad request\n"});
         return false;
     }
 
@@ -266,7 +266,7 @@ bool HttpServer::handle_client(int client_fd) {
         char* endp = nullptr;
         unsigned long want = std::strtoul(cl.c_str(), &endp, 10);
         if (endp == cl.c_str() || want > kMaxBodyBytes) {
-            send_response(client_fd, HttpResponse{413, "text/plain", "body too large\n", {}, {}});
+            send_response(client_fd, HttpResponse{413, "text/plain", "body too large\n"});
             return false;
         }
         if (req.body.size() < want) {
