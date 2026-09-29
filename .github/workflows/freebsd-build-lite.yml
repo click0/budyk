@@ -54,7 +54,8 @@ jobs:
             cmake -B build \
               -DBUDYK_PLATFORM=freebsd \
               -DSTATIC_LINK=OFF \
-              -DBUILD_TESTS=ON
+              -DBUILD_TESTS=ON \
+              -DENABLE_WERROR=ON
             echo "::endgroup::"
 
             echo "::group::Build"

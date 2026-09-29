@@ -59,7 +59,8 @@ jobs:
           cmake -B build \
             -DBUDYK_PLATFORM=linux \
             $LINK_FLAGS \
-            -DBUILD_TESTS=ON
+            -DBUILD_TESTS=ON \
+            -DENABLE_WERROR=ON
 
       - name: Build
         run: cmake --build build -j"$(nproc)"
@@ -108,7 +109,8 @@ jobs:
             -DBUDYK_PLATFORM=linux \
             -DSTATIC_LINK=OFF \
             -DENABLE_SANITIZERS=ON \
-            -DBUILD_TESTS=ON
+            -DBUILD_TESTS=ON \
+            -DENABLE_WERROR=ON
 
       - name: Build
         run: cmake --build build -j"$(nproc)"

@@ -16,6 +16,15 @@ add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-fno-rtti>)
 # Security hardening
 add_compile_options(-D_FORTIFY_SOURCE=2 -fstack-protector-strong)
 
+# Warnings are always on. CI adds -DENABLE_WERROR=ON so a new warning
+# fails the build; a local or distro build with a newer compiler that
+# warns about something new still builds.
+add_compile_options(-Wall -Wextra)
+option(ENABLE_WERROR "Treat compiler warnings as errors (used by CI)" OFF)
+if(ENABLE_WERROR)
+    add_compile_options(-Werror)
+endif()
+
 # Platform detection
 include(cmake/platform.cmake)
 
