@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] — 2026-09-30
+
+Bug fixes for `budyk tui`, all present since the TUI was added. With a
+password-protected dashboard it showed made-up zeros (0% CPU, 0 cores,
+free 0B / 0B) instead of logging in; it now asks for the password once
+and keeps the session alive. Its values were read from the wrong
+fields: the memory total showed the process count. And the memory line
+ran off the screen at every width. CI now also builds with
+`-Wall -Wextra` and treats warnings as errors.
+
 ### Fixed
 
 - **`budyk tui` didn't work with a password-protected dashboard.** It
@@ -40,6 +50,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `HttpResponse` gains a (status, type, body) constructor instead of
   trailing `{}`s, and `LuaRule` initialises `last_error` explicitly.
   GCC 13 and Clang 18 build with 0 warnings.
+
+[0.6.1]: https://github.com/click0/budyk/releases/tag/v0.6.1
 
 ## [0.6.0] — 2026-09-27
 
