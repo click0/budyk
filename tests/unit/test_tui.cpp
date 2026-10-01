@@ -85,6 +85,24 @@ int main() {
         assert(sample_number("", "mem", "total", -1.0) == -1.0);
     }
 
+    // 5. parse_levels / level_label: the /api/levels table and the
+    //    dashboard's wording for it.
+    {
+        const auto lv = parse_levels(
+            "[{\"id\":1,\"name\":\"L1\",\"interval_ms\":300000,\"priority\":0,\"builtin\":true},"
+            "{\"id\":3,\"name\":\"L3\",\"interval_ms\":1000,\"priority\":30,\"builtin\":true},"
+            "{\"id\":4,\"name\":\"burst\",\"interval_ms\":500,\"priority\":40,\"builtin\":false},"
+            "{\"id\":0,\"name\":\"bad\"},{\"id\":9,\"name\":\"\"}]\n");
+        assert(lv.size() == 3);
+        assert(lv[2].id == 4 && lv[2].name == "burst" && lv[2].interval_ms == 500);
+        assert(level_label(lv, 4) == "burst (every 0.5 s)");
+        assert(level_label(lv, 1) == "L1 (every 5 min)");
+        assert(level_label(lv, 3) == "L3 (every 1 s)");
+        assert(level_label(lv, 7) == "level 7");          // unknown id
+        assert(parse_levels("").empty());
+        assert(parse_levels("{\"error\":\"unauthenticated\"}").empty());
+    }
+
     std::printf("test_tui: PASS\n");
     return 0;
 }

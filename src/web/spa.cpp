@@ -11,6 +11,7 @@ const char* const kSpaIndexHtml = R"BUDYK(<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<link rel="icon" href="data:,">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>budyk</title>
 <style>
