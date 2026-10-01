@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### CI
+
+- **Line coverage is measured and gated.** A new coverage job runs the
+  unit tests and the serve smoke test (which covers `main.cpp`) under
+  gcov/lcov. `tests/coverage_report.py` prints coverage per module,
+  writes it to the job summary, and fails the job if `core/` or
+  `storage/` drops below 85% (spec §5 item 10). Current figures:
+  core 100%, storage 96.9%, scheduler 100%, web 93.8%, total 81%.
+- **Tests for paths coverage showed were never run.** `query_all()`'s
+  thinning across rings never ran in tests: each ring came back
+  already within the limit, so the merge step had nothing to thin. A
+  three-ring test now exercises it. So does a custom ring whose size no
+  longer matches `storage_mb`: init returns -9, closes what it had
+  opened, and init with the original size works again. tier_manager.cpp
+  coverage went from 84.3% to 94.4%.
+
 ## [0.6.1] — 2026-09-30
 
 Bug fixes for `budyk tui`, all present since the TUI was added. With a
