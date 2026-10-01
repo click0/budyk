@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2] — 2026-10-01
+
+A small update. `budyk tui` now shows the current collection level,
+including custom levels, the way the dashboard does. The dashboard no
+longer logs a 404 for `/favicon.ico` on every load. CI now measures
+line coverage and keeps `core/` and `storage/` at or above 85%; adding
+it turned up two untested storage paths, which are now covered.
+
 ### Added
 
 - **The TUI shows the current level,** as the dashboard does: a
@@ -36,6 +44,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   longer matches `storage_mb`: init returns -9, closes what it had
   opened, and init with the original size works again. tier_manager.cpp
   coverage went from 84.3% to 94.4%.
+
+[0.6.2]: https://github.com/click0/budyk/releases/tag/v0.6.2
 
 ## [0.6.1] — 2026-09-30
 
