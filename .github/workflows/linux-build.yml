@@ -160,3 +160,56 @@ jobs:
           # tested by the FreeBSD workflows instead.
           git ls-files 'src/*.cpp' 'src/*.c' | grep -v '/freebsd/' \
             | xargs clang-tidy -p build --quiet
+
+  # Line coverage (gcov/lcov) over the unit tests plus the serve smoke
+  # test, which is what covers main.cpp. Spec §5 item 10: core/ and
+  # storage/ must stay at >= 85%; the job fails below that. The per-module
+  # table goes to the job summary; coverage.info is kept as an artifact.
+  coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    name: Linux coverage
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain and dependencies
+        run: |
+          set -ex
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            cmake g++ pkg-config python3 curl lcov \
+            liblua5.4-dev libyaml-dev libargon2-dev libncurses-dev
+
+      - name: Configure
+        run: |
+          cmake -B build \
+            -DBUDYK_PLATFORM=linux \
+            -DSTATIC_LINK=OFF \
+            -DBUILD_TESTS=ON \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_FLAGS=--coverage \
+            -DCMAKE_CXX_FLAGS=--coverage \
+            -DCMAKE_EXE_LINKER_FLAGS=--coverage
+
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
+      - name: Run ctest and the smoke test
+        run: |
+          ctest --test-dir build --output-on-failure
+          tests/smoke/serve.sh build/src/budyk
+
+      - name: Coverage report (core/ and storage/ >= 85%)
+        run: |
+          lcov --capture --directory build --output-file coverage.info \
+            --ignore-errors mismatch,inconsistent,unused,gcov,empty
+          tests/coverage_report.py coverage.info --min core=85 --min storage=85
+
+      - name: Upload coverage data
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-linux
+          path: coverage.info
+          if-no-files-found: ignore
+          retention-days: 14

@@ -305,6 +305,65 @@ int main() {
         rmrf(d);
     }
 
+    // N+3. query_all() thinning across rings. Each ring already comes back
+    //      spread to at most `limit` records, so the merge-level thinning
+    //      only runs when several rings together exceed the limit. Three
+    //      interleaved rings × 40 samples, limit 12.
+    {
+        const std::string d = mkdtmp();
+        TierManager tm;
+        assert(tm.init(d.c_str(), 1, 1, 1, {LevelRingSpec{4, "burst", 1}}) == 0);
+        for (uint64_t i = 0; i < 40; ++i) {
+            assert(tm.store(mk(Level::L3, 1000 + 4 * i)) == 0);
+            assert(tm.store(mk(Level::L2, 1001 + 4 * i)) == 0);
+            assert(tm.store(mk(static_cast<Level>(4), 1002 + 4 * i)) == 0);
+        }
+        std::vector<Sample> out;
+        const int n = tm.query_all(0, 0, 12, &out);
+        assert(n > 0 && n <= 12);
+        for (size_t i = 1; i < out.size(); ++i) {
+            assert(out[i - 1].timestamp_nanos < out[i].timestamp_nanos);
+        }
+        // Each of the 12 slices of the window (1000..1158, ~13.25 wide)
+        // keeps its newest sample: the first point lies within the first
+        // slice, the last is the newest sample of all.
+        assert(out.front().timestamp_nanos < 1000 + 14);
+        assert(out.back().timestamp_nanos == 1002 + 4 * 39);
+        // tier 3 (L1) through the numeric query, for completeness.
+        assert(tm.store(mk(Level::L1, 5000)) == 0);
+        std::vector<Sample> l1;
+        assert(tm.query(3, 0, 0, 10, &l1) == 1 && l1[0].level == Level::L1);
+        tm.close();
+        rmrf(d);
+    }
+
+    // N+4. A custom ring that no longer matches its configured size (the
+    //      user changed storage_mb) fails init() with -9 and closes every
+    //      ring it had opened; init() with the original size still works.
+    {
+        const std::string d = mkdtmp();
+        {
+            TierManager tm;
+            assert(tm.init(d.c_str(), 1, 1, 1, {LevelRingSpec{4, "burst", 1}}) == 0);
+            assert(tm.store(mk(static_cast<Level>(4), 100)) == 0);
+            tm.close();
+        }
+        {
+            TierManager tm;
+            assert(tm.init(d.c_str(), 1, 1, 1, {LevelRingSpec{4, "burst", 2}}) == -9);
+            std::vector<Sample> out;
+            assert(tm.query_level(Level::L3, 0, 0, 10, &out) == -1);   // not ready
+        }
+        {
+            TierManager tm;
+            assert(tm.init(d.c_str(), 1, 1, 1, {LevelRingSpec{4, "burst", 1}}) == 0);
+            std::vector<Sample> out;
+            assert(tm.query_level(static_cast<Level>(4), 0, 0, 10, &out) == 1);
+            tm.close();
+        }
+        rmrf(d);
+    }
+
     std::printf("test_tier_manager: PASS\n");
     return 0;
 }
