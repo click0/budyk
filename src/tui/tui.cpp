@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <vector>
 
 #ifdef BUDYK_HAVE_CURSES
 #  include <curses.h>
@@ -218,6 +219,42 @@ double sample_number(const std::string& body, const char* section,
     return v;
 }
 
+std::vector<LevelInfo> parse_levels(const std::string& body) {
+    std::vector<LevelInfo> out;
+    size_t pos = 0;
+    while ((pos = body.find("{\"id\":", pos)) != std::string::npos) {
+        const size_t end = body.find('}', pos);
+        if (end == std::string::npos) break;
+        const std::string obj = body.substr(pos, end - pos + 1);
+        pos = end + 1;
+
+        LevelInfo lv;
+        lv.id = std::atoi(obj.c_str() + 6);
+        const std::string nk = "\"name\":\"";
+        const size_t n = obj.find(nk);
+        if (n != std::string::npos) {
+            const size_t q = obj.find('"', n + nk.size());
+            if (q != std::string::npos) lv.name = obj.substr(n + nk.size(), q - n - nk.size());
+        }
+        const size_t iv = obj.find("\"interval_ms\":");
+        if (iv != std::string::npos) lv.interval_ms = std::atoi(obj.c_str() + iv + 14);
+        if (lv.id > 0 && !lv.name.empty()) out.push_back(lv);
+    }
+    return out;
+}
+
+std::string level_label(const std::vector<LevelInfo>& levels, int id) {
+    for (const auto& lv : levels) {
+        if (lv.id != id) continue;
+        const double s = lv.interval_ms / 1000.0;
+        char every[32];
+        if (s >= 60) std::snprintf(every, sizeof(every), "%g min", s / 60);
+        else         std::snprintf(every, sizeof(every), "%g s", s);
+        return lv.name + " (every " + every + ")";
+    }
+    return "level " + std::to_string(id);
+}
+
 } // namespace tui_detail
 
 int tui_run(const char* host, int port, std::string (*ask_password)()) {
@@ -258,6 +295,19 @@ int tui_run(const char* host, int port, std::string (*ask_password)()) {
         }
     }
 
+    // Level names for the sample's level id. Fetched again whenever a
+    // sample carries an id the table doesn't know (the daemon was
+    // restarted with other custom levels).
+    std::vector<tui_detail::LevelInfo> levels;
+    auto fetch_levels = [&] {
+        tui_detail::HttpReply lr;
+        if (http_request(host, port, "GET", "/api/levels", cookie_header, "", &lr) == 0 &&
+            lr.status == 200) {
+            levels = tui_detail::parse_levels(lr.body);
+        }
+    };
+    fetch_levels();
+
     // --- ncurses init --------------------------------------------------------
     ::initscr();
     ::cbreak();
@@ -268,6 +318,7 @@ int tui_run(const char* host, int port, std::string (*ask_password)()) {
 
     bool quit = false;
     int  tick = 0;
+    int  levels_fetched_at = 0;
 
     while (!quit) {
         tui_detail::HttpReply r;
@@ -313,20 +364,29 @@ int tui_run(const char* host, int port, std::string (*ask_password)()) {
             // Leave room for the longest line: "Memory 100.0% [bar] free
             // 1023.9G / 1023.9G" is 40 columns plus the bar. COLS - 30 used
             // to push the memory total off the right edge at every width.
+            const int level = static_cast<int>(sample_number(b, nullptr, "level"));
+            bool known = false;
+            for (const auto& lv : levels) known = known || lv.id == level;
+            if (!known && tick - levels_fetched_at >= 30) {   // at most every 30 ticks
+                fetch_levels();
+                levels_fetched_at = tick;
+            }
+            ::mvprintw(2, 0, "Level  %s", tui_detail::level_label(levels, level).c_str());
+
             const int barw = COLS > 50 ? COLS - 40 : 10;
-            ::mvprintw(2, 0, "CPU    %5.1f%% %s %u cores",
+            ::mvprintw(3, 0, "CPU    %5.1f%% %s %u cores",
                        cpu_pct, bar(cpu_pct, barw).c_str(), cores);
-            ::mvprintw(3, 0, "Memory %5.1f%% %s free %s / %s",
+            ::mvprintw(4, 0, "Memory %5.1f%% %s free %s / %s",
                        100.0 - mem_av, bar(100.0 - mem_av, barw).c_str(),
                        fmt_bytes(ma).c_str(), fmt_bytes(mt).c_str());
-            ::mvprintw(4, 0, "Swap   %5.1f%% %s",
+            ::mvprintw(5, 0, "Swap   %5.1f%% %s",
                        swap_us, bar(swap_us, barw).c_str());
-            ::mvprintw(6, 0, "Load   %.2f / %.2f / %.2f", load1, load5, load15);
-            ::mvprintw(7, 0, "Disk   r %s/s   w %s/s   (%u devs)",
+            ::mvprintw(7, 0, "Load   %.2f / %.2f / %.2f", load1, load5, load15);
+            ::mvprintw(8, 0, "Disk   r %s/s   w %s/s   (%u devs)",
                        fmt_bytes(dr).c_str(), fmt_bytes(dw).c_str(), devs);
-            ::mvprintw(8, 0, "Net    rx %s/s  tx %s/s   (%u ifaces)",
+            ::mvprintw(9, 0, "Net    rx %s/s  tx %s/s   (%u ifaces)",
                        fmt_bytes(rx).c_str(), fmt_bytes(tx).c_str(), ifs);
-            ::mvprintw(9, 0, "Uptime %s", fmt_uptime(uptime).c_str());
+            ::mvprintw(10, 0, "Uptime %s", fmt_uptime(uptime).c_str());
         }
         ::refresh();
 

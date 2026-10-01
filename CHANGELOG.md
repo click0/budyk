@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The TUI shows the current level,** as the dashboard does: a
+  `Level  burst (every 0.5 s)` row. The names come from `/api/levels`.
+  The table is fetched again (at most every 30 ticks) if a sample
+  carries an unknown id, for example after the daemon is restarted
+  with other custom levels.
+
+### Fixed
+
+- **The dashboard no longer requests `/favicon.ico`.** The browser
+  asked for it on every load, got a 404, and logged an error in the
+  console. The page now declares an empty icon.
+
 ### CI
 
 - **Line coverage is measured and gated.** A new coverage job runs the

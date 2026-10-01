@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #pragma once
 #include <string>
+#include <vector>
 
 namespace budyk {
 
@@ -37,6 +38,21 @@ std::string json_quote(const std::string& s);
 // sample field such as "uptime_seconds". fallback if it isn't there.
 double sample_number(const std::string& body, const char* section,
                      const char* key, double fallback = 0.0);
+
+// One row of GET /api/levels.
+struct LevelInfo {
+    int         id          = 0;
+    std::string name;
+    int         interval_ms = 0;
+};
+
+// The level table from an /api/levels body; entries without an id or a
+// name are skipped.
+std::vector<LevelInfo> parse_levels(const std::string& body);
+
+// "burst (every 0.5 s)", "L1 (every 5 min)", or "level 7" for an id the
+// table doesn't have. Same wording as the dashboard's Level row.
+std::string level_label(const std::vector<LevelInfo>& levels, int id);
 
 } // namespace tui_detail
 
