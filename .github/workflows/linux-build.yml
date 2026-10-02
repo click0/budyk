@@ -87,7 +87,9 @@ jobs:
 
   # ASan + UBSan: every unit test, plus a smoke test of the running daemon
   # (HTTP, WebSocket, collection loop, SIGHUP/SIGTERM) since main.cpp has
-  # no unit tests. Any report aborts the process, so it fails the job.
+  # no unit tests, and a crash test (SIGKILL, restart on the same rings,
+  # at most one record lost). Any report aborts the process, so it fails
+  # the job.
   sanitizers:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -126,6 +128,12 @@ jobs:
           ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
         run: tests/smoke/serve.sh build/src/budyk
+
+      - name: Crash test (SIGKILL + restart on the same rings)
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: tests/smoke/crash.sh build/src/budyk
 
   # cppcheck + clang-tidy (checks in .clang-tidy). Any finding fails the
   # job; suppress a false positive inline with a comment saying why.
@@ -194,10 +202,11 @@ jobs:
       - name: Build
         run: cmake --build build -j"$(nproc)"
 
-      - name: Run ctest and the smoke test
+      - name: Run ctest and the smoke tests
         run: |
           ctest --test-dir build --output-on-failure
           tests/smoke/serve.sh build/src/budyk
+          tests/smoke/crash.sh build/src/budyk
 
       - name: Coverage report (core/ and storage/ >= 85%)
         run: |
