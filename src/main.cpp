@@ -715,6 +715,8 @@ int cmd_serve(int argc, char* argv[]) {
     // alert N+1 times after N reloads.
     auto setup_engine = [&](const char* restore_path, bool register_channels) -> int {
         if (engine.init(cfg.rules_enable_exec) != 0) return -1;
+        engine.set_limits(static_cast<uint64_t>(cfg.rules_instruction_limit),
+                          static_cast<size_t>(cfg.rules_memory_mb) << 20);
         if (!cfg.rules_exec_allow.empty()) {
             engine.set_exec_allowlist(cfg.rules_exec_allow);
         }

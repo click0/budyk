@@ -687,6 +687,101 @@ int main() {
         e.shutdown();
     }
 
+    // 32. Instruction limit: a when() that never returns is cut off with
+    //     an error on that rule only; the other rules still evaluate,
+    //     and the next tick runs normally. load_string gets the same
+    //     treatment for a loop at file level.
+    {
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        assert(e.instruction_limit() == LuaEngine::kDefaultInstructionLimit);
+        e.set_limits(200000, LuaEngine::kDefaultMemoryLimit);
+        assert(e.instruction_limit() == 200000);
+
+        assert(e.load_string(
+            "watch('spin', { when = function() while true do end end })\n"
+            "watch('ok',   { when = function() return cpu.total_percent > 50 end })\n") == 0);
+        assert(e.rule_count() == 2);
+
+        for (int tick = 0; tick < 3; ++tick) {
+            assert(e.eval_tick(mk(90.0, 50.0, 0.1, 0.0)) == 1);   // only 'ok'
+            assert(e.rules()[0].last_error.find("instruction limit") != std::string::npos);
+            assert(e.rules()[0].fire_count == 0);
+            assert(e.rules()[1].fire_count == static_cast<uint64_t>(tick + 1));
+        }
+
+        // A runaway action is contained the same way: the rule still
+        // counts as fired, the error is recorded, the tick completes.
+        assert(e.load_string(
+            "watch('spin_action', { when = function() return true end,"
+            " action = function() local n = 0 while true do n = n + 1 end end })\n") == 0);
+        assert(e.eval_tick(mk(90.0, 50.0, 0.1, 0.0)) == 2);
+        assert(e.rules()[2].fire_count == 1);
+        assert(e.rules()[2].last_error.find("instruction limit") != std::string::npos);
+
+        // Top-level loop in the rules file.
+        assert(e.load_string("local n = 0 while true do n = n + 1 end\n") == -2);
+        assert(e.last_error().find("instruction limit") != std::string::npos);
+        assert(e.rule_count() == 3);                 // engine still usable
+        assert(e.eval_tick(mk(10.0, 50.0, 0.1, 0.0)) == 1);   // spin_action only
+
+        e.shutdown();
+    }
+
+    // 33. Memory limit: a rule that allocates without bound gets "not
+    //     enough memory" instead of taking the daemon down; what it
+    //     allocated is released, and the engine keeps working.
+    {
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        assert(e.memory_limit() == LuaEngine::kDefaultMemoryLimit);
+        const size_t base = e.memory_used();
+        assert(base > 0 && base < (1u << 20));      // libs + stdlib, well under 1 MiB
+
+        e.set_limits(LuaEngine::kDefaultInstructionLimit, 2u << 20);   // 2 MiB
+        assert(e.load_string(
+            "watch('hog', { when = function()\n"
+            "  local t = {}\n"
+            "  for i = 1, 1000000 do t[i] = ('x'):rep(1024) end\n"
+            "  return true\n"
+            "end })\n"
+            "watch('ok', { when = function() return true end })\n") == 0);
+
+        assert(e.eval_tick(mk(0, 0, 0, 0)) == 1);   // 'ok' fires, 'hog' errors
+        assert(e.rules()[0].last_error.find("not enough memory") != std::string::npos);
+        assert(e.memory_used() <= (2u << 20));
+
+        // One huge string from a single C call: no VM instructions to
+        // count, so this is the memory limit's job alone.
+        assert(e.load_string(
+            "watch('big', { when = function() local s = ('x'):rep(64 * 1024 * 1024) return true end })\n") == 0);
+        assert(e.eval_tick(mk(0, 0, 0, 0)) == 1);
+        assert(e.rules()[2].last_error.find("not enough memory") != std::string::npos);
+
+        // After a full collection the state is back near its baseline:
+        // nothing leaked past the refused allocations.
+        assert(e.load_string("collectgarbage('collect')") == 0);
+        assert(e.memory_used() < base + (256u << 10));
+
+        e.shutdown();
+        assert(e.memory_used() == 0);
+    }
+
+    // 34. Level conditions are under the same instruction limit: a
+    //     looping condition counts as false and is logged, the others
+    //     still evaluate.
+    {
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        e.set_limits(100000, LuaEngine::kDefaultMemoryLimit);
+        assert(e.add_level_condition(4, "(function() while true do end end)()") == 0);
+        assert(e.add_level_condition(5, "cpu.total_percent > 50") == 0);
+        std::vector<uint8_t> active;
+        e.eval_level_conditions(mk(90.0, 50.0, 0.1, 0.0), &active);
+        assert(active.size() == 1 && active[0] == 5);
+        e.shutdown();
+    }
+
     std::printf("test_lua_engine: PASS\n");
     return 0;
 }

@@ -79,6 +79,9 @@ int main() {
             "rules:\n"
             "  path: /etc/budyk/rules.lua\n"
             "  enable_exec: true\n"
+            "  limits:\n"
+            "    instructions: 250000\n"
+            "    memory_mb: 4\n"
             "web:\n"
             "  auth:\n"
             "    enabled: true\n"
@@ -89,8 +92,22 @@ int main() {
         assert(c.tier3_max_mb == 100);
         assert(std::strcmp(c.rules_path, "/etc/budyk/rules.lua") == 0);
         assert(c.rules_enable_exec == true);
+        assert(c.rules_instruction_limit == 250000);
+        assert(c.rules_memory_mb         == 4);
         assert(c.auth_enabled      == true);
         assert(std::strncmp(c.password_hash, "$argon2id$", 10) == 0);
+
+        // Defaults when the block is absent; out-of-range values fall
+        // back to the defaults like every other clamped number.
+        Config d;
+        assert(config_load_string("rules: {}\n", &d) == 0);
+        assert(d.rules_instruction_limit == 1000000);
+        assert(d.rules_memory_mb         == 16);
+        Config bad;
+        assert(config_load_string(
+            "rules: { limits: { instructions: 5, memory_mb: 0 } }\n", &bad) == 0);
+        assert(bad.rules_instruction_limit == 1000000);
+        assert(bad.rules_memory_mb         == 16);
     }
 
     // 5. Malformed YAML rejected.

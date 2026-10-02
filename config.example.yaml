@@ -92,6 +92,16 @@ rules:
     allow:
       - /usr/local/bin/budyk-alerter
       - /usr/bin/systemctl
+  # How much a rule may run. Each call into Lua (a rule's `when` or
+  # action, a custom level's `when`, the rules file being loaded) may
+  # execute at most `instructions` VM instructions — about 10 ms at
+  # the default — and the whole engine may hold at most `memory_mb`.
+  # A rule that overruns gets an error logged once and is skipped on
+  # that tick; the other rules and the daemon carry on. This is what
+  # stops a `while true do end` typo from halting collection.
+  limits:
+    instructions: 1000000  # 10000 .. 1000000000
+    memory_mb: 16          # 1 .. 1024
   freeze:
     enabled: false         # `true` lets watch() actions call freeze(pid)
                            # / unfreeze(pid) to send SIGSTOP / SIGCONT;

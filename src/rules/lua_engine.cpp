@@ -51,11 +51,53 @@ void open_sandbox_libs(lua_State* L) {
 
 } // namespace
 
+// The count hook fires every this many VM instructions. Small enough
+// that an overrun is caught within a fraction of the limit, large
+// enough that the hook costs nothing measurable (test_rule_perf).
+constexpr int kHookInterval = 1000;
+
+void* LuaEngine::alloc(void* ud, void* ptr, size_t osize, size_t nsize) {
+    auto* self = static_cast<LuaEngine*>(ud);
+    // When ptr is null, osize is the type of object being created, not
+    // a size (Lua manual, lua_Alloc).
+    const size_t old = ptr != nullptr ? osize : 0;
+
+    if (nsize == 0) {
+        std::free(ptr);
+        self->memory_used_ -= old;
+        return nullptr;
+    }
+    // Growth past the limit is refused; Lua then runs an emergency GC
+    // and retries, and raises "not enough memory" if that fails too.
+    // Shrinking must always succeed, so it is never refused.
+    if (nsize > old && self->memory_used_ - old + nsize > self->memory_limit_) {
+        return nullptr;
+    }
+    void* p = std::realloc(ptr, nsize);
+    if (p == nullptr) return nullptr;
+    self->memory_used_ = self->memory_used_ - old + nsize;
+    return p;
+}
+
+void LuaEngine::count_hook(lua_State* L, lua_Debug*) {
+    void* ud = nullptr;
+    lua_getallocf(L, &ud);
+    auto* self = static_cast<LuaEngine*>(ud);
+    self->instructions_used_ += kHookInterval;
+    if (self->instructions_used_ > self->instruction_limit_) {
+        luaL_error(L, "instruction limit of %I exceeded (rules.limits.instructions)",
+                   static_cast<lua_Integer>(self->instruction_limit_));
+    }
+}
+
+void LuaEngine::begin_call() { instructions_used_ = 0; }
+
 int LuaEngine::init(bool enable_exec) {
     if (L_ != nullptr) return -1;
     exec_enabled_ = enable_exec;
 
-    lua_State* L = luaL_newstate();
+    memory_used_ = 0;
+    lua_State* L = lua_newstate(&LuaEngine::alloc, this);
     if (L == nullptr) return -2;
 
     open_sandbox_libs(L);
@@ -65,9 +107,20 @@ int LuaEngine::init(bool enable_exec) {
 
     budyk_lua_register_stdlib(L, enable_exec);
 
+    lua_sethook(L, &LuaEngine::count_hook, LUA_MASKCOUNT, kHookInterval);
+
     L_ = L;
     return 0;
 }
+
+void LuaEngine::set_limits(uint64_t instructions, size_t memory_bytes) {
+    instruction_limit_ = instructions;
+    memory_limit_      = memory_bytes;
+}
+
+uint64_t LuaEngine::instruction_limit() const { return instruction_limit_; }
+size_t   LuaEngine::memory_limit()      const { return memory_limit_; }
+size_t   LuaEngine::memory_used()       const { return memory_used_; }
 
 void LuaEngine::shutdown() {
     if (L_ == nullptr) return;
@@ -91,6 +144,7 @@ void LuaEngine::shutdown() {
 
 int LuaEngine::load_string(const char* code) {
     if (L_ == nullptr || code == nullptr) return -1;
+    begin_call();
     if (luaL_dostring(L_, code) != LUA_OK) {
         const char* msg = lua_tostring(L_, -1);
         last_error_ = msg != nullptr ? msg : "unknown Lua error";
@@ -102,6 +156,7 @@ int LuaEngine::load_string(const char* code) {
 
 int LuaEngine::load_file(const char* path) {
     if (L_ == nullptr || path == nullptr) return -1;
+    begin_call();
     if (luaL_dofile(L_, path) != LUA_OK) {
         const char* msg = lua_tostring(L_, -1);
         last_error_ = msg != nullptr ? msg : "unknown Lua error";
@@ -203,6 +258,7 @@ int LuaEngine::eval_tick(const Sample& s) {
         }
 
         lua_rawgeti(L_, LUA_REGISTRYINDEX, r.when_ref);
+        begin_call();
         if (lua_pcall(L_, 0, 1, 0) != LUA_OK) {
             log_rule_error(&r.last_error, r.name.c_str(), "when", lua_tostring(L_, -1));
             lua_pop(L_, 1);
@@ -228,6 +284,7 @@ int LuaEngine::eval_tick(const Sample& s) {
 
         if (r.action_ref != LUA_REFNIL) {
             lua_rawgeti(L_, LUA_REGISTRYINDEX, r.action_ref);
+            begin_call();
             if (lua_pcall(L_, 0, 0, 0) != LUA_OK) {
                 log_rule_error(&r.last_error, r.name.c_str(), "action", lua_tostring(L_, -1));
                 lua_pop(L_, 1);
@@ -308,6 +365,7 @@ void LuaEngine::eval_level_conditions(const Sample& s, std::vector<uint8_t>* act
     }
     for (auto& c : level_conditions_) {
         lua_rawgeti(L_, LUA_REGISTRYINDEX, c.ref);
+        begin_call();
         if (lua_pcall(L_, 0, 1, 0) != LUA_OK) {
             const char* m = lua_tostring(L_, -1);
             const std::string msg = m != nullptr ? m : "unknown error";

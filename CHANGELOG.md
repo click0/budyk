@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **A rule can no longer stall or kill the daemon.** Until now the Lua
+  engine ran rules with no limit on time or memory: a `when` with
+  `while true do end` stopped collection, storage and the dashboard
+  for good, and a rule that allocated without bound took the daemon
+  down with an out-of-memory error — both reachable through a typo in
+  `rules.lua` and a SIGHUP. The engine now counts VM instructions with
+  a Lua hook (`lua_sethook`, spec §3.6) and allocates through a
+  budgeted allocator (`lua_newstate`). Each call into Lua — a rule's
+  `when` or action, a custom level's `when`, the rules file being
+  loaded — may run at most `rules.limits.instructions` instructions
+  (default 1 000 000, about 10 ms), and the whole engine may hold at
+  most `rules.limits.memory_mb` (default 16). An overrun raises a Lua
+  error in that call only: it is logged once like any other rule
+  error, the rule is skipped on that tick, and the other rules and the
+  next tick run as usual. Instructions are counted rather than time so
+  the limit means the same on a slow machine or under a sanitizer.
+  `test_lua_engine` cases 32–34 cover a looping `when`, a looping
+  action, a loop at file level, unbounded allocation, a single huge
+  `string.rep`, and a looping level condition. The hook costs nothing
+  measurable in `test_rule_perf`.
+
 ### Fixed
 
 - **`sha256sum -c *.sha256` works on a full set of release assets.**
