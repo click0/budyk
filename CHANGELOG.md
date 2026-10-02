@@ -28,6 +28,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   2000 ticks. It fails if the median tick exceeds 1 ms; sanitizer and
   coverage builds only report the figure. Measured: median about 13 µs
   per tick, p99 about 70 µs.
+- **Crash test (spec §5 item 7).** `tests/smoke/crash.sh` runs the
+  daemon with a 0.2 s custom level, kills it with SIGKILL at a random
+  moment while a WebSocket client reads samples, and restarts it on the
+  same data directory, eight times. After each restart every sample the
+  client saw before the kill must be in the ring (the last one may be
+  missing: it can be pushed before it is stored), ring timestamps must
+  be strictly increasing, and the log must have no sanitizer report.
+  It runs in the ASan + UBSan and coverage jobs. Measured: no sample
+  lost in any round. A deliberately broken `RingFile::append` (some
+  `write_idx` increments skipped) fails every round.
 
 ## [0.6.2] — 2026-10-01
 
