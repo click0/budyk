@@ -106,6 +106,18 @@ if(LUA_FOUND)
     target_link_libraries(test_lua_engine PRIVATE budyk_rules budyk_security budyk_core ${LUA_LIBRARIES})
     target_include_directories(test_lua_engine PRIVATE ${CMAKE_SOURCE_DIR}/src ${LUA_INCLUDE_DIR})
     add_test(NAME test_lua_engine COMMAND test_lua_engine)
+
+    # Spec §5 item 13: 100 rules per tick within 1 ms (median). Sanitizer
+    # and coverage instrumentation slow the VM down several times over,
+    # so those builds only report the timing.
+    add_executable(test_rule_perf unit/test_rule_perf.cpp)
+    target_link_libraries(test_rule_perf PRIVATE budyk_rules budyk_security budyk_core ${LUA_LIBRARIES})
+    target_include_directories(test_rule_perf PRIVATE ${CMAKE_SOURCE_DIR}/src ${LUA_INCLUDE_DIR})
+    set(RULE_PERF_BUDGET_US 1000)
+    if(ENABLE_SANITIZERS OR CMAKE_CXX_FLAGS MATCHES "--coverage")
+        set(RULE_PERF_BUDGET_US 0)
+    endif()
+    add_test(NAME test_rule_perf COMMAND test_rule_perf ${RULE_PERF_BUDGET_US})
 endif()
 
 add_executable(test_exec_action unit/test_exec_action.cpp)

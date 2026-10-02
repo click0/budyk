@@ -11,7 +11,8 @@ name: Release binaries
 #                                              analysis.
 #
 # Each tarball contains budyk + LICENSE + README.md + README.uk.md +
-# CHANGELOG.md + docs/budyk.8 and is accompanied by a .sha256 sidecar.
+# CHANGELOG.md + docs/budyk.8 and is accompanied by a .sha256 sidecar in
+# GNU format on every platform, so `sha256sum -c *.sha256` checks them all.
 #
 # Every binary is fully static (STATIC_LINK=ON, spec: single static binary
 # with no runtime dependencies). The build fails if `file` doesn't report
@@ -233,7 +234,12 @@ jobs:
               mkdir -p "$STAGE/docs"
               [ -f docs/budyk.8 ] && cp docs/budyk.8 "$STAGE/docs/" || true
               tar -czf "${STAGE}.tar.gz" "$STAGE"
-              sha256 -r "${STAGE}.tar.gz" > "${STAGE}.tar.gz.sha256"
+              # GNU format ("<hash>  <file>"), the same as the Linux
+              # sidecars. `sha256 -r` writes one space, and GNU
+              # `sha256sum -c` given both formats at once misreads the
+              # two-space lines.
+              printf '%s  %s\n' "$(sha256 -q "${STAGE}.tar.gz")" "${STAGE}.tar.gz" \
+                > "${STAGE}.tar.gz.sha256"
             done
             ls -la budyk-*.tar.gz*
             echo "::endgroup::"
@@ -251,10 +257,34 @@ jobs:
           retention-days: 14
 
   # ----------------------------------------------------------------------
-  # 4. Publish to GitHub Release when triggered by a tag push.
+  # 4. Verify all checksums in one run, the way a user would with
+  #    `sha256sum -c *.sha256`. A sidecar in a format that run misreads
+  #    fails here — on the dry run too, which skips publish.
+  # ----------------------------------------------------------------------
+  checksums:
+    needs: [linux, freebsd]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: budyk-*
+          merge-multiple: true
+
+      - name: sha256sum -c *.sha256
+        working-directory: dist
+        run: |
+          set -ex
+          ls -la
+          cat ./*.sha256
+          sha256sum -c ./*.sha256
+
+  # ----------------------------------------------------------------------
+  # 5. Publish to GitHub Release when triggered by a tag push.
   # ----------------------------------------------------------------------
   publish:
-    needs: [meta, linux, freebsd]
+    needs: [meta, linux, freebsd, checksums]
     if: needs.meta.outputs.is_tag == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -270,7 +300,7 @@ jobs:
         run: |
           set -ex
           ls -la dist/
-          cat dist/*.sha256 || true
+          cat dist/*.sha256
 
       # Release notes are this version's CHANGELOG section only: from its
       # "## [X.Y.Z]" heading up to the next "## [" heading, without the
