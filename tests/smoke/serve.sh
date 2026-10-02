@@ -88,6 +88,45 @@ junk.send(b"\x00\xff not http\r\n\r\n")
 junk.close()
 EOF
 
+# Every descriptor the daemon holds must be close-on-exec (rule exec()
+# and the alert channels fork): the listening socket, the WS client
+# above, the ring files, the wake pipe. Linux only — FreeBSD has no
+# fdinfo; the flags are set with the same calls on both.
+if [ -d "/proc/$PID/fdinfo" ]; then
+    python3 - "$PID" <<'EOF' || fail=1
+import os, sys
+pid = sys.argv[1]
+# Descriptors the daemon inherited from this shell (a CI runner keeps
+# a few pipes open in every child) are not its to set CLOEXEC on. This
+# script inherited the same ones, so anything it holds itself is
+# excluded by identity ("pipe:[123]", "/path").
+def targets(p):
+    out = {}
+    for fd in os.listdir("/proc/%s/fd" % p):
+        try:
+            out[fd] = os.readlink("/proc/%s/fd/%s" % (p, fd))
+        except OSError:
+            pass
+    return out
+inherited = set(targets("self").values())
+bad = []
+for fd, target in targets(pid).items():
+    if int(fd) < 3 or target in inherited:
+        continue
+    try:
+        with open("/proc/%s/fdinfo/%s" % (pid, fd)) as f:
+            flags = [l.split()[1] for l in f if l.startswith("flags:")][0]
+    except OSError:
+        continue
+    if not int(flags, 8) & 0o2000000:
+        bad.append("fd %s -> %s (flags %s)" % (fd, target, flags))
+if bad:
+    print("FAIL: descriptors without O_CLOEXEC:\n  " + "\n  ".join(bad))
+    sys.exit(1)
+print("ok   all descriptors are close-on-exec")
+EOF
+fi
+
 kill -HUP "$PID"
 sleep 1.5
 kill -TERM "$PID"

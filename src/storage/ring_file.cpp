@@ -54,7 +54,10 @@ int RingFile::open(const char* path, uint8_t tier, uint32_t record_size, uint64_
 
     const size_t file_bytes = kHeaderSize + static_cast<size_t>(record_size) * capacity;
 
-    int fd = ::open(path, O_RDWR | O_CREAT, 0644);
+    // CLOEXEC: a child forked by rule exec() or an alert channel must
+    // not hold the ring open — it could outlive the daemon and write
+    // into a ring the next instance has already reopened.
+    int fd = ::open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0644);
     if (fd < 0)                      return -3;
 
     struct stat st{};

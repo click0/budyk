@@ -152,6 +152,9 @@ target_include_directories(budyk_config PRIVATE ${YAML_INCLUDE_DIR})
 
 # Main binary
 add_executable(budyk main.cpp)
+# One source of truth for the version string (`budyk version`,
+# /api/health): project(VERSION) in the top-level CMakeLists.txt.
+target_compile_definitions(budyk PRIVATE BUDYK_VERSION="${PROJECT_VERSION}")
 target_link_libraries(budyk PRIVATE
     budyk_core
     budyk_collector

@@ -383,7 +383,7 @@ budyk suggest-rules --config config.yaml --window 7d --output suggested.lua
 
 | Метод | Шлях | Вхід | Повертає |
 |-------|------|------|----------|
-| `GET` | `/api/health` | ні | статус, версія, каталог даних |
+| `GET` | `/api/health` | ні | статус, версія |
 | `POST` | `/api/auth/login` | ні | тіло `{"password": "..."}`; встановлює cookie `budyk_session` |
 | `POST` | `/api/auth/logout` | ні | завершує сесію |
 | `GET` | `/api/samples` | так | останні вибірки з буфера в пам'яті |

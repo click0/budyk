@@ -127,6 +127,47 @@ int main() {
         assert(contains(j, "\"uptime_seconds\":0"));
     }
 
+    // 5. json_unescape: every escape JSON.stringify can emit, \u in
+    //    all three UTF-8 widths, and the lenient cases (unknown escape,
+    //    trailing backslash, short \u, bad hex digit).
+    {
+        assert(json_unescape("plain") == "plain");
+        assert(json_unescape("a\\\"b\\\\c\\/d") == "a\"b\\c/d");
+        assert(json_unescape("\\b\\f\\n\\r\\t") == "\b\f\n\r\t");
+        assert(json_unescape("\\u0041") == "A");
+        assert(json_unescape("\\u00e9") == "\xC3\xA9");          // é
+        assert(json_unescape("\\u0443") == "\xD1\x83");          // у
+        assert(json_unescape("\\u20ac") == "\xE2\x82\xAC");      // €
+        assert(json_unescape("\\q") == "q");
+        assert(json_unescape("end\\") == "end\\");
+        assert(json_unescape("\\u12") == "\\u12");
+        assert(json_unescape("\\u12G4") == "\xEF\xBF\xBD");      // U+FFFD
+    }
+
+    // 6. json_get_string: the login body as the SPA and the TUI send
+    //    it, with escapes in the password, whitespace around the colon,
+    //    a quote inside the value, and the failure cases.
+    {
+        std::string v;
+        assert(json_get_string("{\"password\":\"hunter2\"}", "password", &v));
+        assert(v == "hunter2");
+        // A password containing " and \ — JSON.stringify output.
+        assert(json_get_string("{\"password\":\"pa\\\"ss\\\\w\"}", "password", &v));
+        assert(v == "pa\"ss\\w");
+        assert(json_get_string("{ \"password\" :\t\"x y\" , \"o\": 1 }", "password", &v));
+        assert(v == "x y");
+        assert(json_get_string("{\"password\":\"\\u0441\\u043b\\u043e\\u0432\\u043e\"}", "password", &v));
+        assert(v == "слово");
+        assert(json_get_string("{\"password\":\"\"}", "password", &v) && v.empty());
+
+        assert(!json_get_string("{\"user\":\"x\"}", "password", &v));
+        assert(!json_get_string("{\"password\":123}", "password", &v));
+        assert(!json_get_string("{\"password\":\"unterminated", "password", &v));
+        assert(!json_get_string("{\"password\":\"esc\\\"", "password", &v));
+        assert(!json_get_string("{}", nullptr, &v));
+        assert(!json_get_string("{}", "password", nullptr));
+    }
+
     std::printf("test_json: PASS\n");
     return 0;
 }

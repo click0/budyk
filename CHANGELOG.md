@@ -30,8 +30,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `string.rep`, and a looping level condition. The hook costs nothing
   measurable in `test_rule_perf`.
 
+- **Child processes no longer inherit the daemon's descriptors.** Rule
+  `exec()` and the alert channels fork; the listening socket, client
+  connections, the ring files and the sessions file were open in every
+  child. A hung child kept the port bound after a restart and could
+  write into a ring the next instance had already reopened. All of
+  them are now close-on-exec (`SOCK_CLOEXEC`, `accept4`, `O_CLOEXEC`),
+  and the serve smoke test checks every descriptor the daemon holds
+  (Linux, via `/proc/<pid>/fdinfo`).
+- **`/api/health` no longer reports `data_dir`.** The endpoint is
+  unauthenticated so liveness probes work; a path on the host is not
+  something a probe needs.
+
 ### Fixed
 
+- **Passwords containing `"` or `\` can log in.** The login body was
+  read without decoding JSON escapes, so a password the dashboard
+  sends as `pa\"ss` arrived truncated and was rejected. The body is
+  now decoded (`json_get_string` / `json_unescape` in `web/json.cpp`,
+  with tests), including `\uXXXX`, so a Cyrillic password sent as
+  escapes works too.
+- **Large responses are no longer cut off by a signal.** The HTTP
+  server sent a response with one `send(2)` per part and treated a
+  short write as failure. A blocking send of a multi-megabyte
+  `/api/range` body waits on the client, and a signal that lands then
+  (SIGHUP is routine) makes it return the partial count; the client
+  got a truncated body with a full `Content-Length`. The server now
+  sends until everything is written (with `MSG_NOSIGNAL`, so a client
+  that hung up is a failed send, not SIGPIPE). The test reproduces the
+  interruption with an interval timer aimed at the server thread.
+- **Expired web sessions are purged every minute.** They were only
+  dropped on the next login or request, so a quiet daemon kept every
+  past login in memory and in `sessions.tsv`.
+- **One source of truth for the version.** `budyk version` and
+  `/api/health` take it from `project(VERSION)` in CMake
+  (`BUDYK_VERSION`) instead of two string literals in `main.cpp`.
 - **`sha256sum -c *.sha256` works on a full set of release assets.**
   The FreeBSD sidecars were written by `sha256 -r` (one space between
   hash and name), the Linux ones by `sha256sum` (two spaces). Given

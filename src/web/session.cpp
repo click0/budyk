@@ -142,7 +142,7 @@ int SessionStore::save(const char* path) const {
     tmp += ".tmp";
     // O_CREAT|0600 so the bearer tokens are never group/other-readable;
     // fchmod afterwards in case umask wasn't honoured on this fs.
-    int fd = ::open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    int fd = ::open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
     if (fd < 0) return -errno;
     ::fchmod(fd, 0600);
     std::FILE* f = ::fdopen(fd, "w");
