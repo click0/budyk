@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`sha256sum -c *.sha256` works on a full set of release assets.**
+  The FreeBSD sidecars were written by `sha256 -r` (one space between
+  hash and name), the Linux ones by `sha256sum` (two spaces). Given
+  both in one run, GNU `sha256sum -c` misread the Linux lines and
+  reported them as unreadable; each file checked on its own was fine.
+  FreeBSD sidecars are now in the GNU format too, and a new
+  `checksums` job in the release workflow runs `sha256sum -c` over all
+  of them at once, on the dry run as well, before anything is
+  published.
+
 ## [0.6.2] — 2026-10-01
 
 A small update. `budyk tui` now shows the current collection level,
