@@ -50,6 +50,12 @@
 #include <termios.h>
 #include <unistd.h>
 
+// Set by src/CMakeLists.txt from project(VERSION). The fallback keeps
+// a build that bypasses CMake (and cppcheck, which sees no -D) going.
+#ifndef BUDYK_VERSION
+#define BUDYK_VERSION "0.0.0-unknown"
+#endif
+
 namespace {
 
 // Read a line from stdin without echoing it. Falls back to a plain
@@ -433,25 +439,6 @@ void collect_one(budyk::Sample* s,
     s->uptime_seconds         = c.uptime_seconds;
 }
 
-// Pull the value of a top-level string field out of a tiny JSON object.
-// Looks for `"<key>"<ws>:<ws>"<value>"`. Doesn't handle escapes — the
-// daemon's only JSON input today is a password from the login form,
-// which is rejected at length cap; anything fancy fails closed.
-bool json_get_string(const std::string& body, const char* key, std::string* out) {
-    std::string needle = "\"";
-    needle.append(key);
-    needle.append("\"");
-    auto kpos = body.find(needle);
-    if (kpos == std::string::npos) return false;
-    auto colon = body.find(':', kpos + needle.size());
-    if (colon == std::string::npos) return false;
-    auto open = body.find('"', colon + 1);
-    if (open == std::string::npos) return false;
-    auto close = body.find('"', open + 1);
-    if (close == std::string::npos) return false;
-    out->assign(body, open + 1, close - open - 1);
-    return true;
-}
 
 // Extract the value of a single cookie name from a Cookie header line
 // like "a=1; b=2". Returns empty string if missing.
@@ -877,15 +864,13 @@ int cmd_serve(int argc, char* argv[]) {
             return r;
         }
 
-        // Health is always public so liveness probes work pre-auth.
+        // Health is always public so liveness probes work pre-auth, so it
+        // says only what a probe needs: no paths or other host details.
         if (req.method == "GET" && req.path == "/api/health") {
             budyk::HttpResponse r;
             r.status       = 200;
             r.content_type = "application/json";
-            r.body =
-                "{\"status\":\"ok\","
-                "\"version\":\"0.6.2\","
-                "\"data_dir\":\"" + std::string(cfg.data_dir) + "\"}\n";
+            r.body         = "{\"status\":\"ok\",\"version\":\"" BUDYK_VERSION "\"}\n";
             return r;
         }
 
@@ -895,7 +880,7 @@ int cmd_serve(int argc, char* argv[]) {
                     403, "text/plain", "auth disabled\n"};
             }
             std::string pw;
-            if (!json_get_string(req.body, "password", &pw) || pw.empty()) {
+            if (!budyk::json_get_string(req.body, "password", &pw) || pw.empty()) {
                 return budyk::HttpResponse{
                     400, "application/json",
                     "{\"error\":\"missing password\"}\n"};
@@ -1141,6 +1126,10 @@ int cmd_serve(int argc, char* argv[]) {
     // shutdown also saves below). A crash loses at most 60s of cooldown
     // decrement — acceptable, and erring toward "still in cooldown".
     time_t next_state_save = ::time(nullptr) + 60;
+    // Drop expired web sessions on the same cadence. verify() and
+    // create() also purge, but a quiet daemon sees neither for hours,
+    // and the table (and sessions.tsv) would hold every past login.
+    time_t next_session_purge = next_state_save;
 
     // Hold time per custom level id, and a reusable list of the levels
     // whose `when` holds on the current sample.
@@ -1216,11 +1205,15 @@ int cmd_serve(int argc, char* argv[]) {
                 static_cast<uint64_t>(e.seconds) * 1000000000ULL);
         }
 
-        if (cfg.rules_persist_state) {
+        {
             const time_t now = ::time(nullptr);
-            if (now >= next_state_save) {
+            if (cfg.rules_persist_state && now >= next_state_save) {
                 engine.save_state(state_path.c_str());
                 next_state_save = now + 60;
+            }
+            if (now >= next_session_purge) {
+                sessions.purge_expired();
+                next_session_purge = now + 60;
             }
         }
 
@@ -1267,7 +1260,7 @@ int main(int argc, char* argv[]) {
     const char* cmd = argv[1];
 
     if (std::strcmp(cmd, "version") == 0) {
-        std::printf("budyk 0.6.2\n");
+        std::printf("budyk " BUDYK_VERSION "\n");
         return 0;
     }
 

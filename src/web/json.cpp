@@ -146,4 +146,83 @@ std::string samples_to_json(const Sample* samples, size_t n) {
     return out;
 }
 
+std::string json_unescape(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < s.size(); ) {
+        if (s[i] != '\\' || i + 1 >= s.size()) {
+            out += s[i++];
+            continue;
+        }
+        const char c = s[i + 1];
+        switch (c) {
+            case '"':  out += '"';  i += 2; break;
+            case '\\': out += '\\'; i += 2; break;
+            case '/':  out += '/';  i += 2; break;
+            case 'b':  out += '\b'; i += 2; break;
+            case 'f':  out += '\f'; i += 2; break;
+            case 'n':  out += '\n'; i += 2; break;
+            case 'r':  out += '\r'; i += 2; break;
+            case 't':  out += '\t'; i += 2; break;
+            case 'u': {
+                if (i + 5 >= s.size()) { out += s[i++]; break; }
+                unsigned code = 0;
+                for (int k = 0; k < 4; ++k) {
+                    const char h = s[i + 2 + k];
+                    code <<= 4;
+                    if      (h >= '0' && h <= '9') code |= static_cast<unsigned>(h - '0');
+                    else if (h >= 'a' && h <= 'f') code |= static_cast<unsigned>(h - 'a' + 10);
+                    else if (h >= 'A' && h <= 'F') code |= static_cast<unsigned>(h - 'A' + 10);
+                    else { code = 0xFFFD; break; }
+                }
+                if (code < 0x80) {
+                    out += static_cast<char>(code);
+                } else if (code < 0x800) {
+                    out += static_cast<char>(0xC0 | (code >> 6));
+                    out += static_cast<char>(0x80 | (code & 0x3F));
+                } else {
+                    out += static_cast<char>(0xE0 | (code >> 12));
+                    out += static_cast<char>(0x80 | ((code >> 6) & 0x3F));
+                    out += static_cast<char>(0x80 | (code & 0x3F));
+                }
+                i += 6;
+                break;
+            }
+            default:   out += c;    i += 2; break;
+        }
+    }
+    return out;
+}
+
+bool json_get_string(const std::string& body, const char* key, std::string* out) {
+    if (key == nullptr || out == nullptr) return false;
+    std::string needle = "\"";
+    needle.append(key);
+    needle.append("\"");
+    const auto kpos = body.find(needle);
+    if (kpos == std::string::npos) return false;
+    const auto colon = body.find(':', kpos + needle.size());
+    if (colon == std::string::npos) return false;
+    // Only whitespace may sit between the colon and the opening quote;
+    // anything else means the value isn't a string.
+    size_t open = colon + 1;
+    while (open < body.size() &&
+           (body[open] == ' ' || body[open] == '\t' ||
+            body[open] == '\n' || body[open] == '\r')) {
+        ++open;
+    }
+    if (open >= body.size() || body[open] != '"') return false;
+    // The closing quote is the first `"` not preceded by an odd run of
+    // backslashes.
+    size_t close = open + 1;
+    while (close < body.size()) {
+        if (body[close] == '\\') { close += 2; continue; }
+        if (body[close] == '"')  break;
+        ++close;
+    }
+    if (close >= body.size()) return false;
+    *out = json_unescape(body.substr(open + 1, close - open - 1));
+    return true;
+}
+
 } // namespace budyk

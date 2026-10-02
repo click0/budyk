@@ -134,6 +134,26 @@ const char* status_phrase(int status) {
     }
 }
 
+// send(2) until everything is written or the peer is gone. A large
+// body (/api/range at its 5000-sample cap is a few MB) rarely goes out
+// in one call, and a signal (SIGHUP is routine) returns short too.
+// MSG_NOSIGNAL: a client that hung up mid-response is a failed send,
+// not SIGPIPE to the daemon.
+ssize_t send_all(int fd, const void* data, size_t len) {
+    const char* p = static_cast<const char*>(data);
+    size_t total = 0;
+    while (total < len) {
+        const ssize_t n = ::send(fd, p + total, len - total, MSG_NOSIGNAL);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (n == 0) return -1;
+        total += static_cast<size_t>(n);
+    }
+    return static_cast<ssize_t>(total);
+}
+
 // Serialise the response head into a single string, then send body.
 ssize_t send_response(int fd, const HttpResponse& r) {
     std::string head;
@@ -155,12 +175,8 @@ ssize_t send_response(int fd, const HttpResponse& r) {
     }
     head.append("\r\n");
 
-    ssize_t w = ::send(fd, head.data(), head.size(), 0);
-    if (w != static_cast<ssize_t>(head.size())) return -1;
-    if (!r.body.empty()) {
-        w = ::send(fd, r.body.data(), r.body.size(), 0);
-        if (w != static_cast<ssize_t>(r.body.size())) return -1;
-    }
+    if (send_all(fd, head.data(), head.size()) < 0) return -1;
+    if (!r.body.empty() && send_all(fd, r.body.data(), r.body.size()) < 0) return -1;
     return static_cast<ssize_t>(head.size() + r.body.size());
 }
 
@@ -181,7 +197,10 @@ int HttpServer::start(const char* listen_addr, int port, HttpHandler handler) {
     if (running_.load() || listen_fd_ >= 0) return -1;
     if (listen_addr == nullptr || handler == nullptr) return -2;
 
-    int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    // CLOEXEC: rule exec() and the alert channels fork; a child must
+    // not inherit the listening socket (it would keep the port bound
+    // after a restart) or a client connection.
+    int fd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
     if (fd < 0) return -3;
 
     int yes = 1;
@@ -234,7 +253,8 @@ void HttpServer::run_loop() {
     while (running_.load()) {
         sockaddr_in cli{};
         socklen_t   clen = sizeof(cli);
-        int cfd = ::accept(listen_fd_, reinterpret_cast<sockaddr*>(&cli), &clen);
+        int cfd = ::accept4(listen_fd_, reinterpret_cast<sockaddr*>(&cli), &clen,
+                            SOCK_CLOEXEC);
         if (cfd < 0) {
             if (errno == EINTR) continue;
             break;

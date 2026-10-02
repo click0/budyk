@@ -3,7 +3,10 @@
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <pthread.h>
+#include <signal.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 #include <cassert>
@@ -73,6 +76,82 @@ int main() {
         assert(resp.find("\"path\":\"/api/health\"") != std::string::npos);
         assert(resp.find("\"method\":\"GET\"") != std::string::npos);
 
+        s.stop();
+    }
+
+    // 2b. A multi-megabyte body arrives whole when send(2) is
+    //     interrupted by signals. /api/range at its 5000-sample cap is
+    //     a few MB; a blocking send on loopback writes all of it in one
+    //     call unless a signal lands while it waits for buffer space —
+    //     then it returns the partial count, and without the send loop
+    //     the response is cut off. SIGHUP is routine, so this happens
+    //     in practice. Here an interval timer sends SIGALRM (no
+    //     SA_RESTART) to the server thread — the main thread blocks it
+    //     — while the client drains the socket slowly so send() has to
+    //     wait. The client's receive buffer is pinned small (which also
+    //     turns off autotuning for it), so the body cannot sit in
+    //     kernel buffers and send() has to wait on the reader.
+    {
+        HttpServer s;
+        const std::string big(8u << 20, 'z');   // 8 MiB
+        assert(s.start("127.0.0.1", 0,
+                       [&big](const HttpRequest&) {
+                           HttpResponse r;
+                           r.status       = 200;
+                           r.content_type = "text/plain";
+                           r.body         = big;
+                           return r;
+                       }) == 0);
+
+        struct sigaction sa{};
+        sa.sa_handler = [](int) {};
+        sigemptyset(&sa.sa_mask);
+        sa.sa_flags = 0;                         // no SA_RESTART: send() returns short
+        struct sigaction old_sa{};
+        assert(::sigaction(SIGALRM, &sa, &old_sa) == 0);
+        sigset_t alrm, prev;
+        sigemptyset(&alrm);
+        sigaddset(&alrm, SIGALRM);
+        assert(::pthread_sigmask(SIG_BLOCK, &alrm, &prev) == 0);
+
+        int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+        assert(fd >= 0);
+        const int rcvbuf = 64 * 1024;
+        assert(::setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf)) == 0);
+        sockaddr_in sa_in{};
+        sa_in.sin_family = AF_INET;
+        sa_in.sin_port   = htons(static_cast<uint16_t>(s.bound_port()));
+        ::inet_pton(AF_INET, "127.0.0.1", &sa_in.sin_addr);
+        assert(::connect(fd, reinterpret_cast<sockaddr*>(&sa_in), sizeof(sa_in)) == 0);
+        const std::string req = "GET /big HTTP/1.1\r\nHost: x\r\n\r\n";
+        assert(::send(fd, req.data(), req.size(), 0) == static_cast<ssize_t>(req.size()));
+        ::usleep(20000);                         // request parsed; server is in send()
+
+        itimerval it{};
+        it.it_interval.tv_usec = 2000;
+        it.it_value.tv_usec    = 2000;
+        assert(::setitimer(ITIMER_REAL, &it, nullptr) == 0);
+
+        std::string resp;
+        static char buf[64 * 1024];
+        while (true) {
+            ssize_t r = ::recv(fd, buf, sizeof(buf), 0);
+            if (r <= 0) break;
+            resp.append(buf, static_cast<size_t>(r));
+            ::usleep(1000);                      // keep the socket buffer full
+        }
+        ::close(fd);
+
+        itimerval off{};
+        ::setitimer(ITIMER_REAL, &off, nullptr);
+        ::sigaction(SIGALRM, &old_sa, nullptr);
+        ::pthread_sigmask(SIG_SETMASK, &prev, nullptr);
+
+        const auto hdr_end = resp.find("\r\n\r\n");
+        assert(hdr_end != std::string::npos);
+        assert(resp.find("Content-Length: 8388608\r\n") != std::string::npos);
+        assert(resp.size() - (hdr_end + 4) == big.size());
+        assert(resp.compare(hdr_end + 4, big.size(), big) == 0);
         s.stop();
     }
 

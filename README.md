@@ -374,7 +374,7 @@ needs.
 
 | Method | Path | Auth | Returns |
 |--------|------|------|---------|
-| `GET` | `/api/health` | no | status, version, data directory |
+| `GET` | `/api/health` | no | status, version |
 | `POST` | `/api/auth/login` | no | body `{"password": "..."}`; sets the `budyk_session` cookie |
 | `POST` | `/api/auth/logout` | no | clears the session |
 | `GET` | `/api/samples` | yes | recent samples from the in-memory buffer |
