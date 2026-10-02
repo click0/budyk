@@ -19,6 +19,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of them at once, on the dry run as well, before anything is
   published.
 
+### Tests
+
+- **Rule evaluation time is measured (spec §5 item 13).**
+  `test_rule_perf` loads 100 `watch()` rules shaped like those in
+  `rules/examples.lua` (thresholds, computed thresholds, sustain
+  counters, cooldowns, a quarter of them firing now and then) and times
+  2000 ticks. It fails if the median tick exceeds 1 ms; sanitizer and
+  coverage builds only report the figure. Measured: median about 13 µs
+  per tick, p99 about 70 µs.
+
 ## [0.6.2] — 2026-10-01
 
 A small update. `budyk tui` now shows the current collection level,
