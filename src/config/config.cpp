@@ -247,6 +247,8 @@ void clamp_numbers(Config* c) {
     clamp_int(&c->tier1_max_mb, 1, 100000, d.tier1_max_mb, "storage.tier1_max_mb");
     clamp_int(&c->tier2_max_mb, 1, 100000, d.tier2_max_mb, "storage.tier2_max_mb");
     clamp_int(&c->tier3_max_mb, 1, 100000, d.tier3_max_mb, "storage.tier3_max_mb");
+    clamp_int(&c->rules_instruction_limit, 10000, 1000000000, d.rules_instruction_limit, "rules.limits.instructions");
+    clamp_int(&c->rules_memory_mb,         1,     1024,       d.rules_memory_mb,         "rules.limits.memory_mb");
 }
 
 // --- Section walkers --------------------------------------------------------
@@ -328,6 +330,13 @@ int parse_document(yaml_parser_t* parser, Config* out) {
         if (auto* fr = find_key(&doc, rules, "freeze")) {
             apply_bool    (&doc, fr, "enabled", &out->rules_enable_freeze);
             apply_str_list(&doc, fr, "allow",   &out->rules_freeze_allow);
+        }
+
+        // Nested `rules.limits` block — how much a single call into Lua
+        // may run and how much memory the engine may hold.
+        if (auto* lim = find_key(&doc, rules, "limits")) {
+            apply_int(&doc, lim, "instructions", &out->rules_instruction_limit);
+            apply_int(&doc, lim, "memory_mb",    &out->rules_memory_mb);
         }
     }
 

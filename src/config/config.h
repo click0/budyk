@@ -39,6 +39,12 @@ struct Config {
     // absolute path allowed (still subject to path-traversal guard).
     std::vector<std::string> rules_exec_allow;
 
+    // Execution limits for the Lua engine (rules.limits): VM
+    // instructions per call into Lua, and the memory the whole state
+    // may hold. See LuaEngine::set_limits.
+    int                      rules_instruction_limit = 1000000;
+    int                      rules_memory_mb         = 16;
+
     bool                     rules_enable_freeze = false;
     // Process names (kernel `comm`) that freeze()/unfreeze() are
     // allowed to signal. Empty = no name-based gate (the engine-wide

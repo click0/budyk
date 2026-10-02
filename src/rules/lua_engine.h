@@ -9,6 +9,7 @@
 #include <vector>
 
 struct lua_State;
+struct lua_Debug;
 
 namespace budyk {
 
@@ -91,6 +92,26 @@ public:
     bool exec_enabled()    const;
     bool freeze_enabled()  const;
 
+    // Execution limits (spec §3.6: a runaway rule must not stop the
+    // daemon). Every call into Lua — a rule's when() or action, a level
+    // condition, a file being loaded — may run at most `instructions`
+    // VM instructions, and the whole Lua state may hold at most
+    // `memory_bytes`. An overrun raises a Lua error in that call, which
+    // the call site logs like any other rule error; the other rules and
+    // the next tick are unaffected. A C function such as string.rep is
+    // one instruction, which is what the memory limit is for.
+    //
+    // Instructions are counted rather than time so the limit means the
+    // same on a slow machine, under a sanitizer, or in a test. Takes
+    // effect at once, before or after init().
+    static constexpr uint64_t kDefaultInstructionLimit = 1'000'000;
+    static constexpr size_t   kDefaultMemoryLimit      = 16u << 20;   // 16 MiB
+    void     set_limits(uint64_t instructions, size_t memory_bytes);
+    uint64_t instruction_limit() const;
+    size_t   memory_limit()      const;
+    // Bytes currently held by the Lua state (0 when not initialised).
+    size_t   memory_used()       const;
+
     // exec() hardening: when the allowlist is non-empty, exec() rejects
     // any argv[0] that is not exactly one of the listed absolute paths.
     // An empty allowlist allows any absolute-path command (still subject
@@ -130,7 +151,20 @@ public:
                   int for_ticks, int cooldown_ticks);
 
 private:
+    // Lua allocator (lua_Alloc) that enforces memory_limit_, and the
+    // count hook that enforces instruction_limit_. Both find the engine
+    // through the allocator's userdata (lua_getallocf), so neither
+    // needs a registry lookup on the hot path.
+    static void* alloc(void* ud, void* ptr, size_t osize, size_t nsize);
+    static void  count_hook(lua_State* L, lua_Debug* ar);
+    // Resets the instruction count; called before every entry into Lua.
+    void begin_call();
+
     lua_State*               L_               = nullptr;
+    uint64_t                 instruction_limit_ = kDefaultInstructionLimit;
+    uint64_t                 instructions_used_ = 0;
+    size_t                   memory_limit_      = kDefaultMemoryLimit;
+    size_t                   memory_used_       = 0;
     std::vector<LuaRule>     rules_;
     bool                     exec_enabled_    = false;
     int                      last_fire_count_ = 0;

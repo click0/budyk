@@ -322,6 +322,13 @@ Rules run in a sandbox that has only the base library, `math`, `string`
 and `table`. `io`, `os`, `require`, `load`, `loadfile` and `dofile` are
 not available.
 
+A rule cannot stall the daemon. Each call into Lua (a `when`, an
+action, a custom level's `when`, the rules file being loaded) may run
+at most `rules.limits.instructions` VM instructions (default 1 000 000,
+about 10 ms), and the engine may hold at most `rules.limits.memory_mb`
+(default 16). A rule that overruns gets an error logged once and is
+skipped on that tick; the other rules and collection carry on.
+
 ### YAML
 
 For simple threshold rules:
