@@ -96,14 +96,26 @@ if [ -d "/proc/$PID/fdinfo" ]; then
     python3 - "$PID" <<'EOF' || fail=1
 import os, sys
 pid = sys.argv[1]
+# Descriptors the daemon inherited from this shell (a CI runner keeps
+# a few pipes open in every child) are not its to set CLOEXEC on. This
+# script inherited the same ones, so anything it holds itself is
+# excluded by identity ("pipe:[123]", "/path").
+def targets(p):
+    out = {}
+    for fd in os.listdir("/proc/%s/fd" % p):
+        try:
+            out[fd] = os.readlink("/proc/%s/fd/%s" % (p, fd))
+        except OSError:
+            pass
+    return out
+inherited = set(targets("self").values())
 bad = []
-for fd in os.listdir("/proc/%s/fd" % pid):
-    if int(fd) < 3:
+for fd, target in targets(pid).items():
+    if int(fd) < 3 or target in inherited:
         continue
     try:
         with open("/proc/%s/fdinfo/%s" % (pid, fd)) as f:
             flags = [l.split()[1] for l in f if l.startswith("flags:")][0]
-        target = os.readlink("/proc/%s/fd/%s" % (pid, fd))
     except OSError:
         continue
     if not int(flags, 8) & 0o2000000:
