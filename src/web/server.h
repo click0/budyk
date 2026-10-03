@@ -71,6 +71,12 @@ public:
     // Real bound port (useful when start was called with port == 0).
     int  bound_port() const;
 
+    // Why start() failed: describe() names the step (-3 socket, -4 bad
+    // address, -5 bind, -6 listen), last_errno() is that step's errno
+    // (0 for -1/-2/-4). "bind: Address already in use" beats "rc=-5".
+    static const char* describe(int rc);
+    int  last_errno() const;
+
     // How long one request may take to arrive (headers and body) and
     // how long a send may wait on the client, in milliseconds; default
     // 5000. A connection that is still sending its request when the
@@ -84,6 +90,7 @@ private:
     int                    listen_fd_   = -1;
     int                    bound_port_  = 0;
     int                    io_timeout_ms_ = 5000;
+    int                    last_errno_    = 0;
     std::thread            loop_;
     std::atomic<bool>      running_{false};
     HttpHandler            handler_;

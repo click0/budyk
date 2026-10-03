@@ -40,6 +40,12 @@ public:
               int tier3_max_mb = 50,
               const std::vector<LevelRingSpec>& custom = {});
 
+    // After a failed init(): which ring file and why, in words, e.g.
+    // "tier1.ring: open failed: Permission denied" or "level-burst.ring:
+    // file size does not match record size x capacity (storage_mb
+    // changed? move the file aside or restore the old size)".
+    const std::string& last_error() const;
+
     // Encodes `s` and appends it to the ring matching its level.
     // Returns 0 on success, negative on encode/write failure or if
     // the manager is not initialised. Unknown levels are rejected.
@@ -80,6 +86,7 @@ public:
     uint64_t tier3_count() const;
 
 private:
+    std::string last_error_;
     struct CustomRing {
         uint8_t                   level_id;
         std::unique_ptr<RingFile> ring;

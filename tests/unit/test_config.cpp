@@ -125,6 +125,16 @@ int main() {
         assert(config_load_string("listen: [unterminated", &c) != 0);
     }
 
+    // 5b. A file that cannot be opened: the reason comes back in words.
+    {
+        Config c;
+        std::string err;
+        assert(config_load("/nonexistent/budyk.yaml", &c, &err) == -2);
+        assert(err.find("No such file") != std::string::npos);
+        assert(config_load(nullptr, &c, &err) == -1);
+        assert(!err.empty());
+    }
+
     // 6. Null args rejected.
     {
         Config c;

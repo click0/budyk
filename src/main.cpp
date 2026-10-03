@@ -253,9 +253,11 @@ int cmd_suggest_rules(int argc, char* argv[]) {
     }
 
     budyk::Config cfg;
-    if (budyk::config_load(config_path, &cfg) != 0) {
+    std::string cfg_err;
+    if (budyk::config_load(config_path, &cfg, &cfg_err) != 0) {
         std::fprintf(stderr,
-            "budyk suggest-rules: failed to load config '%s'\n", config_path);
+            "budyk suggest-rules: failed to load config '%s': %s\n", config_path,
+            cfg_err.c_str());
         return 1;
     }
 
@@ -600,7 +602,7 @@ int cmd_watch_files(int argc, char* argv[]) {
     const int n = fw.poll(timeout_ms, &events);
     if (n < 0) {
         std::fprintf(stderr,
-            "budyk watch-files: poll failed (errno=%d)\n", -n);
+            "budyk watch-files: poll failed: %s\n", std::strerror(-n));
         return 1;
     }
     if (n == 0) {
@@ -635,9 +637,11 @@ int cmd_serve(int argc, char* argv[]) {
     }
 
     budyk::Config cfg;
-    if (budyk::config_load(config_path, &cfg) != 0) {
+    std::string cfg_err;
+    if (budyk::config_load(config_path, &cfg, &cfg_err) != 0) {
         std::fprintf(stderr,
-            "budyk serve: failed to load config '%s'\n", config_path);
+            "budyk serve: failed to load config '%s': %s\n", config_path,
+            cfg_err.c_str());
         return 1;
     }
     // CLI flags override config (operator intent on the command line wins).
@@ -662,11 +666,11 @@ int cmd_serve(int argc, char* argv[]) {
     if (tm.init(cfg.data_dir,
                 cfg.tier1_max_mb, cfg.tier2_max_mb, cfg.tier3_max_mb,
                 level_rings) != 0) {
-        // A ring whose size no longer matches its storage_mb / tierN_max_mb
-        // won't reopen: move the file aside or restore the old size.
+        // Which ring and why: a missing or unwritable data_dir, or a ring
+        // whose size no longer matches its storage_mb / tierN_max_mb.
         std::fprintf(stderr,
-            "budyk serve: TierManager.init('%s') failed "
-            "(a ring file may not match its configured size)\n", cfg.data_dir);
+            "budyk serve: TierManager.init('%s') failed: %s\n",
+            cfg.data_dir, tm.last_error().c_str());
         return 1;
     }
     for (const auto& lv : cfg.scheduler.custom_levels) {
@@ -1104,10 +1108,12 @@ int cmd_serve(int argc, char* argv[]) {
         }
         return budyk::HttpResponse{404, "text/plain", "not found\n"};
     };
-    if (http.start(cfg.listen_addr, cfg.listen_port, router) != 0) {
+    if (const int hrc = http.start(cfg.listen_addr, cfg.listen_port, router); hrc != 0) {
         std::fprintf(stderr,
-            "budyk serve: HttpServer.start(%s:%d) failed — continuing without HTTP\n",
-            cfg.listen_addr, cfg.listen_port);
+            "budyk serve: HttpServer.start(%s:%d) failed: %s%s%s — continuing without HTTP\n",
+            cfg.listen_addr, cfg.listen_port, budyk::HttpServer::describe(hrc),
+            http.last_errno() != 0 ? ": " : "",
+            http.last_errno() != 0 ? std::strerror(http.last_errno()) : "");
     }
 
     std::fprintf(stderr,
@@ -1187,7 +1193,7 @@ int cmd_serve(int argc, char* argv[]) {
             const int n = file_watcher.poll(/*timeout_ms=*/0, &events);
             if (n < 0) {
                 std::fprintf(stderr,
-                    "budyk serve: file_watcher.poll failed (errno=%d)\n", -n);
+                    "budyk serve: file_watcher.poll failed: %s\n", std::strerror(-n));
             }
             file_state.apply(events);
             engine.set_file_state(file_state);

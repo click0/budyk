@@ -27,17 +27,44 @@ namespace {
 // One request per connection against host:port. `extra_headers` is
 // appended verbatim (each line ending in \r\n). Fills *reply and returns 0,
 // or a negative code on connect / send / parse failure.
+// errno of the last failed syscall in http_request (0 when the failure
+// was not a syscall). The TUI is single-threaded.
+int g_http_errno = 0;
+
+// http_request's return code in words, with the errno where there is
+// one: "connect: Connection refused".
+std::string http_error(int rc) {
+    const char* what = "unknown error";
+    switch (rc) {
+        case -1: what = "socket";               break;
+        case -2: what = "not an IPv4 address";  break;
+        case -3: what = "connect";              break;
+        case -4: what = "send";                 break;
+        case -5: what = "recv";                 break;
+        case -6: what = "malformed HTTP reply"; break;
+        default: break;
+    }
+    std::string out = what;
+    if (g_http_errno != 0) {
+        out += ": ";
+        out += std::strerror(g_http_errno);
+    }
+    return out;
+}
+
 int http_request(const char* host, int port, const char* method,
                  const char* path, const std::string& extra_headers,
                  const std::string& body, tui_detail::HttpReply* reply) {
+    g_http_errno = 0;
     int fd = ::socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) return -1;
+    if (fd < 0) { g_http_errno = errno; return -1; }
 
     sockaddr_in sa{};
     sa.sin_family = AF_INET;
     sa.sin_port   = htons(static_cast<uint16_t>(port));
     if (::inet_pton(AF_INET, host, &sa.sin_addr) != 1) { ::close(fd); return -2; }
     if (::connect(fd, reinterpret_cast<sockaddr*>(&sa), sizeof(sa)) != 0) {
+        g_http_errno = errno;
         ::close(fd);
         return -3;
     }
@@ -55,7 +82,7 @@ int http_request(const char* host, int port, const char* method,
     size_t sent = 0;
     while (sent < req.size()) {
         const ssize_t n = ::send(fd, req.data() + sent, req.size() - sent, MSG_NOSIGNAL);
-        if (n < 0) { if (errno == EINTR) continue; ::close(fd); return -4; }
+        if (n < 0) { if (errno == EINTR) continue; g_http_errno = errno; ::close(fd); return -4; }
         sent += static_cast<size_t>(n);
     }
 
@@ -63,7 +90,7 @@ int http_request(const char* host, int port, const char* method,
     char buf[4096];
     while (true) {
         ssize_t r = ::recv(fd, buf, sizeof(buf), 0);
-        if (r < 0) { if (errno == EINTR) continue; ::close(fd); return -5; }
+        if (r < 0) { if (errno == EINTR) continue; g_http_errno = errno; ::close(fd); return -5; }
         if (r == 0) break;
         raw.append(buf, static_cast<size_t>(r));
     }
@@ -279,7 +306,8 @@ int tui_run(const char* host, int port, std::string (*ask_password)()) {
         tui_detail::HttpReply probe;
         const int rc = http_request(host, port, "GET", "/api/samples", "", "", &probe);
         if (rc != 0) {
-            std::fprintf(stderr, "budyk tui: can't reach %s:%d (rc=%d)\n", host, port, rc);
+            std::fprintf(stderr, "budyk tui: can't reach %s:%d: %s\n", host, port,
+                         http_error(rc).c_str());
             return -1;
         }
         if (probe.status == 401) {
@@ -346,7 +374,7 @@ int tui_run(const char* host, int port, std::string (*ask_password)()) {
         ::mvprintw(0, COLS - 12, "tick #%d", tick);
 
         if (rc != 0) {
-            ::mvprintw(2, 0, "connection error (rc=%d) — retrying in 1s", rc);
+            ::mvprintw(2, 0, "connection error (%s) — retrying in 1s", http_error(rc).c_str());
         } else if (r.status != 200) {
             // Say what the server said instead of drawing zeros.
             ::mvprintw(2, 0, "server returned HTTP %d%s — retrying in 1s", r.status,

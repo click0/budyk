@@ -5,6 +5,8 @@
 #include "storage/ring_file.h"
 
 #include <cassert>
+#include <string>
+#include <cerrno>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -189,7 +191,20 @@ int main() {
         }
         {
             RingFile rf;
-            assert(rf.open(path, 1, (uint32_t)rsize, 8 /* wrong cap */) != 0);
+            // A different capacity means a different file size, which is
+            // checked before the header, so this is -6, not -12.
+            assert(rf.open(path, 1, (uint32_t)rsize, 8 /* wrong cap */) == -6);
+            assert(rf.last_errno() == 0);                       // not a syscall failure
+            assert(std::string(RingFile::describe(-12)).find("capacity") != std::string::npos);
+            assert(std::string(RingFile::describe(-6)).find("size") != std::string::npos);
+        }
+        // A path that cannot be opened: the code says "open failed" and
+        // last_errno() carries why.
+        {
+            RingFile rf;
+            assert(rf.open("/nonexistent/dir/x.ring", 1, (uint32_t)rsize, 4) == -3);
+            assert(rf.last_errno() == ENOENT);
+            assert(std::string(RingFile::describe(-3)) == "open failed");
         }
         ::unlink(path);
     }

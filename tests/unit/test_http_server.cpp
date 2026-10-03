@@ -10,6 +10,7 @@
 #include <unistd.h>
 
 #include <cassert>
+#include <cerrno>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -51,6 +52,25 @@ int main() {
             return HttpResponse{200, "text/plain", "ok"};
         }) != 0);
         assert(s.start("127.0.0.1", 0, nullptr) != 0);
+    }
+
+    // 1b. A port that is taken: start() says bind, and last_errno() says
+    //     why, so the daemon can log "bind: Address already in use".
+    {
+        HttpServer first;
+        assert(first.start("127.0.0.1", 0,
+                           [](const HttpRequest&) { return HttpResponse{200, "text/plain", "a"}; }) == 0);
+        HttpServer second;
+        const int rc = second.start("127.0.0.1", first.bound_port(),
+                                    [](const HttpRequest&) { return HttpResponse{200, "text/plain", "b"}; });
+        assert(rc == -5);
+        assert(std::string(HttpServer::describe(rc)) == "bind");
+        assert(second.last_errno() == EADDRINUSE);
+        HttpServer bad;
+        assert(bad.start("not-an-ip", 0,
+                         [](const HttpRequest&) { return HttpResponse{200, "text/plain", "c"}; }) == -4);
+        assert(bad.last_errno() == 0);
+        first.stop();
     }
 
     // 2. Round-trip — handler returns a static body. The kernel hands

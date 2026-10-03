@@ -101,8 +101,12 @@ Everything must be green before a merge.
 - Collectors are plain C (no C++ in `src/collector/`)
 - Errors via return codes. Two conventions exist today: `-errno` (collectors,
   file watcher, freeze, state files) and small negative ordinals (ring file,
-  tier manager, HTTP server, exec, alerts). New code uses `-errno`, and every
-  operator-facing message includes `strerror`.
+  tier manager, HTTP server, exec, alerts, TUI client). The ordinal modules
+  keep the reason alongside the code: `RingFile::describe(rc)` +
+  `last_errno()`, `TierManager::last_error()`, `HttpServer::describe(rc)` +
+  `last_errno()`, `config_load(..., &error)`. New code uses `-errno`. Every
+  operator-facing message says what failed and includes `strerror`; never
+  print a bare `rc=-3`.
 - **Never block the collector tick.** No network I/O, no waiting on a child,
   no blocking send from the main thread: post the work to a `Worker` or use
   non-blocking I/O. Per-tick allocation of small strings and vectors is
@@ -176,6 +180,20 @@ Everything must be green before a merge.
 - `/api/range?level=all` thins evenly across time, so a small `limit` does
   not return the newest samples.
 - No Doxygen, no deb/rpm, no cross-compilation toolchains, FreeBSD 13 not in CI.
+
+### Kept on purpose for later milestones (do not remove as dead code)
+
+- `src/storage/tier_aggregator.*`: the L3 → L2/L1 fold (mean for
+  percentages and load, last value or max/min for counters), tested but not
+  wired into `TierManager`. 0.7.0 wires it in so the L1 ring keeps filling
+  while a client holds L3.
+- `src/core/metric_source.h`, `src/collector/collector.h`
+  (`MetricSource`, `create_collector()`): the collector interface. `main.cpp`
+  calls the C collectors directly today; the interface is for per-level
+  metric sets (a minimal set at L1, the full set at L3).
+- `ENABLE_EXEC` in `CMakeLists.txt`: a build-time gate for a binary with
+  `exec()` compiled out (air-gapped or hardened hosts), on top of the runtime
+  `--enable-exec` / `rules.exec.enabled`.
 
 ## Full technical specification
 

@@ -208,6 +208,7 @@ HttpServer::HttpServer() = default;
 HttpServer::~HttpServer() { stop(); }
 
 int HttpServer::start(const char* listen_addr, int port, HttpHandler handler) {
+    last_errno_ = 0;
     if (running_.load() || listen_fd_ >= 0) return -1;
     if (listen_addr == nullptr || handler == nullptr) return -2;
 
@@ -215,7 +216,7 @@ int HttpServer::start(const char* listen_addr, int port, HttpHandler handler) {
     // not inherit the listening socket (it would keep the port bound
     // after a restart) or a client connection.
     int fd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
-    if (fd < 0) return -3;
+    if (fd < 0) { last_errno_ = errno; return -3; }
 
     int yes = 1;
     ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
@@ -228,6 +229,7 @@ int HttpServer::start(const char* listen_addr, int port, HttpHandler handler) {
         return -4;
     }
     if (::bind(fd, reinterpret_cast<sockaddr*>(&sa), sizeof(sa)) != 0) {
+        last_errno_ = errno;
         ::close(fd);
         return -5;
     }
@@ -235,6 +237,7 @@ int HttpServer::start(const char* listen_addr, int port, HttpHandler handler) {
     // each one it serves is bounded by io_timeout_ms_, so the queue
     // drains even under a stalled client.
     if (::listen(fd, 64) != 0) {
+        last_errno_ = errno;
         ::close(fd);
         return -6;
     }
@@ -265,6 +268,21 @@ void HttpServer::stop() {
 }
 
 int HttpServer::bound_port() const { return bound_port_; }
+
+int HttpServer::last_errno() const { return last_errno_; }
+
+const char* HttpServer::describe(int rc) {
+    switch (rc) {
+        case 0:  return "ok";
+        case -1: return "already started";
+        case -2: return "no address or no handler";
+        case -3: return "socket";
+        case -4: return "not an IPv4 address";
+        case -5: return "bind";
+        case -6: return "listen";
+        default: return "unknown error";
+    }
+}
 
 void HttpServer::set_io_timeout_ms(int ms) { io_timeout_ms_ = ms > 0 ? ms : 1; }
 int  HttpServer::io_timeout_ms() const     { return io_timeout_ms_; }

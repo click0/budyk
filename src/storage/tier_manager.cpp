@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 
 namespace budyk {
 
@@ -36,8 +37,28 @@ int TierManager::init(const char* data_dir,
                       int tier2_max_mb,
                       int tier3_max_mb,
                       const std::vector<LevelRingSpec>& custom) {
-    if (data_dir == nullptr) return -1;
-    if (ready_)              return -2;   // already initialised
+    last_error_.clear();
+    if (data_dir == nullptr) { last_error_ = "data_dir is null"; return -1; }
+    if (ready_)              { last_error_ = "already initialised"; return -2; }
+
+    // Records why a ring failed to open, for the operator's log line.
+    auto ring_failed = [this](const char* leaf, const RingFile& ring, int rc) {
+        last_error_  = leaf;
+        last_error_ += ": ";
+        last_error_ += RingFile::describe(rc);
+        if (ring.last_errno() != 0) {
+            last_error_ += ": ";
+            last_error_ += std::strerror(ring.last_errno());
+        }
+        if (rc == -6 || rc == -11 || rc == -12) {
+            last_error_ += " (storage_mb / tierN_max_mb changed? move the file "
+                           "aside or restore the old size)";
+        }
+    };
+    auto path_failed = [this](const char* leaf) {
+        last_error_  = leaf;
+        last_error_ += ": data_dir path too long";
+    };
 
     const uint32_t record_size = static_cast<uint32_t>(record_size_for_sample());
     const uint64_t cap1 = records_from_mb(tier1_max_mb, record_size);
@@ -46,24 +67,32 @@ int TierManager::init(const char* data_dir,
 
     char path[1024];
 
-    if (!join_path(path, sizeof(path), data_dir, "tier1.ring")) return -3;
-    if (tier1_.open(path, /*tier*/1, record_size, cap1) != 0)   return -4;
+    int rc = 0;
+    if (!join_path(path, sizeof(path), data_dir, "tier1.ring")) { path_failed("tier1.ring"); return -3; }
+    if ((rc = tier1_.open(path, /*tier*/1, record_size, cap1)) != 0) {
+        ring_failed("tier1.ring", tier1_, rc);
+        return -4;
+    }
 
     if (!join_path(path, sizeof(path), data_dir, "tier2.ring")) {
+        path_failed("tier2.ring");
         tier1_.close();
         return -5;
     }
-    if (tier2_.open(path, /*tier*/2, record_size, cap2) != 0) {
+    if ((rc = tier2_.open(path, /*tier*/2, record_size, cap2)) != 0) {
+        ring_failed("tier2.ring", tier2_, rc);
         tier1_.close();
         return -6;
     }
 
     if (!join_path(path, sizeof(path), data_dir, "tier3.ring")) {
+        path_failed("tier3.ring");
         tier2_.close();
         tier1_.close();
         return -7;
     }
-    if (tier3_.open(path, /*tier*/3, record_size, cap3) != 0) {
+    if ((rc = tier3_.open(path, /*tier*/3, record_size, cap3)) != 0) {
+        ring_failed("tier3.ring", tier3_, rc);
         tier2_.close();
         tier1_.close();
         return -8;
@@ -74,9 +103,15 @@ int TierManager::init(const char* data_dir,
     for (const auto& spec : custom) {
         const std::string leaf = "level-" + spec.name + ".ring";
         auto ring = std::unique_ptr<RingFile>(new RingFile());
-        if (!join_path(path, sizeof(path), data_dir, leaf.c_str()) ||
-            ring->open(path, kCustomRingTier, record_size,
-                       records_from_mb(spec.max_mb, record_size)) != 0) {
+        if (!join_path(path, sizeof(path), data_dir, leaf.c_str())) {
+            path_failed(leaf.c_str());
+            rc = -3;
+        } else {
+            rc = ring->open(path, kCustomRingTier, record_size,
+                            records_from_mb(spec.max_mb, record_size));
+            if (rc != 0) ring_failed(leaf.c_str(), *ring, rc);
+        }
+        if (rc != 0) {
             for (auto& c : custom_) c.ring->close();
             custom_.clear();
             tier3_.close();
@@ -90,6 +125,8 @@ int TierManager::init(const char* data_dir,
     ready_ = true;
     return 0;
 }
+
+const std::string& TierManager::last_error() const { return last_error_; }
 
 int TierManager::store(const Sample& s) {
     if (!ready_) return -1;
