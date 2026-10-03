@@ -258,18 +258,85 @@ int exec_impl(lua_State* L, budyk::LuaEngine* eng, char* err, size_t err_cap) {
         }
     }
 
+    // Optional second argument: a timeout in seconds, or a table
+    //   { timeout = <seconds>, wait = <bool> }.
+    // Default 30 s, at most a day; clamped here so a huge Lua integer
+    // can't wrap through the int. Raw access: a metamethod must not
+    // raise in here (see the function comment).
+    int  timeout_s = 30;
+    bool wait      = false;
+    auto take_timeout = [&](int idx) {
+        const lua_Integer t = lua_tointeger(L, idx);
+        if (t > 0) timeout_s = static_cast<int>(t < 86400 ? t : 86400);
+    };
+    if (lua_isnumber(L, 2)) {
+        take_timeout(2);
+    } else if (lua_istable(L, 2)) {
+        lua_pushstring(L, "timeout");
+        lua_rawget(L, 2);
+        if (lua_isnumber(L, -1)) take_timeout(-1);
+        lua_pop(L, 1);
+        lua_pushstring(L, "wait");
+        lua_rawget(L, 2);
+        wait = lua_toboolean(L, -1) != 0;
+        lua_pop(L, 1);
+    }
+
+    if (!wait) {
+        // The normal case (spec §3.6: fork+exec, non-blocking). The
+        // command runs on the engine's exec worker; the tick does not
+        // wait for it, and its outcome goes to the log. Lua gets
+        // { queued = true } — or { queued = false, error = "..." } when
+        // the queue is full.
+        std::string what = cmd;
+        for (size_t i = 1; i < argv_storage.size(); ++i) {
+            what += ' ';
+            what += argv_storage[i];
+        }
+        const bool queued = eng->exec_worker().post(
+            [argv = std::move(argv_storage), what, timeout_s]
+            (const std::atomic<bool>& cancel) {
+                std::vector<const char*> ptrs;
+                ptrs.reserve(argv.size() + 1);
+                for (const auto& a : argv) ptrs.push_back(a.c_str());
+                ptrs.push_back(nullptr);
+                budyk::ExecResult res{};
+                const int rc = budyk::exec_command(ptrs.data(), timeout_s, &res, &cancel);
+                if (rc != 0) {
+                    std::fprintf(stderr, "budyk exec: %s: could not start (rc=%d)\n",
+                                 what.c_str(), rc);
+                } else if (res.cancelled) {
+                    std::fprintf(stderr, "budyk exec: %s: killed at shutdown after %.1f s\n",
+                                 what.c_str(), res.elapsed_seconds);
+                } else if (res.timed_out) {
+                    std::fprintf(stderr, "budyk exec: %s: timed out after %d s, killed\n",
+                                 what.c_str(), timeout_s);
+                } else if (res.signal != 0) {
+                    std::fprintf(stderr, "budyk exec: %s: killed by signal %d (%.2f s)\n",
+                                 what.c_str(), res.signal, res.elapsed_seconds);
+                } else if (res.exit_status != 0) {
+                    std::fprintf(stderr, "budyk exec: %s: exit %d (%.2f s)\n",
+                                 what.c_str(), res.exit_status, res.elapsed_seconds);
+                }
+            });
+        lua_newtable(L);
+        lua_pushboolean(L, queued); lua_setfield(L, -2, "queued");
+        lua_pushboolean(L, queued); lua_setfield(L, -2, "ok");
+        if (!queued) {
+            lua_pushstring(L, "exec queue full"); lua_setfield(L, -2, "error");
+        }
+        return 1;
+    }
+
+    // wait = true: run inline and hand the result back. The tick waits,
+    // so the timeout is capped at a minute; a longer job belongs in the
+    // default, queued form.
+    if (timeout_s > 60) timeout_s = 60;
+
     std::vector<const char*> argv_ptrs;
     argv_ptrs.reserve(argv_storage.size() + 1);
     for (const auto& s : argv_storage) argv_ptrs.push_back(s.c_str());
     argv_ptrs.push_back(nullptr);
-
-    // Optional second argument: timeout in seconds (default 30, at most a
-    // day). Clamped here so a huge Lua integer can't wrap through the int.
-    int timeout_s = 30;
-    if (lua_isnumber(L, 2)) {
-        const lua_Integer t = lua_tointeger(L, 2);
-        if (t > 0) timeout_s = static_cast<int>(t < 86400 ? t : 86400);
-    }
 
     budyk::ExecResult res{};
     const int rc = budyk::exec_command(argv_ptrs.data(), timeout_s, &res);

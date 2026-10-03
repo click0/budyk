@@ -54,9 +54,20 @@ void prepare_child_and_exec(const char* const argv[], int timeout_seconds) {
     _exit(127);   // execvp only returns on failure
 }
 
-int wait_with_timeout(pid_t pid, int timeout_seconds, ExecResult* out) {
+int wait_with_timeout(pid_t pid, int timeout_seconds, ExecResult* out,
+                      const std::atomic<bool>* cancel) {
     const double start    = monotonic_seconds();
     const double deadline = start + static_cast<double>(timeout_seconds);
+
+    // Kill the whole process group, then reap.
+    auto kill_and_reap = [&]() {
+        kill(-pid, SIGKILL);
+        kill( pid, SIGKILL);
+        int s = 0;
+        waitpid(pid, &s, 0);
+        out->signal          = WIFSIGNALED(s) ? WTERMSIG(s) : 0;
+        out->elapsed_seconds = monotonic_seconds() - start;
+    };
 
     for (;;) {
         int status = 0;
@@ -69,15 +80,14 @@ int wait_with_timeout(pid_t pid, int timeout_seconds, ExecResult* out) {
         }
         if (r < 0 && errno != EINTR) return -5;
 
+        if (cancel != nullptr && cancel->load()) {
+            kill_and_reap();
+            out->cancelled = true;
+            return 0;
+        }
         if (monotonic_seconds() >= deadline) {
-            // Kill the whole process group, then reap.
-            kill(-pid, SIGKILL);
-            kill( pid, SIGKILL);
-            int s = 0;
-            waitpid(pid, &s, 0);
-            out->timed_out       = true;
-            out->signal          = WIFSIGNALED(s) ? WTERMSIG(s) : 0;
-            out->elapsed_seconds = monotonic_seconds() - start;
+            kill_and_reap();
+            out->timed_out = true;
             return 0;
         }
 
@@ -90,7 +100,8 @@ int wait_with_timeout(pid_t pid, int timeout_seconds, ExecResult* out) {
 
 } // namespace
 
-int exec_command(const char* const argv[], int timeout_seconds, ExecResult* out) {
+int exec_command(const char* const argv[], int timeout_seconds, ExecResult* out,
+                 const std::atomic<bool>* cancel) {
     if (argv == nullptr || argv[0] == nullptr) return -1;
     if (timeout_seconds <= 0)                  return -2;
     if (out == nullptr)                        return -3;
@@ -101,7 +112,7 @@ int exec_command(const char* const argv[], int timeout_seconds, ExecResult* out)
     if (pid < 0)  return -4;
     if (pid == 0) prepare_child_and_exec(argv, timeout_seconds);
 
-    return wait_with_timeout(pid, timeout_seconds, out);
+    return wait_with_timeout(pid, timeout_seconds, out, cancel);
 }
 
 } // namespace budyk

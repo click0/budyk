@@ -1240,6 +1240,11 @@ int cmd_serve(int argc, char* argv[]) {
     }
     http.stop();
     ws.close_all();
+    // Queued alerts get a few seconds to go out and a running exec()
+    // child a moment to finish; then the rest is cancelled, so a stuck
+    // channel or command cannot hold the stop.
+    engine.alerts().stop(5000);
+    engine.exec_worker().stop(2000);
     engine.shutdown();
     tm.close();
     return 0;

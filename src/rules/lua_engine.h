@@ -2,6 +2,7 @@
 #pragma once
 #include "core/sample.h"
 #include "rules/alert.h"
+#include "rules/worker.h"
 #include "security/file_watcher.h"
 
 #include <cstdint>
@@ -133,6 +134,11 @@ public:
     AlertDispatcher&       alerts();
     const AlertDispatcher& alerts() const;
 
+    // The thread exec() runs commands on (see l_exec). Like alerts(),
+    // it outlives shutdown(): a reload must not wait for a running
+    // command, and a command must not be lost to one.
+    Worker&                exec_worker();
+
     // File-watch state, projected to the `files` Lua global. cmd_serve
     // calls set_file_state() right after FileWatcher::poll on every
     // tick; eval_tick re-binds before running rules so the per-tick
@@ -172,6 +178,7 @@ private:
     bool                     freeze_enabled_  = false;
     std::vector<std::string> freeze_allowlist_;
     AlertDispatcher          alerts_;
+    Worker                   exec_worker_{"exec"};
     std::string              last_error_;
     struct LevelCondition {
         uint8_t     level_id;
