@@ -25,6 +25,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   spec. Removed the unused `src/web/static/index.html` stub and the
   stale "link mongoose" TODO.
 
+### Fixed
+
+- **Start-up failures say what went wrong.** A missing or unwritable
+  `data_dir` was reported as "a ring file may not match its configured
+  size"; a port already in use as "HttpServer.start failed"; an
+  unreadable config as "failed to load config"; the TUI printed
+  "rc=-3". The modules that return small negative codes now keep the
+  reason next to the code — `RingFile::describe()` and `last_errno()`,
+  `TierManager::last_error()` (which ring, why, and the storage_mb hint
+  only when the size really differs), `HttpServer::describe()` and
+  `last_errno()`, `config_load(..., &error)` — and every message
+  includes it: "tier1.ring: open failed: No such file or directory",
+  "bind: Address already in use", "connect: Connection refused". The
+  file-watcher messages print `strerror` instead of a number.
+
 ### Security
 
 - **Failed logins are throttled.** `/api/auth/login` ran a 64 MiB

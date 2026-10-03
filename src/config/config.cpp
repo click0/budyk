@@ -8,6 +8,7 @@ extern "C" {
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cerrno>
 #include <cstring>
 
 #include <strings.h>
@@ -374,11 +375,18 @@ int parse_document(yaml_parser_t* parser, Config* out) {
 
 } // namespace
 
-int config_load(const char* path, Config* out) {
-    if (path == nullptr || out == nullptr) return -1;
+int config_load(const char* path, Config* out, std::string* error) {
+    if (error != nullptr) error->clear();
+    if (path == nullptr || out == nullptr) {
+        if (error != nullptr) *error = "no path or no output";
+        return -1;
+    }
 
     FILE* f = std::fopen(path, "r");
-    if (f == nullptr) return -2;
+    if (f == nullptr) {
+        if (error != nullptr) *error = std::strerror(errno);
+        return -2;
+    }
 
     yaml_parser_t parser;
     yaml_parser_initialize(&parser);
@@ -386,6 +394,7 @@ int config_load(const char* path, Config* out) {
     int rc = parse_document(&parser, out);
     yaml_parser_delete(&parser);
     std::fclose(f);
+    if (rc != 0 && error != nullptr) *error = "YAML parse error";
     return rc;
 }
 

@@ -49,6 +49,7 @@ inline uint64_t get_u64(const uint8_t* p)   { uint64_t v; std::memcpy(&v, p, 8);
 } // namespace
 
 int RingFile::open(const char* path, uint8_t tier, uint32_t record_size, uint64_t capacity) {
+    last_errno_ = 0;
     if (fd_ >= 0)                    return -1;  // already open
     if (record_size == 0 || capacity == 0) return -2;
 
@@ -58,22 +59,22 @@ int RingFile::open(const char* path, uint8_t tier, uint32_t record_size, uint64_
     // not hold the ring open — it could outlive the daemon and write
     // into a ring the next instance has already reopened.
     int fd = ::open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0644);
-    if (fd < 0)                      return -3;
+    if (fd < 0)                      { last_errno_ = errno; return -3; }
 
     struct stat st{};
-    if (::fstat(fd, &st) != 0)       { ::close(fd); return -4; }
+    if (::fstat(fd, &st) != 0)       { last_errno_ = errno; ::close(fd); return -4; }
     const bool fresh = (st.st_size == 0);
 
     if (fresh) {
         if (::ftruncate(fd, static_cast<off_t>(file_bytes)) != 0) {
-            ::close(fd); return -5;
+            last_errno_ = errno; ::close(fd); return -5;
         }
     } else if (static_cast<size_t>(st.st_size) != file_bytes) {
         ::close(fd); return -6;
     }
 
     void* m = ::mmap(nullptr, kHeaderSize, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    if (m == MAP_FAILED)             { ::close(fd); return -7; }
+    if (m == MAP_FAILED)             { last_errno_ = errno; ::close(fd); return -7; }
 
     auto* h = static_cast<uint8_t*>(m);
     if (fresh) {
@@ -155,5 +156,26 @@ uint64_t RingFile::count() const {
 }
 
 uint64_t RingFile::capacity() const { return capacity_; }
+
+int RingFile::last_errno() const { return last_errno_; }
+
+const char* RingFile::describe(int rc) {
+    switch (rc) {
+        case 0:   return "ok";
+        case -1:  return "already open";
+        case -2:  return "record size or capacity is zero";
+        case -3:  return "open failed";
+        case -4:  return "fstat failed";
+        case -5:  return "ftruncate failed";
+        case -6:  return "file size does not match record size x capacity";
+        case -7:  return "mmap failed";
+        case -8:  return "not a budyk ring file (bad magic)";
+        case -9:  return "ring format version mismatch";
+        case -10: return "ring was written for another tier";
+        case -11: return "record size in the header differs";
+        case -12: return "capacity in the header differs";
+        default:  return "unknown error";
+    }
+}
 
 } // namespace budyk

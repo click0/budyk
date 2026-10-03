@@ -3,6 +3,7 @@
 #include "storage/tier_manager.h"
 
 #include <cassert>
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -351,6 +352,10 @@ int main() {
         {
             TierManager tm;
             assert(tm.init(d.c_str(), 1, 1, 1, {LevelRingSpec{4, "burst", 2}}) == -9);
+            // ...and says which ring and why, with the hint.
+            assert(tm.last_error().find("level-burst.ring") != std::string::npos);
+            assert(tm.last_error().find("does not match")   != std::string::npos);
+            assert(tm.last_error().find("storage_mb")       != std::string::npos);
             std::vector<Sample> out;
             assert(tm.query_level(Level::L3, 0, 0, 10, &out) == -1);   // not ready
         }
@@ -362,6 +367,16 @@ int main() {
             tm.close();
         }
         rmrf(d);
+    }
+
+    // N+5. A data_dir that does not exist: the error names the first ring
+    //      and carries the strerror, not a bare code.
+    {
+        TierManager tm;
+        assert(tm.init("/nonexistent/budyk-dir", 1, 1, 1) == -4);
+        assert(tm.last_error().find("tier1.ring") != std::string::npos);
+        assert(tm.last_error().find("open failed") != std::string::npos);
+        assert(tm.last_error().find(std::strerror(ENOENT)) != std::string::npos);
     }
 
     std::printf("test_tier_manager: PASS\n");

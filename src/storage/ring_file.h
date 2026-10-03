@@ -18,8 +18,17 @@ public:
     uint64_t count() const;
     uint64_t capacity() const;
 
+    // Why the last open() failed. describe() turns an open() return
+    // code into words; last_errno() is the errno of the failed syscall
+    // behind -3/-4/-5/-7 (0 for the format mismatches). Together they
+    // give an operator "open failed: Permission denied" rather than
+    // "rc=-3".
+    static const char* describe(int rc);
+    int                last_errno() const;
+
 private:
     int       fd_ = -1;
+    int       last_errno_ = 0;
     void*     mmap_base_ = nullptr;
     size_t    mmap_len_ = 0;
     uint32_t  record_size_ = 0;
