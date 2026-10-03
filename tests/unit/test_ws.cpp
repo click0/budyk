@@ -281,21 +281,29 @@ int main() {
         int slow, slow_peer, fast, fast_peer;
         pair(&slow, &slow_peer);
         pair(&fast, &fast_peer);
+        // A frame must fit the socket buffer, or even a client that
+        // keeps up is dropped on the first partial write: FreeBSD's
+        // unix-socket buffer is 8 KiB by default, Linux's about 200 KiB.
+        // Pin the buffer and keep frames small so the slow peer fills
+        // up after a bounded number of frames on either.
+        const int sndbuf = 16 * 1024;
+        assert(::setsockopt(slow, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf)) == 0);
+        assert(::setsockopt(fast, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf)) == 0);
         hub.add(slow);
         hub.add(fast);
 
-        const std::string payload(64 * 1024, 'p');
+        const std::string payload(1024, 'p');
         int frames = 0;
         const auto t0 = std::chrono::steady_clock::now();
-        while (hub.size() == 2 && frames < 1000) {
+        while (hub.size() == 2 && frames < 10000) {
             hub.broadcast(payload);
             ++frames;
             drain(fast_peer);                       // the fast client keeps up
         }
         const double secs = std::chrono::duration<double>(
             std::chrono::steady_clock::now() - t0).count();
-        assert(hub.size() == 1);                    // slow one gone
-        assert(frames < 1000);
+        assert(hub.size() == 1);                    // slow one gone, fast one kept
+        assert(frames < 10000);
         assert(secs < 2.0);                         // no blocking on the slow peer
         char one;
         // The hub's end of the slow pair is closed; the peer sees EOF
