@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.3] — 2026-10-03
+
+A hardening release, from a review of the code against the spec. The
+theme is that nothing a rule, a client or a channel does can stop the
+collector any more: a looping or memory-hungry Lua rule is cut off, an
+HTTP client that stalls is closed, a dashboard that stops reading is
+dropped, and alerts and `exec()` run on their own thread instead of
+inside the tick. One change is visible to rule authors: `exec()` now
+returns as soon as the command is queued; a rule that needs the exit
+status asks for it with `exec(cmd, { timeout = 5, wait = true })`.
+Also fixed: passwords containing `"` or `\` could not log in, a large
+response could be cut short by a signal, child processes inherited the
+daemon's sockets and ring files, and `sha256sum -c *.sha256` across a
+full release download reported the Linux files as unreadable.
+
 ### Security
 
 - **A rule can no longer stall or kill the daemon.** Until now the Lua
@@ -177,6 +192,7 @@ it turned up two untested storage paths, which are now covered.
   opened, and init with the original size works again. tier_manager.cpp
   coverage went from 84.3% to 94.4%.
 
+[0.6.3]: https://github.com/click0/budyk/releases/tag/v0.6.3
 [0.6.2]: https://github.com/click0/budyk/releases/tag/v0.6.2
 
 ## [0.6.1] — 2026-09-30
