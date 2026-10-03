@@ -26,6 +26,11 @@ struct Config {
     // Persist web sessions to `<data_dir>/sessions.tsv` (mode 0600) so a
     // daemon restart doesn't log everyone out. Set false for RAM-only.
     bool  auth_persist_sessions = true;
+    // Login throttle (LoginLimiter): after this many failed attempts
+    // from one address within the window, further attempts from it get
+    // 429 until the window ends.
+    int   auth_max_login_failures = 5;
+    int   auth_login_window_sec   = 60;
 
     int   tier1_max_mb           = 250;
     int   tier2_max_mb           = 150;

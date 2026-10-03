@@ -186,6 +186,11 @@ web:
     password_hash: "$argon2id$v=19$..."   # keep the quotes
 ```
 
+Failed logins are throttled: after 5 failures from one address within a
+minute (`web.auth.max_login_failures`, `web.auth.login_window`), further
+attempts from that address get HTTP 429 until the minute is up, and no
+password hash is computed for them. A successful login clears the count.
+
 If the dashboard is password-protected, `budyk tui` asks for the password
 once at startup (without echoing it) and logs in. If the session later
 expires, for example after a daemon restart, it logs in again by itself.

@@ -27,6 +27,7 @@
 #include "tui/tui.h"
 #include "web/auth.h"
 #include "web/json.h"
+#include "web/login_limiter.h"
 #include "web/server.h"
 #include "web/session.h"
 #include "web/spa.h"
@@ -830,6 +831,10 @@ int cmd_serve(int argc, char* argv[]) {
 
     budyk::HttpServer    http;
     budyk::SessionStore  sessions;       // 24-h default TTL
+    // Login throttle. Used only from the HTTP thread (the router), so
+    // it needs no lock.
+    budyk::LoginLimiter  login_limiter(cfg.auth_max_login_failures,
+                                       cfg.auth_login_window_sec);
     budyk::WebSocketHub  ws;
 
     // Restore logged-in sessions across restarts. The file holds live
@@ -851,7 +856,7 @@ int cmd_serve(int argc, char* argv[]) {
 
     // The HTTP thread only reads sched's level table (names, intervals,
     // priorities), which is fixed at construction, never its live state.
-    auto router = [&cfg, &hot, &hot_mtx, &tm, &sessions, &ws, &authed, &sched](const budyk::HttpRequest& req) {
+    auto router = [&cfg, &hot, &hot_mtx, &tm, &sessions, &login_limiter, &ws, &authed, &sched](const budyk::HttpRequest& req) {
         // Static SPA — served at /, /index.html and /budyk for the
         // browser-friendly entry. Always public; the JS itself does
         // the auth-probe + login round-trip.
@@ -879,6 +884,18 @@ int cmd_serve(int argc, char* argv[]) {
                 return budyk::HttpResponse{
                     403, "text/plain", "auth disabled\n"};
             }
+            // Throttled before the body is even looked at, so a blocked
+            // client costs no Argon2 run.
+            const uint64_t now_s = static_cast<uint64_t>(::time(nullptr));
+            if (const int wait = login_limiter.retry_after(req.peer, now_s); wait > 0) {
+                budyk::HttpResponse r;
+                r.status       = 429;
+                r.content_type = "application/json";
+                r.body         = "{\"error\":\"too many attempts\",\"retry_after\":" +
+                                 std::to_string(wait) + "}\n";
+                r.extra_headers.push_back({"Retry-After", std::to_string(wait)});
+                return r;
+            }
             std::string pw;
             if (!budyk::json_get_string(req.body, "password", &pw) || pw.empty()) {
                 return budyk::HttpResponse{
@@ -886,10 +903,17 @@ int cmd_serve(int argc, char* argv[]) {
                     "{\"error\":\"missing password\"}\n"};
             }
             if (budyk::argon2_verify(pw, cfg.password_hash) != 0) {
+                if (login_limiter.record_failure(req.peer, now_s)) {
+                    std::fprintf(stderr,
+                        "budyk serve: %d failed logins from %s; refusing attempts for %d s\n",
+                        login_limiter.max_failures(), req.peer.c_str(),
+                        login_limiter.window_sec());
+                }
                 return budyk::HttpResponse{
                     401, "application/json",
                     "{\"error\":\"invalid credentials\"}\n"};
             }
+            login_limiter.record_success(req.peer);
             const std::string tok = sessions.create();
             if (tok.empty()) {
                 return budyk::HttpResponse{

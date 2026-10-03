@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Failed logins are throttled.** `/api/auth/login` ran a 64 MiB
+  Argon2id verification for every attempt with no limit, which made it
+  both a brute-force channel and a cheap way to keep the single HTTP
+  thread busy. After `web.auth.max_login_failures` failures (default
+  5) from one client address within `web.auth.login_window` seconds
+  (default 60), further attempts from that address get HTTP 429 with a
+  `Retry-After` header until the window ends, and no hash is computed
+  for them; a global window (50 failures) covers many addresses taking
+  turns. A successful login clears the address. The first refusal is
+  logged with the address. The dashboard shows "Too many attempts, try
+  again in N s" and `budyk tui` says so instead of "wrong password?".
+  `HttpRequest` now carries the client address (`peer`).
+
 ## [0.6.3] — 2026-10-03
 
 A hardening release, from a review of the code against the spec. The

@@ -399,6 +399,10 @@ async function doLogin() {
     });
     if (r.ok)             return start();
     if (r.status === 401) $("loginErr").textContent = "Invalid password";
+    else if (r.status === 429) {
+      const wait = r.headers.get("Retry-After");
+      $("loginErr").textContent = "Too many attempts" + (wait ? ", try again in " + wait + " s" : "");
+    }
     else                  $("loginErr").textContent = "Server returned " + r.status;
   } catch (e) {
     $("loginErr").textContent = "Network error";

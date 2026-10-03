@@ -198,6 +198,12 @@ web:
     # quotes too, but quoting is the safe form.
     # Generate via:  budyk hash-password
     # password_hash: "$argon2id$v=19$m=65536,t=3,p=4$<salt>$<hash>"
+    # Failed logins are throttled per client address: after
+    # max_login_failures failures within login_window seconds, further
+    # attempts from that address get HTTP 429 (no password hash is
+    # computed) until the window ends. A successful login clears it.
+    max_login_failures: 5
+    login_window: 60       # seconds
     #
     # Persist logged-in sessions to <data_dir>/sessions.tsv (mode 0600)
     # so a daemon restart doesn't bounce every browser to the login

@@ -142,6 +142,7 @@ const char* status_phrase(int status) {
         case 404: return "Not Found";
         case 405: return "Method Not Allowed";
         case 413: return "Payload Too Large";
+        case 429: return "Too Many Requests";
         case 500: return "Internal Server Error";
         default:  return "OK";
     }
@@ -278,12 +279,14 @@ void HttpServer::run_loop() {
             if (errno == EINTR) continue;
             break;
         }
-        const bool hijacked = handle_client(cfd);
+        char peer[INET_ADDRSTRLEN] = "";
+        ::inet_ntop(AF_INET, &cli.sin_addr, peer, sizeof(peer));
+        const bool hijacked = handle_client(cfd, peer);
         if (!hijacked) ::close(cfd);
     }
 }
 
-bool HttpServer::handle_client(int client_fd) {
+bool HttpServer::handle_client(int client_fd, const char* peer) {
     // Per-call socket timeouts plus a whole-request deadline; see
     // recv_bounded. The send timeout also covers the response, and the
     // handshake and catch-up frame a WebSocket hijack sends before the
@@ -300,6 +303,7 @@ bool HttpServer::handle_client(int client_fd) {
     if (hdr_end <= 0) return false;
 
     HttpRequest req;
+    req.peer = peer != nullptr ? peer : "";
     if (!parse_headers(buf.data(), static_cast<size_t>(hdr_end), &req)) {
         send_response(client_fd, HttpResponse{400, "text/plain", "bad request\n"});
         return false;

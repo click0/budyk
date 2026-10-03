@@ -96,6 +96,15 @@ int main() {
         assert(c.rules_memory_mb         == 4);
         assert(c.auth_enabled      == true);
         assert(std::strncmp(c.password_hash, "$argon2id$", 10) == 0);
+        assert(c.auth_max_login_failures == 5 && c.auth_login_window_sec == 60);   // defaults
+        Config t;
+        assert(config_load_string(
+            "web: { auth: { max_login_failures: 3, login_window: 120 } }\n", &t) == 0);
+        assert(t.auth_max_login_failures == 3 && t.auth_login_window_sec == 120);
+        Config tb;
+        assert(config_load_string(
+            "web: { auth: { max_login_failures: 0, login_window: 999999 } }\n", &tb) == 0);
+        assert(tb.auth_max_login_failures == 5 && tb.auth_login_window_sec == 60);
 
         // Defaults when the block is absent; out-of-range values fall
         // back to the defaults like every other clamped number.
