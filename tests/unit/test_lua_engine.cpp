@@ -4,7 +4,9 @@
 #include "rules/alert.h"
 
 #include <cassert>
+#include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <unistd.h>
 #include <vector>
@@ -251,7 +253,8 @@ int main() {
         e.shutdown();
     }
 
-    // 11b. exec() enabled — Lua gets a result table for /bin/true / /bin/false.
+    // 11b. exec(cmd, { wait = true }) — Lua gets a result table for
+    //      /bin/true / /bin/false.
     //      Engine is initialised with enable_exec=true; the rule stashes the
     //      returned table in a global that a second rule inspects.
     {
@@ -262,7 +265,7 @@ int main() {
 
         if (have_true) {
             assert(e.load_string(
-                "r_true = exec('/bin/true', 5)\n"
+                "r_true = exec('/bin/true', { timeout = 5, wait = true })\n"
                 "watch('true_ok', { when = function()\n"
                 "  return r_true and r_true.ok == true\n"
                 "           and r_true.exit_status == 0\n"
@@ -272,7 +275,7 @@ int main() {
         }
         if (have_false) {
             assert(e.load_string(
-                "r_false = exec('/bin/false', 5)\n"
+                "r_false = exec('/bin/false', { timeout = 5, wait = true })\n"
                 "watch('false_ok', { when = function()\n"
                 "  return r_false and r_false.exit_status == 1\n"
                 "           and r_false.ok == false\n"
@@ -290,7 +293,7 @@ int main() {
             LuaEngine e;
             assert(e.init(/*enable_exec*/ true) == 0);
             assert(e.load_string(
-                "r = exec({'/bin/sh', '-c', 'exit 7'}, 5)\n"
+                "r = exec({'/bin/sh', '-c', 'exit 7'}, { timeout = 5, wait = true })\n"
                 "watch('sh7', { when = function()\n"
                 "  return r.exit_status == 7 and r.ok == false\n"
                 "end })\n") == 0);
@@ -342,7 +345,7 @@ int main() {
         assert(e.init(/*enable_exec*/ true) == 0);
         e.set_exec_allowlist({"/bin/true", "/bin/echo"});
         assert(e.load_string(
-            "r = exec('/bin/true', 5)\n"
+            "r = exec('/bin/true', { timeout = 5, wait = true })\n"
             "watch('allowed', { when = function()\n"
             "  return r and r.ok == true and r.exit_status == 0\n"
             "end })\n") == 0);
@@ -780,6 +783,53 @@ int main() {
         e.eval_level_conditions(mk(90.0, 50.0, 0.1, 0.0), &active);
         assert(active.size() == 1 && active[0] == 5);
         e.shutdown();
+    }
+
+    // 35. exec() without wait runs the command on the engine's worker:
+    //     the call (and the tick) returns at once with { queued = true },
+    //     the command still runs to completion, and a reload
+    //     (shutdown + init) neither waits for it nor loses it.
+    if (access("/bin/sh", X_OK) == 0) {
+        char tmpl[] = "/tmp/budyk_exec_XXXXXX";
+        const char* dir = ::mkdtemp(tmpl);
+        assert(dir != nullptr);
+        const std::string marker = std::string(dir) + "/done";
+
+        LuaEngine e;
+        assert(e.init(/*enable_exec*/ true) == 0);
+        const std::string bg =
+            "watch('bg', { when = function()\n"
+            "  r = exec({'/bin/sh', '-c', 'sleep 0.3; touch " + marker + "'})\n"
+            "  return r.queued == true and r.ok == true\n"
+            "end })\n";
+        assert(e.load_string(bg.c_str()) == 0);
+        const auto t0 = std::chrono::steady_clock::now();
+        assert(e.eval_tick(mk(0, 0, 0, 0)) == 1);
+        const double secs = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - t0).count();
+        assert(secs < 0.25);                          // did not wait 0.3 s
+        assert(access(marker.c_str(), F_OK) != 0);    // not done yet
+
+        e.shutdown();                                 // as a SIGHUP reload does
+        assert(e.init(/*enable_exec*/ true) == 0);
+        assert(e.exec_worker().wait_idle(5000));
+        assert(e.exec_worker().completed() == 1);
+        assert(access(marker.c_str(), F_OK) == 0);    // it ran
+
+        // wait = true caps the timeout at a minute and the result shows
+        // a kill; a plain number as the second argument means a timeout.
+        assert(e.load_string(
+            "r2 = exec({'/bin/sh', '-c', 'sleep 5'}, { timeout = 1, wait = true })\n"
+            "r3 = exec('/bin/true', 5)\n"
+            "watch('bg2', { when = function()\n"
+            "  return r2.timed_out == true and r2.ok == false and r3.queued == true\n"
+            "end })\n") == 0);
+        assert(e.eval_tick(mk(0, 0, 0, 0)) >= 1);
+        assert(e.exec_worker().wait_idle(5000));
+        assert(e.exec_worker().completed() == 2);
+        e.shutdown();
+        ::unlink(marker.c_str());
+        ::rmdir(dir);
     }
 
     std::printf("test_lua_engine: PASS\n");

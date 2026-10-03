@@ -297,7 +297,7 @@ Functions available to rules:
 |----------|---------|
 | `alert(name, severity, message)` | Send to every configured channel. `severity` is `"info"`, `"warning"` (default) or `"critical"`. |
 | `print(...)` | Write to the daemon log. |
-| `exec(cmd [, timeout_s])` | Run a program: a string or an argv table, absolute path, 30 s timeout by default. **Off by default.** Enable with `rules.exec.enabled` or `--enable-exec`, and restrict it with `rules.exec.allow`. Returns `{ ok, exit_status, signal, timed_out, elapsed_seconds }`. |
+| `exec(cmd [, timeout_s])` | Run a program: a string or an argv table, absolute path, 30 s timeout by default. **Off by default.** Enable with `rules.exec.enabled` or `--enable-exec`, and restrict it with `rules.exec.allow`. The command runs in the background: the call returns `{ queued = true }` at once (or `{ queued = false, error = "exec queue full" }`), the rules carry on, and the outcome is logged. To run it inline and get its result, `exec(cmd, { timeout = 5, wait = true })` returns `{ ok, exit_status, signal, timed_out, elapsed_seconds }`; the tick waits, so that timeout is capped at 60 s. |
 | `freeze(pid)` / `unfreeze(pid)` | Send `SIGSTOP` / `SIGCONT`. **Off by default.** Enable with `rules.freeze.enabled` or `--enable-freeze`, and restrict by process name with `rules.freeze.allow`. |
 | `escalate(level [, seconds])` | Keep a collection level active for `seconds` (default 60): a [custom level](#custom-levels)'s name, `"L2"` or `"L3"`. Takes effect for the current sleep. Raises for an unknown level. |
 
@@ -357,7 +357,10 @@ thresholds derived from it. Review them before use.
 ## Alerts
 
 Configure channels under `alerts.channels`. `alert()` sends to every
-channel; if one fails, the rest still get the message.
+channel; if one fails, the rest still get the message. Sending happens
+on a separate thread: a channel that is slow or down never delays
+collection. The queue holds 256 alerts; beyond that, new ones are
+dropped and logged until it drains.
 
 | `type` | Destination |
 |--------|-------------|

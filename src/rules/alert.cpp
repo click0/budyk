@@ -6,6 +6,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
@@ -108,14 +109,15 @@ const char* ntfy_priority(AlertSeverity s) {
 // --url so one starting with '-' can't become an option either. stdio is
 // /dev/null and the run is killed after timeout_s (see exec_command).
 // Returns 0 when curl exits 0.
-int run_curl(const std::vector<std::string>& args, int timeout_s) {
+int run_curl(const std::vector<std::string>& args, int timeout_s,
+             const std::atomic<bool>* cancel) {
     std::vector<const char*> argv;
     argv.reserve(args.size() + 2);
     argv.push_back("curl");
     for (const auto& a : args) argv.push_back(a.c_str());
     argv.push_back(nullptr);
     ExecResult res{};
-    if (exec_command(argv.data(), timeout_s, &res) != 0) return -1;
+    if (exec_command(argv.data(), timeout_s, &res, cancel) != 0) return -1;
     return res.exit_status == 0 && res.signal == 0 && !res.timed_out ? 0 : -2;
 }
 
@@ -126,7 +128,8 @@ int run_curl(const std::vector<std::string>& args, int timeout_s) {
 // treat a 4xx as fatal-to-the-batch).
 int curl_post(const char* url,
               const std::string& body,
-              const std::vector<std::string>& extra_headers) {
+              const std::vector<std::string>& extra_headers,
+              const std::atomic<bool>* cancel) {
     char body_path[64];
     if (!write_tmp(body, body_path, sizeof(body_path))) return -1;
 
@@ -144,7 +147,7 @@ int curl_post(const char* url,
     const int rc = run_curl({"-sS", "-X", "POST",
                              "-H", std::string("@") + hdr_path,
                              "-d", std::string("@") + body_path,
-                             "--max-time", "10", "--url", url}, 15);
+                             "--max-time", "10", "--url", url}, 15, cancel);
     ::unlink(body_path);
     ::unlink(hdr_path);
     return rc == 0 ? 0 : -3;
@@ -155,7 +158,8 @@ int curl_post(const char* url,
 // --netrc-file so they don't appear in `ps`/argv.
 int curl_basic_form_post(const char* url,
                          const std::string& user_pass,
-                         const std::string& form_body) {
+                         const std::string& form_body,
+              const std::atomic<bool>* cancel) {
     char body_path[64];
     if (!write_tmp(form_body, body_path, sizeof(body_path))) return -1;
 
@@ -189,7 +193,7 @@ int curl_basic_form_post(const char* url,
     const int rc = run_curl({"-sS", "-X", "POST", "--netrc-file", netrc_path,
                              "-H", "Content-Type: application/x-www-form-urlencoded",
                              "-d", std::string("@") + body_path,
-                             "--max-time", "10", "--url", url}, 15);
+                             "--max-time", "10", "--url", url}, 15, cancel);
     ::unlink(body_path);
     ::unlink(netrc_path);
     return rc == 0 ? 0 : -4;
@@ -205,7 +209,8 @@ int curl_smtp(const char* url,
               const std::string& user_pass,
               const std::string& from,
               const std::string& to,
-              const std::string& message) {
+              const std::string& message,
+              const std::atomic<bool>* cancel) {
     char body_path[64];
     if (!write_tmp(message, body_path, sizeof(body_path))) return -1;
 
@@ -242,7 +247,7 @@ int curl_smtp(const char* url,
     }
     args.insert(args.end(), {"--mail-from", from, "--mail-rcpt", to,
                              "-T", body_path, "--max-time", "15", "--url", url});
-    const int rc = run_curl(args, 20);
+    const int rc = run_curl(args, 20, cancel);
     ::unlink(body_path);
     if (netrc_path[0] != '\0') ::unlink(netrc_path);
     return rc == 0 ? 0 : -5;
@@ -364,6 +369,94 @@ std::string discord_payload(AlertSeverity sev, const std::string& rule_name,
     return out;
 }
 
+namespace {
+
+// Is this channel configured well enough to send to? The same checks
+// the send used to make, done before queueing so dispatch() can report
+// the count of channels the alert will reach and log the rest once.
+bool channel_complete(const AlertChannel& ch) {
+    if (ch.type == "ntfy" || ch.type == "discord" || ch.type == "telegram") return true;
+    if (ch.type == "smtp") {
+        if (ch.from.empty() || ch.topic.empty() || ch.url.empty()) {
+            std::fprintf(stderr,
+                "budyk alert: smtp channel '%s' missing url/from/topic\n",
+                ch.name.c_str());
+            return false;
+        }
+        return true;
+    }
+    if (ch.type == "twilio") {
+        if (ch.from.empty() || ch.topic.empty() || ch.url.empty() ||
+            ch.token.empty()) {
+            std::fprintf(stderr,
+                "budyk alert: twilio channel '%s' missing url/token/from/topic\n",
+                ch.name.c_str());
+            return false;
+        }
+        return true;
+    }
+    std::fprintf(stderr,
+        "budyk alert: unknown channel type '%s' on '%s'\n",
+        ch.type.c_str(), ch.name.c_str());
+    return false;
+}
+
+// One channel, one alert. Runs on the worker thread. 0 when curl
+// exited 0.
+int send_one(const AlertChannel& ch, AlertSeverity sev,
+             const std::string& rule_name, const std::string& message,
+             const std::atomic<bool>* cancel) {
+    if (ch.type == "ntfy") {
+        // ntfy.sh: POST to <base>/<topic>, body = message,
+        // headers: Title, Priority, Tags.
+        std::string url = ch.url;
+        if (!url.empty() && url.back() != '/') url.push_back('/');
+        url += ch.topic;
+        std::vector<std::string> hdrs = {
+            std::string("Title: budyk: ") + rule_name,
+            std::string("Priority: ") + ntfy_priority(sev),
+            std::string("Tags: ") + severity_name(sev),
+        };
+        return curl_post(url.c_str(), ntfy_payload(sev, rule_name, message), hdrs, cancel);
+    }
+    if (ch.type == "discord") {
+        std::vector<std::string> hdrs = {
+            "Content-Type: application/json",
+        };
+        return curl_post(ch.url.c_str(),
+                         discord_payload(sev, rule_name, message), hdrs, cancel);
+    }
+    if (ch.type == "telegram") {
+        // url override; default to the public Bot API endpoint.
+        std::string url = ch.url;
+        if (url.empty()) {
+            url  = "https://api.telegram.org/bot";
+            url += ch.token;
+            url += "/sendMessage";
+        }
+        std::vector<std::string> hdrs = {
+            "Content-Type: application/json",
+        };
+        return curl_post(url.c_str(),
+                         telegram_payload(sev, ch.topic, rule_name, message),
+                         hdrs, cancel);
+    }
+    if (ch.type == "smtp") {
+        return curl_smtp(ch.url.c_str(), ch.token,
+                         ch.from, ch.topic,
+                         smtp_message(sev, ch.from, ch.topic,
+                                      rule_name, message), cancel);
+    }
+    if (ch.type == "twilio") {
+        return curl_basic_form_post(ch.url.c_str(), ch.token,
+                                    twilio_form(ch.from, ch.topic,
+                                                rule_name, message), cancel);
+    }
+    return -4;
+}
+
+} // namespace
+
 void AlertDispatcher::add_channel(AlertChannel ch) {
     channels_.emplace_back(std::move(ch));
 }
@@ -372,6 +465,12 @@ size_t AlertDispatcher::channel_count() const { return channels_.size(); }
 
 uint64_t AlertDispatcher::dispatch_calls() const { return dispatch_calls_; }
 const AlertDispatcher::Event& AlertDispatcher::last_event() const { return last_event_; }
+uint64_t AlertDispatcher::delivered() const { return delivered_.load(); }
+uint64_t AlertDispatcher::failed()    const { return failed_.load(); }
+uint64_t AlertDispatcher::dropped()   const { return worker_.dropped(); }
+
+bool AlertDispatcher::flush(int timeout_ms) { return worker_.wait_idle(timeout_ms); }
+void AlertDispatcher::stop(int grace_ms)    { worker_.stop(grace_ms); }
 
 int AlertDispatcher::dispatch(AlertSeverity sev,
                               const std::string& rule_name,
@@ -381,75 +480,39 @@ int AlertDispatcher::dispatch(AlertSeverity sev,
     last_event_.rule     = rule_name;
     last_event_.message  = message;
 
-    int succeeded = 0;
+    std::vector<AlertChannel> targets;
     for (const auto& ch : channels_) {
-        int rc = -1;
-        if (ch.type == "ntfy") {
-            // ntfy.sh: POST to <base>/<topic>, body = message,
-            // headers: Title, Priority, Tags.
-            std::string url = ch.url;
-            if (!url.empty() && url.back() != '/') url.push_back('/');
-            url += ch.topic;
-            std::vector<std::string> hdrs = {
-                std::string("Title: budyk: ") + rule_name,
-                std::string("Priority: ") + ntfy_priority(sev),
-                std::string("Tags: ") + severity_name(sev),
-            };
-            rc = curl_post(url.c_str(), ntfy_payload(sev, rule_name, message), hdrs);
-        } else if (ch.type == "discord") {
-            std::vector<std::string> hdrs = {
-                "Content-Type: application/json",
-            };
-            rc = curl_post(ch.url.c_str(),
-                           discord_payload(sev, rule_name, message), hdrs);
-        } else if (ch.type == "telegram") {
-            // url override; default to the public Bot API endpoint.
-            std::string url = ch.url;
-            if (url.empty()) {
-                url  = "https://api.telegram.org/bot";
-                url += ch.token;
-                url += "/sendMessage";
-            }
-            std::vector<std::string> hdrs = {
-                "Content-Type: application/json",
-            };
-            rc = curl_post(url.c_str(),
-                           telegram_payload(sev, ch.topic, rule_name, message),
-                           hdrs);
-        } else if (ch.type == "smtp") {
-            if (ch.from.empty() || ch.topic.empty() || ch.url.empty()) {
-                std::fprintf(stderr,
-                    "budyk alert: smtp channel '%s' missing url/from/topic\n",
-                    ch.name.c_str());
-                continue;
-            }
-            rc = curl_smtp(ch.url.c_str(), ch.token,
-                           ch.from, ch.topic,
-                           smtp_message(sev, ch.from, ch.topic,
-                                        rule_name, message));
-        } else if (ch.type == "twilio") {
-            if (ch.from.empty() || ch.topic.empty() || ch.url.empty() ||
-                ch.token.empty()) {
-                std::fprintf(stderr,
-                    "budyk alert: twilio channel '%s' missing url/token/from/topic\n",
-                    ch.name.c_str());
-                continue;
-            }
-            rc = curl_basic_form_post(ch.url.c_str(), ch.token,
-                                      twilio_form(ch.from, ch.topic,
-                                                  rule_name, message));
-        } else {
-            std::fprintf(stderr,
-                "budyk alert: unknown channel type '%s' on '%s'\n",
-                ch.type.c_str(), ch.name.c_str());
-            continue;
-        }
-        if (rc == 0) ++succeeded;
-        else        std::fprintf(stderr,
-            "budyk alert: channel '%s' (%s) failed (rc=%d)\n",
-            ch.name.c_str(), ch.type.c_str(), rc);
+        if (channel_complete(ch)) targets.push_back(ch);
     }
-    return succeeded;
+    if (targets.empty()) return 0;
+    const int queued = static_cast<int>(targets.size());
+
+    // The job owns copies of everything it needs; the tick moves on.
+    const bool ok = worker_.post(
+        [this, chs = std::move(targets), sev, rule_name, message]
+        (const std::atomic<bool>& cancel) {
+            for (const auto& ch : chs) {
+                if (cancel.load()) {               // shutting down
+                    failed_.fetch_add(1);
+                    continue;
+                }
+                const int rc = send_one(ch, sev, rule_name, message, &cancel);
+                if (rc == 0) {
+                    delivered_.fetch_add(1);
+                } else {
+                    failed_.fetch_add(1);
+                    std::fprintf(stderr,
+                        "budyk alert: channel '%s' (%s) failed (rc=%d)\n",
+                        ch.name.c_str(), ch.type.c_str(), rc);
+                }
+            }
+        });
+    if (!ok) {
+        std::fprintf(stderr, "budyk alert: queue full, alert for rule '%s' dropped\n",
+                     rule_name.c_str());
+        return 0;
+    }
+    return queued;
 }
 
 } // namespace budyk

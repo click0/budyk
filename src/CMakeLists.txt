@@ -74,10 +74,13 @@ add_library(budyk_rules STATIC
     rules/lua_stdlib.cpp
     rules/exec_action.cpp
     rules/alert.cpp
+    rules/worker.cpp
     rules/freeze.cpp
     rules/yaml_compat.cpp
 )
+find_package(Threads REQUIRED)
 target_link_libraries(budyk_rules PRIVATE budyk_core ${LUA_LIBRARIES})
+target_link_libraries(budyk_rules PUBLIC Threads::Threads)   # Worker threads
 target_include_directories(budyk_rules PRIVATE ${LUA_INCLUDE_DIR})
 # libyaml is in base and already used by budyk_config; needed here for
 # the simple-YAML → Lua transpiler in rules/yaml_compat.cpp.

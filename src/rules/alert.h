@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #pragma once
+#include "rules/worker.h"
+
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -44,17 +47,29 @@ struct AlertChannel {
     std::string from;
 };
 
-// Lua-facing dispatcher. Each call to dispatch() fires one HTTP POST
-// per channel, best-effort: a failed channel logs to stderr and keeps
-// the others alive.
+// Lua-facing dispatcher. dispatch() queues the alert and returns at
+// once; the sends — one curl run per channel, up to 20 s each — happen
+// on the dispatcher's own thread (a Worker), so a channel that is slow
+// or down never holds the collector tick. Delivery is best-effort: a
+// failed channel is logged and the others still get the alert.
 class AlertDispatcher {
 public:
     void   add_channel(AlertChannel ch);
 
-    // Returns the number of channels that succeeded.
+    // Queue the alert for every channel whose fields are complete (an
+    // incomplete or unknown channel is logged and skipped, as before).
+    // Returns the number of channels it was queued for; 0 when there
+    // are none, or when the queue is full and the alert was dropped.
     int    dispatch(AlertSeverity sev,
                     const std::string& rule_name,
                     const std::string& message);
+
+    // Block until every queued alert has been attempted, or timeout_ms
+    // passed; true when the queue ran dry. Tests, and shutdown.
+    bool   flush(int timeout_ms);
+    // Wait up to grace_ms for queued alerts to go out, then cancel the
+    // running curl and drop the rest. The daemon calls this on stop.
+    void   stop(int grace_ms);
 
     size_t channel_count() const;
 
@@ -68,11 +83,19 @@ public:
     };
     uint64_t     dispatch_calls() const;
     const Event& last_event()     const;
+    // Outcome counters, per channel attempt, updated by the worker.
+    uint64_t     delivered()      const;
+    uint64_t     failed()         const;
+    // Alerts dropped because the queue was full or the worker stopped.
+    uint64_t     dropped()        const;
 
 private:
     std::vector<AlertChannel> channels_;
     uint64_t                  dispatch_calls_ = 0;
     Event                     last_event_;
+    Worker                    worker_{"alerts"};
+    std::atomic<uint64_t>     delivered_{0};
+    std::atomic<uint64_t>     failed_{0};
 };
 
 // --- Payload builders (exported for tests; no network) ---------------

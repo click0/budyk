@@ -30,6 +30,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `string.rep`, and a looping level condition. The hook costs nothing
   measurable in `test_rule_perf`.
 
+- **Alerts and `exec()` no longer block collection.** Both ran inside
+  the collector tick: each alert channel is a curl run of up to 20 s,
+  one after another, and an `exec()` waited for its command, 30 s by
+  default and up to a day. While they ran, nothing was collected,
+  stored or broadcast, and the dashboard froze. A new `Worker` (one
+  background thread with a bounded queue of 256 jobs) carries that
+  work. `alert()` queues the alert and returns; the dispatcher's
+  thread sends it and logs failures, and `AlertDispatcher::dispatch`
+  now reports the number of channels queued. `exec()` queues the
+  command and returns `{ queued = true }`; its outcome (exit status,
+  signal, timeout) goes to the log. `exec(cmd, { timeout = 5, wait =
+  true })` keeps the old inline behaviour and result table for a rule
+  that needs the exit status; that timeout is capped at 60 s. A full
+  queue drops the job and logs it. On shutdown the daemon gives queued
+  alerts 5 s and a running command 2 s, then cancels the rest
+  (`exec_command` takes a cancel flag and kills the child), so a stuck
+  channel cannot hold the stop. A reload keeps both queues. Spec §3.6:
+  "exec(): fork+exec, non-blocking".
 - **A stalled HTTP client no longer holds the server.** The embedded
   server handles one connection at a time on one thread, and a client
   that opened a connection and sent nothing, or dripped its request a

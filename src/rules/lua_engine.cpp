@@ -330,6 +330,7 @@ const std::vector<std::string>& LuaEngine::freeze_allowlist() const {
 
 AlertDispatcher&       LuaEngine::alerts()       { return alerts_; }
 const AlertDispatcher& LuaEngine::alerts() const { return alerts_; }
+Worker&                LuaEngine::exec_worker()  { return exec_worker_; }
 
 void LuaEngine::set_file_state(const FileWatchState& s) {
     file_state_     = s;

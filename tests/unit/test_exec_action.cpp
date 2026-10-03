@@ -3,8 +3,10 @@
 
 #include "rules/exec_action.h"
 
+#include <atomic>
 #include <cassert>
 #include <cstdio>
+#include <thread>
 #include <unistd.h>
 
 using namespace budyk;
@@ -66,6 +68,27 @@ int main() {
         assert(r.signal          == 9);    // SIGKILL
         assert(r.elapsed_seconds >= 1.0);
         assert(r.elapsed_seconds <  3.0);  // generous upper bound
+    }
+
+    // 4b. The cancel flag ends the child at once, before its timeout: a
+    //     Worker being stopped uses it so a running exec() cannot hold
+    //     the daemon's shutdown.
+    if (SLEEP_BIN) {
+        const char* argv[] = {SLEEP_BIN, "10", nullptr};
+        std::atomic<bool> cancel{false};
+        std::thread raiser([&cancel] {
+            ::usleep(200000);
+            cancel = true;
+        });
+        ExecResult r{};
+        int rc = exec_command(argv, 30, &r, &cancel);
+        raiser.join();
+        assert(rc == 0);
+        assert(r.cancelled       == true);
+        assert(r.timed_out       == false);
+        assert(r.signal          == 9);    // SIGKILL
+        assert(r.elapsed_seconds >= 0.2);
+        assert(r.elapsed_seconds <  2.0);
     }
 
     // 5. Non-existent binary → child exits 127 after execvp failure.
