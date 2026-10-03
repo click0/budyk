@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`-DBUDYK_PLATFORM` is checked, not ignored.** `cmake/platform.cmake`
+  always set the platform from the host and silently shadowed the flag
+  the docs and CI pass. The platform is still detected from the host
+  (budyk does not cross-compile), and a flag that names a different
+  platform is now a configure error. Dropped the NetBSD/OpenBSD
+  branches that `src/CMakeLists.txt` rejected anyway.
+- **`CLAUDE.md` describes the code as it is.** The old text promised a
+  collector thread, an event loop, fully non-blocking I/O and a
+  mongoose-or-libwebsockets web layer, none of which the code had. It
+  now documents the real thread model (main-thread tick, one HTTP
+  thread with per-connection timeouts, non-blocking WebSocket hub,
+  Worker threads for alerts and `exec()`), the conventions as
+  practised, the release procedure, and the known gaps against the
+  spec. Removed the unused `src/web/static/index.html` stub and the
+  stale "link mongoose" TODO.
+
 ### Security
 
 - **Failed logins are throttled.** `/api/auth/login` ran a 64 MiB

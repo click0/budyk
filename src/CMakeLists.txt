@@ -123,7 +123,8 @@ find_library(ARGON2_LIB argon2 REQUIRED)
 find_path(ARGON2_INCLUDE_DIR argon2.h REQUIRED)
 target_link_libraries(budyk_web PRIVATE ${ARGON2_LIB})
 target_include_directories(budyk_web PRIVATE ${ARGON2_INCLUDE_DIR})
-# TODO: link mongoose or libwebsockets
+# The HTTP/1.1 and WebSocket server is hand-written (web/server.cpp,
+# web/ws_hub.cpp); no third-party web library.
 
 # TUI
 add_library(budyk_tui STATIC
