@@ -83,6 +83,30 @@ bool write_tmp(const std::string& body, char* path_out, size_t cap) {
     return n == static_cast<ssize_t>(body.size());
 }
 
+// A curl config file (-K) holding the URL, so it never appears in
+// curl's argv: a Telegram bot token sits in the URL path and a Discord
+// webhook URL is itself the credential, and argv is readable by every
+// local user through ps(1). The file is 0600 from mkstemp and unlinked
+// as soon as curl exits. Quoting per curl's config syntax: backslash,
+// double quote and the control characters that would start a new line
+// or option are escaped, so a URL from the config file is one `url`
+// value whatever it contains.
+bool write_url_config(const char* url, char* path_out, size_t cap) {
+    std::string cfg = "url = \"";
+    for (const char* p = url; *p != '\0'; ++p) {
+        switch (*p) {
+            case '\\': cfg += "\\\\"; break;
+            case '"':  cfg += "\\\""; break;
+            case '\n': cfg += "\\n";  break;
+            case '\r': cfg += "\\r";  break;
+            case '\t': cfg += "\\t";  break;
+            default:   cfg += *p;     break;
+        }
+    }
+    cfg += "\"\n";
+    return write_tmp(cfg, path_out, cap);
+}
+
 const char* severity_color(AlertSeverity s) {
     // Discord embed colour as an int (decimal). Standard SOC colours.
     switch (s) {
@@ -105,8 +129,9 @@ const char* ntfy_priority(AlertSeverity s) {
 
 // Runs curl with `args` as its argv, directly (fork + execvp, no shell).
 // A URL, address or token with spaces, quotes, `;` or `$(...)` stays one
-// argument and is never parsed as shell syntax; each URL goes through
-// --url so one starting with '-' can't become an option either. stdio is
+// argument and is never parsed as shell syntax; the URL itself goes
+// through a -K config file (write_url_config), so it is neither an
+// option nor visible in ps(1). stdio is
 // /dev/null and the run is killed after timeout_s (see exec_command).
 // Returns 0 when curl exits 0.
 int run_curl(const std::vector<std::string>& args, int timeout_s,
@@ -143,13 +168,20 @@ int curl_post(const char* url,
         ::unlink(body_path);
         return -2;
     }
+    char url_path[64];
+    if (!write_url_config(url, url_path, sizeof(url_path))) {
+        ::unlink(body_path);
+        ::unlink(hdr_path);
+        return -2;
+    }
 
     const int rc = run_curl({"-sS", "-X", "POST",
                              "-H", std::string("@") + hdr_path,
                              "-d", std::string("@") + body_path,
-                             "--max-time", "10", "--url", url}, 15, cancel);
+                             "--max-time", "10", "-K", url_path}, 15, cancel);
     ::unlink(body_path);
     ::unlink(hdr_path);
+    ::unlink(url_path);
     return rc == 0 ? 0 : -3;
 }
 
@@ -189,13 +221,20 @@ int curl_basic_form_post(const char* url,
         return -3;
     }
     ::chmod(netrc_path, 0600);
+    char url_path[64];
+    if (!write_url_config(url, url_path, sizeof(url_path))) {
+        ::unlink(body_path);
+        ::unlink(netrc_path);
+        return -3;
+    }
 
     const int rc = run_curl({"-sS", "-X", "POST", "--netrc-file", netrc_path,
                              "-H", "Content-Type: application/x-www-form-urlencoded",
                              "-d", std::string("@") + body_path,
-                             "--max-time", "10", "--url", url}, 15, cancel);
+                             "--max-time", "10", "-K", url_path}, 15, cancel);
     ::unlink(body_path);
     ::unlink(netrc_path);
+    ::unlink(url_path);
     return rc == 0 ? 0 : -4;
 }
 
@@ -245,10 +284,17 @@ int curl_smtp(const char* url,
         args.push_back("--netrc-file");
         args.push_back(netrc_path);
     }
+    char url_path[64];
+    if (!write_url_config(url, url_path, sizeof(url_path))) {
+        ::unlink(body_path);
+        if (netrc_path[0] != '\0') ::unlink(netrc_path);
+        return -4;
+    }
     args.insert(args.end(), {"--mail-from", from, "--mail-rcpt", to,
-                             "-T", body_path, "--max-time", "15", "--url", url});
+                             "-T", body_path, "--max-time", "15", "-K", url_path});
     const int rc = run_curl(args, 20, cancel);
     ::unlink(body_path);
+    ::unlink(url_path);
     if (netrc_path[0] != '\0') ::unlink(netrc_path);
     return rc == 0 ? 0 : -5;
 }
