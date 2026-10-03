@@ -21,6 +21,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   logged with the address. The dashboard shows "Too many attempts, try
   again in N s" and `budyk tui` says so instead of "wrong password?".
   `HttpRequest` now carries the client address (`peer`).
+- **Alert channel secrets stay out of `ps`.** The Telegram bot token
+  sits in the Bot API URL, and a Discord webhook URL is itself the
+  credential; both were passed to curl as `--url` on the command line,
+  readable by every local user through `ps(1)` for the duration of the
+  request. Every curl run now takes its URL from a `-K` config file
+  created with mode 0600 and unlinked when curl exits, the same way
+  SMTP and Twilio credentials already travelled in a `--netrc-file`.
+  Quotes, backslashes and control characters in the URL are escaped
+  per curl's config syntax, so the URL is one value whatever it
+  contains. A test runs a stand-in `curl` that records its argv and
+  the files it is given: no secret or URL in argv, all of them in 0600
+  files.
 
 ## [0.6.3] — 2026-10-03
 

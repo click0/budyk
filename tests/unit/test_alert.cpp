@@ -14,6 +14,7 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 using namespace budyk;
@@ -248,6 +249,100 @@ int main() {
 
         assert(::access(marker.c_str(), F_OK) != 0);
         ::unlink(marker.c_str());
+        ::rmdir(dir);
+    }
+
+    // 15. Secrets never reach curl's argv, which any local user can read
+    //     through ps(1): the Telegram bot token sits in the URL path, a
+    //     Discord webhook URL is the credential, Twilio and SMTP carry
+    //     "user:pass". A stand-in `curl` first in PATH records its argv
+    //     and the files it was pointed at (they are unlinked once curl
+    //     exits, so it has to read them while it runs). The token must
+    //     be absent from argv and present in a 0600 -K config file, and
+    //     a quote in the URL must be escaped, not end the value.
+    if (::access("/bin/sh", X_OK) == 0) {
+        char dir_tmpl[] = "/tmp/budyk_fakecurl_XXXXXX";
+        const char* dir = ::mkdtemp(dir_tmpl);
+        assert(dir != nullptr);
+        const std::string fake = std::string(dir) + "/curl";
+        const std::string rec  = std::string(dir) + "/record";
+        {
+            FILE* f = std::fopen(fake.c_str(), "w");
+            assert(f != nullptr);
+            std::fprintf(f,
+                "#!/bin/sh\n"
+                "printf 'ARGV:' >> '%s'\n"
+                "for a in \"$@\"; do printf ' [%%s]' \"$a\" >> '%s'; done\n"
+                "printf '\\n' >> '%s'\n"
+                "while [ $# -gt 0 ]; do\n"
+                "  if [ \"$1\" = -K ] || [ \"$1\" = --netrc-file ]; then\n"
+                "    printf 'FILE %%s mode=%%s: ' \"$1\" \"$(stat -c %%a \"$2\" 2>/dev/null || stat -f %%Lp \"$2\")\" >> '%s'\n"
+                "    cat \"$2\" >> '%s'\n"
+                "  fi\n"
+                "  shift\n"
+                "done\n"
+                "exit 0\n",
+                rec.c_str(), rec.c_str(), rec.c_str(), rec.c_str(), rec.c_str());
+            std::fclose(f);
+            ::chmod(fake.c_str(), 0755);
+        }
+        const char* old_path = ::getenv("PATH");
+        const std::string new_path = std::string(dir) + ":" + (old_path != nullptr ? old_path : "");
+        ::setenv("PATH", new_path.c_str(), 1);
+
+        AlertDispatcher d;
+        auto add = [&](const char* type, const std::string& url, const std::string& from,
+                       const std::string& topic, const std::string& token) {
+            AlertChannel ch;
+            ch.name = type; ch.type = type; ch.url = url;
+            ch.from = from; ch.topic = topic; ch.token = token;
+            d.add_channel(std::move(ch));
+        };
+        add("telegram", "", "", "42", "BOT_TOKEN_SECRET");                 // token in the URL path
+        add("discord",  "https://discord.example/api/webhooks/WEBHOOK_SECRET?x=\"q\"", "", "", "");
+        add("twilio",   "https://api.twilio.example/Accounts/AC1/Messages.json",
+                        "+1", "+2", "AC1:TWILIO_SECRET");
+        add("smtp",     "smtps://mail.example:465", "a@x", "b@x", "mailuser:MAIL_SECRET");
+        assert(d.dispatch(AlertSeverity::Info, "r", "m") == 4);
+        assert(d.flush(30000));
+        assert(d.delivered() == 4);                   // the stand-in exits 0
+
+        std::string record;
+        {
+            FILE* f = std::fopen(rec.c_str(), "r");
+            assert(f != nullptr);
+            char buf[4096];
+            size_t n;
+            while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) record.append(buf, n);
+            std::fclose(f);
+        }
+        // argv lines carry no secret and no URL...
+        std::string argv_lines, file_lines;
+        for (size_t pos = 0; pos < record.size(); ) {
+            const size_t eol = record.find('\n', pos);
+            const std::string line = record.substr(pos, eol == std::string::npos ? std::string::npos : eol - pos);
+            (line.compare(0, 5, "ARGV:") == 0 ? argv_lines : file_lines) += line + "\n";
+            if (eol == std::string::npos) break;
+            pos = eol + 1;
+        }
+        assert(argv_lines.find("BOT_TOKEN_SECRET") == std::string::npos);
+        assert(argv_lines.find("WEBHOOK_SECRET")   == std::string::npos);
+        assert(argv_lines.find("TWILIO_SECRET")    == std::string::npos);
+        assert(argv_lines.find("MAIL_SECRET")      == std::string::npos);
+        assert(argv_lines.find("--url")            == std::string::npos);
+        assert(argv_lines.find("https://")         == std::string::npos);
+        assert(argv_lines.find("smtps://")         == std::string::npos);
+        // ...the files do, and are private to the daemon.
+        assert(file_lines.find("url = \"https://api.telegram.org/botBOT_TOKEN_SECRET/sendMessage\"") != std::string::npos);
+        assert(file_lines.find("url = \"https://discord.example/api/webhooks/WEBHOOK_SECRET?x=\\\"q\\\"\"") != std::string::npos);
+        assert(file_lines.find("password TWILIO_SECRET") != std::string::npos);
+        assert(file_lines.find("password MAIL_SECRET")   != std::string::npos);
+        assert(file_lines.find("mode=600") != std::string::npos);
+        assert(file_lines.find("mode=644") == std::string::npos);
+
+        ::setenv("PATH", old_path != nullptr ? old_path : "", 1);
+        ::unlink(fake.c_str());
+        ::unlink(rec.c_str());
         ::rmdir(dir);
     }
 
