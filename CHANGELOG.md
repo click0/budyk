@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`main.cpp` is split up; the HTTP routes have unit tests.** The
+  1 300-line file held the CLI, the collector bridge, the request
+  parsers, every HTTP route and the serve loop, so the daemon's most
+  security-sensitive code (auth, cookies, query parsing, the login
+  throttle) could only be exercised through the smoke script. It is
+  now `src/web/http_util` (cookie and query parsers), `src/daemon/`
+  (`router.cpp` with the routes behind an explicit `RouterDeps`,
+  `serve.cpp` with the loop, signals, reload and shutdown,
+  `collect.cpp` with the C → C++ bridge), `src/cli/` (the one-shot
+  commands) and a `main.cpp` that only dispatches. No behaviour
+  changes: the code moved as it was. `test_http_util` covers the
+  parsers (cookie prefixes, saturating numbers, fallbacks) and
+  `test_router` calls every route through the handler with real
+  collaborators: the SPA and `/api/health`, auth disabled and enabled,
+  the login flow with the throttle and the cookie, logout, the poller
+  wake-up, `/api/levels`, `/api/range` parameters and the level/tier
+  precedence, and the WebSocket upgrade paths.
 - **`-DBUDYK_PLATFORM` is checked, not ignored.** `cmake/platform.cmake`
   always set the platform from the host and silently shadowed the flag
   the docs and CI pass. The platform is still detected from the host
