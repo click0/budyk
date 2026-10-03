@@ -109,6 +109,7 @@ add_library(budyk_web STATIC
     web/ws_hub.cpp
     web/auth.cpp
     web/json.cpp
+    web/http_util.cpp
     web/session.cpp
     web/login_limiter.cpp
     web/sha1_base64.cpp
@@ -156,11 +157,16 @@ target_link_libraries(budyk_config PRIVATE ${YAML_LIB})
 target_include_directories(budyk_config PRIVATE ${YAML_INCLUDE_DIR})
 
 # Main binary
-add_executable(budyk main.cpp)
-# One source of truth for the version string (`budyk version`,
-# /api/health): project(VERSION) in the top-level CMakeLists.txt.
-target_compile_definitions(budyk PRIVATE BUDYK_VERSION="${PROJECT_VERSION}")
-target_link_libraries(budyk PRIVATE
+# The daemon (serve loop, HTTP routes, collector bridge) and the one-shot
+# commands, as a library so the routes can be unit-tested without a
+# socket (tests/unit/test_router.cpp). main.cpp only dispatches.
+add_library(budyk_app STATIC
+    daemon/collect.cpp
+    daemon/router.cpp
+    daemon/serve.cpp
+    cli/commands.cpp
+)
+target_link_libraries(budyk_app PUBLIC
     budyk_core
     budyk_collector
     budyk_scheduler
@@ -175,5 +181,11 @@ target_link_libraries(budyk PRIVATE
     ${BUDYK_PLATFORM_LIBS}
     ${LUA_LIBRARIES}
 )
+
+add_executable(budyk main.cpp)
+# One source of truth for the version string (`budyk version`,
+# /api/health): project(VERSION) in the top-level CMakeLists.txt.
+target_compile_definitions(budyk PRIVATE BUDYK_VERSION="${PROJECT_VERSION}")
+target_link_libraries(budyk PRIVATE budyk_app)
 # STATIC_LINK's -static is applied to all executables in the top-level
 # CMakeLists.txt, next to the static-archive lookup it depends on.

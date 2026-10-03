@@ -157,6 +157,17 @@ target_link_libraries(test_file_watcher PRIVATE budyk_security budyk_core)
 target_include_directories(test_file_watcher PRIVATE ${CMAKE_SOURCE_DIR}/src)
 add_test(NAME test_file_watcher COMMAND test_file_watcher)
 
+add_executable(test_http_util unit/test_http_util.cpp)
+target_link_libraries(test_http_util PRIVATE budyk_web budyk_core)
+target_include_directories(test_http_util PRIVATE ${CMAKE_SOURCE_DIR}/src)
+add_test(NAME test_http_util COMMAND test_http_util)
+
+# The daemon's routes, through make_router(): needs the whole app library.
+add_executable(test_router unit/test_router.cpp)
+target_link_libraries(test_router PRIVATE budyk_app)
+target_include_directories(test_router PRIVATE ${CMAKE_SOURCE_DIR}/src)
+add_test(NAME test_router COMMAND test_router)
+
 add_executable(test_tui unit/test_tui.cpp)
 target_link_libraries(test_tui PRIVATE budyk_tui budyk_core)
 target_include_directories(test_tui PRIVATE ${CMAKE_SOURCE_DIR}/src)

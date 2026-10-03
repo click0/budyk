@@ -66,7 +66,12 @@ src/web/           — HTTP + WebSocket server, auth (Argon2id), sessions, login
                      throttle, JSON, embedded SPA
 src/tui/           — ncurses terminal UI
 src/config/        — YAML config loader (libyaml)
-src/main.cpp       — CLI, serve loop, HTTP routes, reload, shutdown
+src/daemon/        — the daemon: serve.cpp (loop, signals, reload, shutdown),
+                     router.cpp (HTTP routes behind RouterDeps, testable without
+                     a socket), collect.cpp (C collectors → Sample)
+src/cli/           — the one-shot commands: hash-password, suggest-rules,
+                     watch-files, tui
+src/main.cpp       — dispatch only
 tests/unit/        — one assert()-based executable per module (ctest)
 tests/smoke/       — serve.sh (HTTP, WS, SIGHUP, fd check) and crash.sh (SIGKILL + restart)
 addons/            — FreeBSD port + rc.d, systemd unit, Docker
