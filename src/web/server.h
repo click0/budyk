@@ -12,7 +12,8 @@ namespace budyk {
 
 // Embedded HTTP/1.1 server (spec §3.7). Sequential accept-handle-close
 // per connection, single I/O thread; suitable for the single-admin
-// monitoring use case. The thread is owned by the server — start()
+// monitoring use case. Every connection is bounded by io_timeout_ms()
+// so a client that stalls cannot hold the thread. The thread is owned by the server — start()
 // returns once the listening socket is bound, stop() joins.
 //
 // Routing is a flat std::function dispatcher set by the caller before
@@ -69,9 +70,19 @@ public:
     // Real bound port (useful when start was called with port == 0).
     int  bound_port() const;
 
+    // How long one request may take to arrive (headers and body) and
+    // how long a send may wait on the client, in milliseconds; default
+    // 5000. A connection that is still sending its request when the
+    // budget runs out is closed without a response, so one client that
+    // opens a connection and goes quiet holds the single I/O thread for
+    // at most this long, not forever. Set before start().
+    void set_io_timeout_ms(int ms);
+    int  io_timeout_ms() const;
+
 private:
     int                    listen_fd_   = -1;
     int                    bound_port_  = 0;
+    int                    io_timeout_ms_ = 5000;
     std::thread            loop_;
     std::atomic<bool>      running_{false};
     HttpHandler            handler_;

@@ -1176,7 +1176,11 @@ int cmd_serve(int argc, char* argv[]) {
 
         // Clients that hold the level at L3: every open WebSocket (the
         // dashboard) plus one for a recent /api/samples poller (the TUI).
+        // service() first: it answers pings and drops clients that have
+        // closed or stopped reading, so a vanished dashboard releases
+        // L3 on this tick rather than when a send finally fails.
         {
+            ws.service();
             int clients = static_cast<int>(ws.size());
             const uint64_t last_poll = g_last_poll_ns.load();
             if (last_poll != 0 && s.timestamp_nanos >= last_poll &&
@@ -1218,8 +1222,9 @@ int cmd_serve(int argc, char* argv[]) {
         }
 
         // Push the freshly-collected sample to every connected WS client.
-        // Failed sends are evicted by the hub itself.
-        ws.broadcast(budyk::samples_to_json(&s, 1));
+        // Failed sends are evicted by the hub itself. Nothing to build
+        // when nobody is connected, which is the usual state at L1.
+        if (ws.size() > 0) ws.broadcast(budyk::samples_to_json(&s, 1));
 
         // Re-select after the rules ran, so an escalate() takes effect for
         // this sleep, not only from the next tick. The sample's own level

@@ -4,11 +4,13 @@
 #include "web/ws_hub.h"
 
 #include <cassert>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <string>
 
+#include <sys/socket.h>
 #include <unistd.h>
 
 using namespace budyk;
@@ -162,6 +164,157 @@ int main() {
         // Write ends are still ours; close them.
         ::close(sp1[1]);
         ::close(sp2[1]);
+    }
+
+    // A client-to-server frame: FIN=1, the opcode, MASK=1, length in
+    // the 7/16-bit forms, a fixed mask key, masked payload (RFC 6455
+    // §5.2-5.3). What a browser sends.
+    auto masked = [](uint8_t opcode, const std::string& payload) {
+        std::string f;
+        f.push_back(static_cast<char>(0x80 | opcode));
+        if (payload.size() < 126) {
+            f.push_back(static_cast<char>(0x80 | payload.size()));
+        } else {
+            f.push_back(static_cast<char>(0x80 | 126));
+            f.push_back(static_cast<char>((payload.size() >> 8) & 0xFF));
+            f.push_back(static_cast<char>(payload.size() & 0xFF));
+        }
+        const char key[4] = {0x12, 0x34, 0x56, 0x78};
+        f.append(key, 4);
+        for (size_t i = 0; i < payload.size(); ++i) {
+            f.push_back(static_cast<char>(payload[i] ^ key[i % 4]));
+        }
+        return f;
+    };
+    // Read what the hub sent to the peer end, non-blocking.
+    auto drain = [](int fd) {
+        std::string out;
+        char buf[4096];
+        for (;;) {
+            const ssize_t n = ::recv(fd, buf, sizeof(buf), MSG_DONTWAIT);
+            if (n <= 0) break;
+            out.append(buf, static_cast<size_t>(n));
+        }
+        return out;
+    };
+    auto pair = [](int* hub_end, int* peer) {
+        int sp[2];
+        assert(::socketpair(AF_UNIX, SOCK_STREAM, 0, sp) == 0);
+        *hub_end = sp[0];
+        *peer    = sp[1];
+    };
+
+    // 8. service(): a ping gets a pong with the same payload; a 300-byte
+    //    text frame (16-bit length) is skipped; a close frame is
+    //    answered with a close echoing the status code, and the client
+    //    is dropped; a peer that just hangs up is dropped too.
+    {
+        WebSocketHub hub;
+        int a, a_peer, b, b_peer;
+        pair(&a, &a_peer);
+        pair(&b, &b_peer);
+        hub.add(a);
+        hub.add(b);
+        assert(hub.size() == 2);
+        assert(hub.service() == 0);                 // idle clients stay
+
+        const std::string ping = masked(0x9, "hello");
+        assert(::send(a_peer, ping.data(), ping.size(), 0) == static_cast<ssize_t>(ping.size()));
+        assert(hub.service() == 0);
+        assert(drain(a_peer) == std::string("\x8A\x05hello", 7));   // pong, unmasked
+
+        const std::string text = masked(0x1, std::string(300, 'x'));
+        assert(::send(a_peer, text.data(), text.size(), 0) == static_cast<ssize_t>(text.size()));
+        assert(hub.service() == 0);
+        assert(drain(a_peer).empty());              // data frames get no answer
+        assert(::send(a_peer, ping.data(), ping.size(), 0) > 0);
+        assert(hub.service() == 0);
+        assert(drain(a_peer).size() == 7);          // framing still in sync
+
+        const std::string close = masked(0x8, std::string("\x03\xE8", 2));   // 1000 normal
+        assert(::send(a_peer, close.data(), close.size(), 0) > 0);
+        assert(hub.service() == 1);
+        assert(hub.size() == 1);
+        const std::string reply = drain(a_peer);
+        assert(reply.compare(0, 4, std::string("\x88\x02\x03\xE8", 4)) == 0);
+        char one;
+        assert(::recv(a_peer, &one, 1, 0) == 0);    // hub closed its end
+
+        ::close(b_peer);                            // peer hangs up
+        assert(hub.service() == 1);
+        assert(hub.size() == 0);
+        ::close(a_peer);
+    }
+
+    // 9. A frame split across two reads is handled once complete; bytes
+    //    that are not a frame (unmasked, or RSV bits set) drop the
+    //    client.
+    {
+        WebSocketHub hub;
+        int a, a_peer, b, b_peer;
+        pair(&a, &a_peer);
+        pair(&b, &b_peer);
+        hub.add(a);
+        hub.add(b);
+
+        const std::string ping = masked(0x9, "split");
+        assert(::send(a_peer, ping.data(), 3, 0) == 3);          // header + part of key
+        assert(hub.service() == 0);
+        assert(drain(a_peer).empty());
+        assert(::send(a_peer, ping.data() + 3, ping.size() - 3, 0) > 0);
+        assert(hub.service() == 0);
+        assert(drain(a_peer) == std::string("\x8A\x05split", 7));
+
+        assert(::send(b_peer, "GET / HTTP/1.1\r\n", 16, 0) == 16);   // not a frame
+        assert(hub.service() == 1);
+        assert(hub.size() == 1);
+        ::close(a_peer);
+        ::close(b_peer);
+    }
+
+    // 10. A client that stops reading is dropped by broadcast() instead
+    //     of stalling it: once its socket buffer is full the send would
+    //     block, and the hub does not wait. The other client still gets
+    //     every frame.
+    {
+        WebSocketHub hub;
+        int slow, slow_peer, fast, fast_peer;
+        pair(&slow, &slow_peer);
+        pair(&fast, &fast_peer);
+        // A frame must fit the socket buffer, or even a client that
+        // keeps up is dropped on the first partial write: FreeBSD's
+        // unix-socket buffer is 8 KiB by default, Linux's about 200 KiB.
+        // Pin the buffer and keep frames small so the slow peer fills
+        // up after a bounded number of frames on either.
+        const int sndbuf = 16 * 1024;
+        assert(::setsockopt(slow, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf)) == 0);
+        assert(::setsockopt(fast, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf)) == 0);
+        hub.add(slow);
+        hub.add(fast);
+
+        const std::string payload(1024, 'p');
+        int frames = 0;
+        const auto t0 = std::chrono::steady_clock::now();
+        while (hub.size() == 2 && frames < 10000) {
+            hub.broadcast(payload);
+            ++frames;
+            drain(fast_peer);                       // the fast client keeps up
+        }
+        const double secs = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - t0).count();
+        assert(hub.size() == 1);                    // slow one gone, fast one kept
+        assert(frames < 10000);
+        assert(secs < 2.0);                         // no blocking on the slow peer
+        char one;
+        // The hub's end of the slow pair is closed; the peer sees EOF
+        // once it drains what was buffered.
+        drain(slow_peer);
+        assert(::recv(slow_peer, &one, 1, MSG_DONTWAIT) == 0);
+
+        hub.broadcast("still here");
+        assert(drain(fast_peer) == std::string("\x81\x0Astill here", 12));
+        ::close(slow_peer);
+        ::close(fast_peer);
     }
 
     std::printf("test_ws: PASS\n");
