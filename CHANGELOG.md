@@ -26,6 +26,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the login flow with the throttle and the cookie, logout, the poller
   wake-up, `/api/levels`, `/api/range` parameters and the level/tier
   precedence, and the WebSocket upgrade paths.
+- **One copy of each helper.** JSON escaping existed three times (alert
+  payloads, LLM client, TUI login body) and unescaping twice; the
+  little-endian field accessors three times (sample codec, record
+  framing, ring header); `ieq`/`icontains` twice (HTTP server, WebSocket
+  hub); the private temp-file writer twice (alerts, LLM), both ignoring
+  `TMPDIR`; the libyaml DOM lookups twice (config loader, YAML rules
+  transpiler); the realtime clock twice; the netrc builder twice inside
+  `alert.cpp`; the query-string scan twice. They are now
+  `core/json_text` (`json_escape`/`json_unescape`), `core/endian.h`,
+  `ascii_ieq`/`ascii_icontains` in `web/http_util`, `util/tmpfile`
+  (`write_private_tmp`, which honours `TMPDIR` and is 0600 from
+  `mkstemp`), `util/yaml_dom`, `core/clock.h`, and one `netrc_for()`
+  and one `query_find()`. The TUI's login body now escapes `\b` and `\f`
+  by name instead of `\u0008`/`\u000c`, which decodes the same. Tests:
+  `test_json` covers `json_escape` and a round trip, `test_codec` the
+  byte layout of the endian helpers, `test_http_util` the
+  case-insensitive compare, and the new `test_util` the temp file
+  (`TMPDIR`, mode, failure paths) and the YAML lookups.
 - **`-DBUDYK_PLATFORM` is checked, not ignored.** `cmake/platform.cmake`
   always set the platform from the host and silently shadowed the flag
   the docs and CI pass. The platform is still detected from the host

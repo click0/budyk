@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #include "rules/yaml_compat.h"
+#include "util/yaml_dom.h"
 
 extern "C" {
 #include <yaml.h>
@@ -13,27 +14,6 @@ extern "C" {
 namespace budyk {
 
 namespace {
-
-// --- libyaml DOM helpers (mirrors the pattern in src/config/config.cpp) ---
-
-const char* scalar_str(const yaml_node_t* n) {
-    if (n == nullptr || n->type != YAML_SCALAR_NODE) return nullptr;
-    return reinterpret_cast<const char*>(n->data.scalar.value);
-}
-
-const yaml_node_t* find_key(yaml_document_t* doc,
-                            const yaml_node_t* map, const char* key) {
-    if (map == nullptr || map->type != YAML_MAPPING_NODE) return nullptr;
-    for (auto* pair = map->data.mapping.pairs.start;
-         pair     != map->data.mapping.pairs.top; ++pair) {
-        const yaml_node_t* k = yaml_document_get_node(doc, pair->key);
-        const char* ks = scalar_str(k);
-        if (ks != nullptr && std::strcmp(ks, key) == 0) {
-            return yaml_document_get_node(doc, pair->value);
-        }
-    }
-    return nullptr;
-}
 
 // Escape a string for inclusion in a Lua "..."-quoted literal.
 std::string lua_escape(const char* s) {
@@ -71,8 +51,8 @@ int transpile_rule(yaml_document_t* doc, const yaml_node_t* item,
                    std::string* out) {
     if (item == nullptr || item->type != YAML_MAPPING_NODE) return -EINVAL;
 
-    const char* name = scalar_str(find_key(doc, item, "name"));
-    const char* when = scalar_str(find_key(doc, item, "when"));
+    const char* name = yaml_scalar(yaml_find_key(doc, item, "name"));
+    const char* when = yaml_scalar(yaml_find_key(doc, item, "when"));
     if (name == nullptr || name[0] == '\0') return -EINVAL;
     if (when == nullptr || when[0] == '\0') return -EINVAL;
 
@@ -83,11 +63,11 @@ int transpile_rule(yaml_document_t* doc, const yaml_node_t* item,
         if (*p == '\n' || *p == '\r') return -EINVAL;
     }
 
-    const char* for_ticks = scalar_str(find_key(doc, item, "for_ticks"));
-    const char* cooldown  = scalar_str(find_key(doc, item, "cooldown"));
-    const char* severity  = scalar_str(find_key(doc, item, "severity"));
-    const char* action    = scalar_str(find_key(doc, item, "action"));
-    const char* message   = scalar_str(find_key(doc, item, "message"));
+    const char* for_ticks = yaml_scalar(yaml_find_key(doc, item, "for_ticks"));
+    const char* cooldown  = yaml_scalar(yaml_find_key(doc, item, "cooldown"));
+    const char* severity  = yaml_scalar(yaml_find_key(doc, item, "severity"));
+    const char* action    = yaml_scalar(yaml_find_key(doc, item, "action"));
+    const char* message   = yaml_scalar(yaml_find_key(doc, item, "message"));
 
     if (severity == nullptr || !valid_severity(severity)) severity = "warning";
     if (action   == nullptr)                              action   = "alert";
@@ -177,7 +157,7 @@ int yaml_rules_to_lua(const char* yaml_text, std::string* out) {
     } else if (root->type == YAML_SEQUENCE_NODE) {
         rc = walk_sequence(&doc, root, out);
     } else if (root->type == YAML_MAPPING_NODE) {
-        const yaml_node_t* rules = find_key(&doc, root, "rules");
+        const yaml_node_t* rules = yaml_find_key(&doc, root, "rules");
         if (rules == nullptr) {
             rc = -EINVAL;
         } else {

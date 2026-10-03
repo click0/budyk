@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #include "core/codec.h"
+#include "core/endian.h"
 
 #include <cstdint>
 #include <cstring>
@@ -61,30 +62,15 @@ constexpr size_t kEncodedSizeV7 =
       kEncodedSizeV6
     + 4 + 4 + 1 + 7;
 
-inline uint32_t to_le32(uint32_t v) {
-#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-    return __builtin_bswap32(v);
-#else
-    return v;
-#endif
-}
-inline uint64_t to_le64(uint64_t v) {
-#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-    return __builtin_bswap64(v);
-#else
-    return v;
-#endif
-}
-
 inline void put_u8 (uint8_t*& p, uint8_t  v)         { *p++ = v; }
-inline void put_u32(uint8_t*& p, uint32_t v)         { uint32_t le = to_le32(v); std::memcpy(p, &le, 4); p += 4; }
-inline void put_u64(uint8_t*& p, uint64_t v)         { uint64_t le = to_le64(v); std::memcpy(p, &le, 8); p += 8; }
+inline void put_u32(uint8_t*& p, uint32_t v)         { le_put_u32(p, v); p += 4; }
+inline void put_u64(uint8_t*& p, uint64_t v)         { le_put_u64(p, v); p += 8; }
 inline void put_f64(uint8_t*& p, double   v)         { uint64_t u; std::memcpy(&u, &v, 8); put_u64(p, u); }
 inline void put_pad(uint8_t*& p, size_t   n)         { std::memset(p, 0, n); p += n; }
 
 inline uint8_t  get_u8 (const uint8_t*& p)           { return *p++; }
-inline uint32_t get_u32(const uint8_t*& p)           { uint32_t v; std::memcpy(&v, p, 4); p += 4; return to_le32(v); }
-inline uint64_t get_u64(const uint8_t*& p)           { uint64_t v; std::memcpy(&v, p, 8); p += 8; return to_le64(v); }
+inline uint32_t get_u32(const uint8_t*& p)           { const uint32_t v = le_get_u32(p); p += 4; return v; }
+inline uint64_t get_u64(const uint8_t*& p)           { const uint64_t v = le_get_u64(p); p += 8; return v; }
 inline double   get_f64(const uint8_t*& p)           { uint64_t u = get_u64(p); double d; std::memcpy(&d, &u, 8); return d; }
 inline void     skip   (const uint8_t*& p, size_t n) { p += n; }
 

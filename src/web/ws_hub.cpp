@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #include "web/ws_hub.h"
 
+#include "web/http_util.h"
 #include "web/sha1_base64.h"
 
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
-#include <cctype>
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
@@ -17,33 +17,6 @@ namespace budyk {
 namespace {
 
 constexpr const char kWsMagic[] = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-
-bool ieq(const std::string& a, const char* b) {
-    const size_t blen = std::strlen(b);
-    if (a.size() != blen) return false;
-    for (size_t i = 0; i < blen; ++i) {
-        if (std::tolower(static_cast<unsigned char>(a[i])) !=
-            std::tolower(static_cast<unsigned char>(b[i]))) {
-            return false;
-        }
-    }
-    return true;
-}
-
-bool icontains(const std::string& hay, const char* needle) {
-    const size_t nlen = std::strlen(needle);
-    if (nlen == 0) return true;
-    for (size_t i = 0; i + nlen <= hay.size(); ++i) {
-        size_t k = 0;
-        while (k < nlen &&
-               std::tolower(static_cast<unsigned char>(hay[i + k])) ==
-               std::tolower(static_cast<unsigned char>(needle[k]))) {
-            ++k;
-        }
-        if (k == nlen) return true;
-    }
-    return false;
-}
 
 // Write a whole frame to a non-blocking socket. Anything short of the
 // whole frame — EAGAIN, a partial write, an error — returns -1 and the
@@ -131,8 +104,8 @@ std::string ws_handshake_response(const std::string& sec_websocket_key) {
 
 bool is_websocket_upgrade(const HttpRequest& req) {
     if (req.method != "GET")                            return false;
-    if (!ieq(req.header("Upgrade"), "websocket"))       return false;
-    if (!icontains(req.header("Connection"), "upgrade")) return false;
+    if (!ascii_ieq(req.header("Upgrade"), "websocket"))       return false;
+    if (!ascii_icontains(req.header("Connection"), "upgrade")) return false;
     if (req.header("Sec-WebSocket-Version") != "13")    return false;
     if (req.header("Sec-WebSocket-Key").empty())        return false;
     return true;

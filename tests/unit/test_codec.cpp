@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #include "core/codec.h"
+#include "core/endian.h"
 #include "core/sample.h"
 
 #include <cassert>
@@ -369,6 +370,20 @@ int main() {
         // the tail must be present.
         Sample out{};
         assert(sample_decode(buf, len - 1, &out) != 0);
+    }
+
+    // Z. core/endian.h, shared by this codec, the record framing and the
+    //    ring header: fixed little-endian byte layout, unaligned access,
+    //    round trip.
+    {
+        uint8_t buf[13] = {0};
+        le_put_u32(buf + 1, 0x11223344u);
+        assert(buf[1] == 0x44 && buf[2] == 0x33 && buf[3] == 0x22 && buf[4] == 0x11);
+        assert(le_get_u32(buf + 1) == 0x11223344u);
+        le_put_u64(buf + 5, 0x0102030405060708ull);
+        assert(buf[5] == 0x08 && buf[12] == 0x01);
+        assert(le_get_u64(buf + 5) == 0x0102030405060708ull);
+        assert(buf[0] == 0);                       // neighbours untouched
     }
 
     std::printf("test_codec: PASS (%zu bytes/record)\n", enc_size);

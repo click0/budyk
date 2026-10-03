@@ -157,6 +157,11 @@ target_link_libraries(test_file_watcher PRIVATE budyk_security budyk_core)
 target_include_directories(test_file_watcher PRIVATE ${CMAKE_SOURCE_DIR}/src)
 add_test(NAME test_file_watcher COMMAND test_file_watcher)
 
+add_executable(test_util unit/test_util.cpp)
+target_link_libraries(test_util PRIVATE budyk_util budyk_core)
+target_include_directories(test_util PRIVATE ${CMAKE_SOURCE_DIR}/src)
+add_test(NAME test_util COMMAND test_util)
+
 add_executable(test_http_util unit/test_http_util.cpp)
 target_link_libraries(test_http_util PRIVATE budyk_web budyk_core)
 target_include_directories(test_http_util PRIVATE ${CMAKE_SOURCE_DIR}/src)

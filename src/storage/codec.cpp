@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #include "storage/codec.h"
+#include "core/endian.h"
 
 #include "core/codec.h"
 
@@ -12,26 +13,6 @@ namespace {
 // CRC-32C (Castagnoli), polynomial 0x1EDC6F41 reflected = 0x82F63B78.
 // Per-byte software impl — small, portable, no SSE4.2 dependency.
 constexpr uint32_t kCrc32cPolyReflected = 0x82F63B78U;
-
-inline uint32_t to_le32(uint32_t v) {
-#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-    return __builtin_bswap32(v);
-#else
-    return v;
-#endif
-}
-inline uint64_t to_le64(uint64_t v) {
-#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-    return __builtin_bswap64(v);
-#else
-    return v;
-#endif
-}
-
-inline void     put_u64_le(uint8_t* p, uint64_t v) { uint64_t le = to_le64(v); std::memcpy(p, &le, 8); }
-inline uint64_t get_u64_le(const uint8_t* p)       { uint64_t v; std::memcpy(&v, p, 8); return to_le64(v); }
-inline void     put_u32_le(uint8_t* p, uint32_t v) { uint32_t le = to_le32(v); std::memcpy(p, &le, 4); }
-inline uint32_t get_u32_le(const uint8_t* p)       { uint32_t v; std::memcpy(&v, p, 4); return to_le32(v); }
 
 } // namespace
 
@@ -59,7 +40,7 @@ int record_encode(const Sample& s, void* buf, size_t cap, size_t* out_len) {
     auto*    base     = static_cast<uint8_t*>(buf);
     uint8_t* p        = base;
 
-    put_u64_le(p, s.timestamp_nanos); p += 8;
+    le_put_u64(p, s.timestamp_nanos); p += 8;
     *p++ = static_cast<uint8_t>(s.level);
     *p++ = 0;                                       // pad
     uint8_t* crc_slot = p; p += 4;
@@ -71,7 +52,7 @@ int record_encode(const Sample& s, void* buf, size_t cap, size_t* out_len) {
 
     uint32_t c = crc32c(base, 10);          // ts + level + pad
     c          = crc32c(p,   enc_len, c);   // payload
-    put_u32_le(crc_slot, c);
+    le_put_u32(crc_slot, c);
 
     *out_len = total;
     return 0;
@@ -83,7 +64,7 @@ int record_decode(const void* buf, size_t len, Sample* out) {
     if (len < total)                       return -2;
 
     const auto* base   = static_cast<const uint8_t*>(buf);
-    uint32_t    stored = get_u32_le(base + 10);
+    uint32_t    stored = le_get_u32(base + 10);
 
     uint32_t c = crc32c(base, 10);
     c          = crc32c(base + kRecordHeaderSize, sample_max_encoded_size(), c);
@@ -93,7 +74,7 @@ int record_decode(const void* buf, size_t len, Sample* out) {
                       len - kRecordHeaderSize, out) != 0) return -4;
 
     // Record framing is the source of truth for ts / level.
-    out->timestamp_nanos = get_u64_le(base);
+    out->timestamp_nanos = le_get_u64(base);
     uint8_t lv = base[8];
     if (lv < 1 || lv > kMaxLevelId)                  return -5;
     out->level = static_cast<Level>(lv);
