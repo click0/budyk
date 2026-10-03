@@ -7,6 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.4] — 2026-10-03
+
+A maintenance release, the rest of the code review after 0.6.3. Two
+security items: failed logins are throttled per client address (HTTP
+429 with `Retry-After`, no password hash computed for a blocked
+attempt), and alert channel URLs — a Telegram bot token, a Discord
+webhook — no longer appear in `ps` while curl runs. Start-up failures
+now say what went wrong: "tier1.ring: open failed: No such file or
+directory", "bind: Address already in use", "connect: Connection
+refused", instead of a code. Under the hood, `main.cpp` is split into
+`daemon/`, `cli/` and `web/http_util`, so every HTTP route now has a
+unit test, and each helper that existed in two or three copies exists
+once. `-DBUDYK_PLATFORM` is checked rather than ignored. No change to
+configuration, the on-disk format or the API.
+
+### Security
+
+- **Failed logins are throttled.** `/api/auth/login` ran a 64 MiB
+  Argon2id verification for every attempt with no limit, which made it
+  both a brute-force channel and a cheap way to keep the single HTTP
+  thread busy. After `web.auth.max_login_failures` failures (default
+  5) from one client address within `web.auth.login_window` seconds
+  (default 60), further attempts from that address get HTTP 429 with a
+  `Retry-After` header until the window ends, and no hash is computed
+  for them; a global window (50 failures) covers many addresses taking
+  turns. A successful login clears the address. The first refusal is
+  logged with the address. The dashboard shows "Too many attempts, try
+  again in N s" and `budyk tui` says so instead of "wrong password?".
+  `HttpRequest` now carries the client address (`peer`).
+- **Alert channel secrets stay out of `ps`.** The Telegram bot token
+  sits in the Bot API URL, and a Discord webhook URL is itself the
+  credential; both were passed to curl as `--url` on the command line,
+  readable by every local user through `ps(1)` for the duration of the
+  request. Every curl run now takes its URL from a `-K` config file
+  created with mode 0600 and unlinked when curl exits, the same way
+  SMTP and Twilio credentials already travelled in a `--netrc-file`.
+  Quotes, backslashes and control characters in the URL are escaped
+  per curl's config syntax, so the URL is one value whatever it
+  contains. A test runs a stand-in `curl` that records its argv and
+  the files it is given: no secret or URL in argv, all of them in 0600
+  files.
+
+### Fixed
+
+- **Start-up failures say what went wrong.** A missing or unwritable
+  `data_dir` was reported as "a ring file may not match its configured
+  size"; a port already in use as "HttpServer.start failed"; an
+  unreadable config as "failed to load config"; the TUI printed
+  "rc=-3". The modules that return small negative codes now keep the
+  reason next to the code — `RingFile::describe()` and `last_errno()`,
+  `TierManager::last_error()` (which ring, why, and the storage_mb hint
+  only when the size really differs), `HttpServer::describe()` and
+  `last_errno()`, `config_load(..., &error)` — and every message
+  includes it: "tier1.ring: open failed: No such file or directory",
+  "bind: Address already in use", "connect: Connection refused". The
+  file-watcher messages print `strerror` instead of a number.
+
 ### Changed
 
 - **`main.cpp` is split up; the HTTP routes have unit tests.** The
@@ -59,48 +116,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   practised, the release procedure, and the known gaps against the
   spec. Removed the unused `src/web/static/index.html` stub and the
   stale "link mongoose" TODO.
-
-### Fixed
-
-- **Start-up failures say what went wrong.** A missing or unwritable
-  `data_dir` was reported as "a ring file may not match its configured
-  size"; a port already in use as "HttpServer.start failed"; an
-  unreadable config as "failed to load config"; the TUI printed
-  "rc=-3". The modules that return small negative codes now keep the
-  reason next to the code — `RingFile::describe()` and `last_errno()`,
-  `TierManager::last_error()` (which ring, why, and the storage_mb hint
-  only when the size really differs), `HttpServer::describe()` and
-  `last_errno()`, `config_load(..., &error)` — and every message
-  includes it: "tier1.ring: open failed: No such file or directory",
-  "bind: Address already in use", "connect: Connection refused". The
-  file-watcher messages print `strerror` instead of a number.
-
-### Security
-
-- **Failed logins are throttled.** `/api/auth/login` ran a 64 MiB
-  Argon2id verification for every attempt with no limit, which made it
-  both a brute-force channel and a cheap way to keep the single HTTP
-  thread busy. After `web.auth.max_login_failures` failures (default
-  5) from one client address within `web.auth.login_window` seconds
-  (default 60), further attempts from that address get HTTP 429 with a
-  `Retry-After` header until the window ends, and no hash is computed
-  for them; a global window (50 failures) covers many addresses taking
-  turns. A successful login clears the address. The first refusal is
-  logged with the address. The dashboard shows "Too many attempts, try
-  again in N s" and `budyk tui` says so instead of "wrong password?".
-  `HttpRequest` now carries the client address (`peer`).
-- **Alert channel secrets stay out of `ps`.** The Telegram bot token
-  sits in the Bot API URL, and a Discord webhook URL is itself the
-  credential; both were passed to curl as `--url` on the command line,
-  readable by every local user through `ps(1)` for the duration of the
-  request. Every curl run now takes its URL from a `-K` config file
-  created with mode 0600 and unlinked when curl exits, the same way
-  SMTP and Twilio credentials already travelled in a `--netrc-file`.
-  Quotes, backslashes and control characters in the URL are escaped
-  per curl's config syntax, so the URL is one value whatever it
-  contains. A test runs a stand-in `curl` that records its argv and
-  the files it is given: no secret or URL in argv, all of them in 0600
-  files.
 
 ## [0.6.3] — 2026-10-03
 
@@ -287,6 +302,7 @@ it turned up two untested storage paths, which are now covered.
   opened, and init with the original size works again. tier_manager.cpp
   coverage went from 84.3% to 94.4%.
 
+[0.6.4]: https://github.com/click0/budyk/releases/tag/v0.6.4
 [0.6.3]: https://github.com/click0/budyk/releases/tag/v0.6.3
 [0.6.2]: https://github.com/click0/budyk/releases/tag/v0.6.2
 
