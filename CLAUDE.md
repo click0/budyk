@@ -52,7 +52,9 @@ There is no event-loop library (no libuv, kqueue or epoll). The daemon is:
 ## Directory structure
 
 ```
-src/core/          — Sample struct, codec (C++, no I/O)
+src/core/          — Sample struct, codec, json_text, endian.h, clock.h (C++, no I/O)
+src/util/          — shared helpers that need I/O or a library: private temp
+                     files (tmpfile), libyaml DOM lookups (yaml_dom)
 src/collector/     — platform metric collection (plain C)
   freebsd/         — sysctl, devstat, kvm, getifaddrs
   linux/           — /proc, /sys parsers

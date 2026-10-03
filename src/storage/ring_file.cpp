@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #include "storage/ring_file.h"
+#include "core/endian.h"
 
 #include <cerrno>
 #include <cstring>
@@ -25,26 +26,6 @@ constexpr size_t   kHeaderSize      = 64;
 constexpr uint32_t kFormatVersion   = 1;
 constexpr char     kMagicBytes[8]   = {'B', 'D', 'Y', 'K', 'R', 'B', '\0', '\x01'};
 constexpr size_t   kWriteIdxOffset  = 28;
-
-inline uint32_t to_le32(uint32_t v) {
-#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-    return __builtin_bswap32(v);
-#else
-    return v;
-#endif
-}
-inline uint64_t to_le64(uint64_t v) {
-#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-    return __builtin_bswap64(v);
-#else
-    return v;
-#endif
-}
-
-inline void put_u32(uint8_t* p, uint32_t v) { uint32_t le = to_le32(v); std::memcpy(p, &le, 4); }
-inline void put_u64(uint8_t* p, uint64_t v) { uint64_t le = to_le64(v); std::memcpy(p, &le, 8); }
-inline uint32_t get_u32(const uint8_t* p)   { uint32_t v; std::memcpy(&v, p, 4); return to_le32(v); }
-inline uint64_t get_u64(const uint8_t* p)   { uint64_t v; std::memcpy(&v, p, 8); return to_le64(v); }
 
 } // namespace
 
@@ -80,17 +61,17 @@ int RingFile::open(const char* path, uint8_t tier, uint32_t record_size, uint64_
     if (fresh) {
         std::memset(h, 0, kHeaderSize);
         std::memcpy(h, kMagicBytes, 8);
-        put_u32(h + 8,  kFormatVersion);
+        le_put_u32(h + 8,  kFormatVersion);
         h[12] = tier;
-        put_u32(h + 16, record_size);
-        put_u64(h + 20, capacity);
-        put_u64(h + kWriteIdxOffset, 0);
+        le_put_u32(h + 16, record_size);
+        le_put_u64(h + 20, capacity);
+        le_put_u64(h + kWriteIdxOffset, 0);
     } else {
         if (std::memcmp(h, kMagicBytes, 8) != 0) { ::munmap(m, kHeaderSize); ::close(fd); return -8; }
-        if (get_u32(h + 8)   != kFormatVersion)  { ::munmap(m, kHeaderSize); ::close(fd); return -9; }
+        if (le_get_u32(h + 8)   != kFormatVersion)  { ::munmap(m, kHeaderSize); ::close(fd); return -9; }
         if (h[12]            != tier)            { ::munmap(m, kHeaderSize); ::close(fd); return -10; }
-        if (get_u32(h + 16)  != record_size)     { ::munmap(m, kHeaderSize); ::close(fd); return -11; }
-        if (get_u64(h + 20)  != capacity)        { ::munmap(m, kHeaderSize); ::close(fd); return -12; }
+        if (le_get_u32(h + 16)  != record_size)     { ::munmap(m, kHeaderSize); ::close(fd); return -11; }
+        if (le_get_u64(h + 20)  != capacity)        { ::munmap(m, kHeaderSize); ::close(fd); return -12; }
     }
 
     fd_          = fd;

@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #include "rules/alert.h"
 #include "rules/exec_action.h"
+#include "core/json_text.h"
+#include "util/tmpfile.h"
 
 #include <strings.h>
-#include <sys/stat.h>
 #include <unistd.h>
 
 #include <atomic>
@@ -19,34 +20,6 @@
 namespace budyk {
 
 namespace {
-
-// JSON-escape helper. Same minimal implementation as ai/llm_client —
-// duplicated here so alert isn't pulled into budyk_ai's dep graph.
-std::string json_escape(const std::string& s) {
-    std::string out;
-    out.reserve(s.size() + 8);
-    for (char c : s) {
-        switch (c) {
-            case '"':  out += "\\\""; break;
-            case '\\': out += "\\\\"; break;
-            case '\b': out += "\\b";  break;
-            case '\f': out += "\\f";  break;
-            case '\n': out += "\\n";  break;
-            case '\r': out += "\\r";  break;
-            case '\t': out += "\\t";  break;
-            default:
-                if (static_cast<unsigned char>(c) < 0x20) {
-                    char buf[8];
-                    std::snprintf(buf, sizeof(buf), "\\u%04x",
-                                  static_cast<unsigned char>(c));
-                    out += buf;
-                } else {
-                    out += c;
-                }
-        }
-    }
-    return out;
-}
 
 // RFC 3986 unreserved URL-encode. Used for x-www-form-urlencoded
 // bodies (Twilio). Keeps A-Za-z0-9-._~ verbatim; everything else is
@@ -73,14 +46,31 @@ std::string url_encode(const std::string& s) {
     return out;
 }
 
+// Temp files for curl: bodies, header files, the -K url config and
+// netrc. Private (0600) and unlinked once curl exits.
 bool write_tmp(const std::string& body, char* path_out, size_t cap) {
-    if (cap < 32) return false;
-    std::snprintf(path_out, cap, "%s", "/tmp/budyk_alert_XXXXXX");
-    int fd = ::mkstemp(path_out);
-    if (fd < 0) return false;
-    const ssize_t n = ::write(fd, body.data(), body.size());
-    ::close(fd);
-    return n == static_cast<ssize_t>(body.size());
+    return write_private_tmp("budyk_alert_", body, path_out, cap);
+}
+
+// "machine <host> login <user> password <pass>\n" for --netrc-file,
+// with the host taken from the URL. False when the URL has no host or
+// user_pass has no ':'.
+bool netrc_for(const char* url, const std::string& user_pass, std::string* out) {
+    const char* p = std::strstr(url, "://");
+    if (p == nullptr) return false;
+    p += 3;
+    const char* end = p;
+    while (*end != '\0' && *end != '/' && *end != ':') ++end;
+    const auto colon = user_pass.find(':');
+    if (colon == std::string::npos) return false;
+    *out  = "machine ";
+    out->append(p, end);
+    *out += " login ";
+    *out += user_pass.substr(0, colon);
+    *out += " password ";
+    *out += user_pass.substr(colon + 1);
+    *out += "\n";
+    return true;
 }
 
 // A curl config file (-K) holding the URL, so it never appears in
@@ -195,32 +185,14 @@ int curl_basic_form_post(const char* url,
     char body_path[64];
     if (!write_tmp(form_body, body_path, sizeof(body_path))) return -1;
 
-    // netrc: "machine <host> login <u> password <p>" — curl --netrc-file
-    // matches by host, so we extract it from the URL.
-    std::string host;
-    {
-        const char* p = std::strstr(url, "://");
-        if (p == nullptr) { ::unlink(body_path); return -2; }
-        p += 3;
-        const char* end = p;
-        while (*end != '\0' && *end != '/' && *end != ':') ++end;
-        host.assign(p, end);
-    }
-    const auto colon = user_pass.find(':');
-    if (colon == std::string::npos) { ::unlink(body_path); return -2; }
-    std::string netrc_blob = "machine ";
-    netrc_blob += host;
-    netrc_blob += " login ";
-    netrc_blob += user_pass.substr(0, colon);
-    netrc_blob += " password ";
-    netrc_blob += user_pass.substr(colon + 1);
-    netrc_blob += "\n";
+    // netrc: curl --netrc-file matches by host, taken from the URL.
+    std::string netrc_blob;
+    if (!netrc_for(url, user_pass, &netrc_blob)) { ::unlink(body_path); return -2; }
     char netrc_path[64];
     if (!write_tmp(netrc_blob, netrc_path, sizeof(netrc_path))) {
         ::unlink(body_path);
         return -3;
     }
-    ::chmod(netrc_path, 0600);
     char url_path[64];
     if (!write_url_config(url, url_path, sizeof(url_path))) {
         ::unlink(body_path);
@@ -255,28 +227,12 @@ int curl_smtp(const char* url,
 
     char netrc_path[64] = {0};
     if (!user_pass.empty()) {
-        const auto colon = user_pass.find(':');
-        if (colon == std::string::npos) { ::unlink(body_path); return -2; }
-        // Extract host from URL (smtp://host:port or smtps://host:port)
-        std::string host;
-        const char* p = std::strstr(url, "://");
-        if (p == nullptr) { ::unlink(body_path); return -3; }
-        p += 3;
-        const char* end = p;
-        while (*end != '\0' && *end != '/' && *end != ':') ++end;
-        host.assign(p, end);
-        std::string netrc_blob = "machine ";
-        netrc_blob += host;
-        netrc_blob += " login ";
-        netrc_blob += user_pass.substr(0, colon);
-        netrc_blob += " password ";
-        netrc_blob += user_pass.substr(colon + 1);
-        netrc_blob += "\n";
+        std::string netrc_blob;
+        if (!netrc_for(url, user_pass, &netrc_blob)) { ::unlink(body_path); return -2; }
         if (!write_tmp(netrc_blob, netrc_path, sizeof(netrc_path))) {
             ::unlink(body_path);
             return -4;
         }
-        ::chmod(netrc_path, 0600);
     }
 
     std::vector<std::string> args = {"-sS"};

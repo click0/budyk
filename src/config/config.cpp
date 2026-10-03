@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #include "config/config.h"
+#include "util/yaml_dom.h"
 
 extern "C" {
 #include <yaml.h>
@@ -17,36 +18,16 @@ namespace budyk {
 
 namespace {
 
-// --- YAML DOM helpers -------------------------------------------------------
-
-const yaml_node_t* find_key(yaml_document_t* doc, const yaml_node_t* map, const char* key) {
-    if (map == nullptr || map->type != YAML_MAPPING_NODE) return nullptr;
-    for (auto* pair = map->data.mapping.pairs.start;
-         pair     != map->data.mapping.pairs.top; ++pair) {
-        yaml_node_t* k = yaml_document_get_node(doc, pair->key);
-        if (k == nullptr || k->type != YAML_SCALAR_NODE) continue;
-        if (std::strcmp(reinterpret_cast<const char*>(k->data.scalar.value), key) == 0) {
-            return yaml_document_get_node(doc, pair->value);
-        }
-    }
-    return nullptr;
-}
-
-const char* scalar_str(const yaml_node_t* n) {
-    if (n == nullptr || n->type != YAML_SCALAR_NODE) return nullptr;
-    return reinterpret_cast<const char*>(n->data.scalar.value);
-}
-
 void apply_str(yaml_document_t* d, const yaml_node_t* m, const char* key,
                char* dst, size_t dst_cap) {
-    const char* v = scalar_str(find_key(d, m, key));
+    const char* v = yaml_scalar(yaml_find_key(d, m, key));
     if (v == nullptr) return;
     std::strncpy(dst, v, dst_cap - 1);
     dst[dst_cap - 1] = '\0';
 }
 
 void apply_int(yaml_document_t* d, const yaml_node_t* m, const char* key, int* dst) {
-    const char* v = scalar_str(find_key(d, m, key));
+    const char* v = yaml_scalar(yaml_find_key(d, m, key));
     if (v == nullptr) return;
     char* end = nullptr;
     long n = std::strtol(v, &end, 10);
@@ -54,7 +35,7 @@ void apply_int(yaml_document_t* d, const yaml_node_t* m, const char* key, int* d
 }
 
 void apply_double(yaml_document_t* d, const yaml_node_t* m, const char* key, double* dst) {
-    const char* v = scalar_str(find_key(d, m, key));
+    const char* v = yaml_scalar(yaml_find_key(d, m, key));
     if (v == nullptr) return;
     char* end = nullptr;
     double x = std::strtod(v, &end);
@@ -62,7 +43,7 @@ void apply_double(yaml_document_t* d, const yaml_node_t* m, const char* key, dou
 }
 
 void apply_bool(yaml_document_t* d, const yaml_node_t* m, const char* key, bool* dst) {
-    const char* v = scalar_str(find_key(d, m, key));
+    const char* v = yaml_scalar(yaml_find_key(d, m, key));
     if (v == nullptr) return;
     if (std::strcmp(v, "true") == 0 || std::strcmp(v, "yes") == 0 || std::strcmp(v, "on") == 0)
         *dst = true;
@@ -75,13 +56,13 @@ void apply_bool(yaml_document_t* d, const yaml_node_t* m, const char* key, bool*
 // — useful for admins explicitly resetting an inherited allowlist.
 void apply_str_list(yaml_document_t* d, const yaml_node_t* m, const char* key,
                     std::vector<std::string>* dst) {
-    const yaml_node_t* seq = find_key(d, m, key);
+    const yaml_node_t* seq = yaml_find_key(d, m, key);
     if (seq == nullptr || seq->type != YAML_SEQUENCE_NODE) return;
     dst->clear();
     for (auto* item = seq->data.sequence.items.start;
          item     != seq->data.sequence.items.top; ++item) {
         const yaml_node_t* n = yaml_document_get_node(d, *item);
-        const char* s = scalar_str(n);
+        const char* s = yaml_scalar(n);
         if (s != nullptr) dst->emplace_back(s);
     }
 }
@@ -91,7 +72,7 @@ void apply_str_list(yaml_document_t* d, const yaml_node_t* m, const char* key,
 // scalar fields. A missing or non-sequence node leaves dst untouched.
 void apply_alert_channels(yaml_document_t* d, const yaml_node_t* m,
                           std::vector<Config::AlertChannelConfig>* dst) {
-    const yaml_node_t* seq = find_key(d, m, "channels");
+    const yaml_node_t* seq = yaml_find_key(d, m, "channels");
     if (seq == nullptr || seq->type != YAML_SEQUENCE_NODE) return;
     dst->clear();
     for (auto* item = seq->data.sequence.items.start;
@@ -100,12 +81,12 @@ void apply_alert_channels(yaml_document_t* d, const yaml_node_t* m,
         if (n == nullptr || n->type != YAML_MAPPING_NODE) continue;
         Config::AlertChannelConfig ch;
         const char* v = nullptr;
-        if ((v = scalar_str(find_key(d, n, "name")))  != nullptr) ch.name  = v;
-        if ((v = scalar_str(find_key(d, n, "type")))  != nullptr) ch.type  = v;
-        if ((v = scalar_str(find_key(d, n, "url")))   != nullptr) ch.url   = v;
-        if ((v = scalar_str(find_key(d, n, "topic"))) != nullptr) ch.topic = v;
-        if ((v = scalar_str(find_key(d, n, "token"))) != nullptr) ch.token = v;
-        if ((v = scalar_str(find_key(d, n, "from")))  != nullptr) ch.from  = v;
+        if ((v = yaml_scalar(yaml_find_key(d, n, "name")))  != nullptr) ch.name  = v;
+        if ((v = yaml_scalar(yaml_find_key(d, n, "type")))  != nullptr) ch.type  = v;
+        if ((v = yaml_scalar(yaml_find_key(d, n, "url")))   != nullptr) ch.url   = v;
+        if ((v = yaml_scalar(yaml_find_key(d, n, "topic"))) != nullptr) ch.topic = v;
+        if ((v = yaml_scalar(yaml_find_key(d, n, "token"))) != nullptr) ch.token = v;
+        if ((v = yaml_scalar(yaml_find_key(d, n, "from")))  != nullptr) ch.from  = v;
         // A channel with no type is meaningless — silently drop it
         // rather than register a no-op that confuses operators.
         if (ch.type.empty()) continue;
@@ -149,7 +130,7 @@ bool valid_level_name(const std::string& n) {
 // accepted levels get ids kFirstCustomLevel, kFirstCustomLevel + 1, ...
 void apply_custom_levels(yaml_document_t* d, const yaml_node_t* col,
                          std::vector<CustomLevel>* dst) {
-    const yaml_node_t* seq = find_key(d, col, "levels");
+    const yaml_node_t* seq = yaml_find_key(d, col, "levels");
     if (seq == nullptr || seq->type != YAML_SEQUENCE_NODE) return;
     dst->clear();
     size_t index = 0;
@@ -157,7 +138,7 @@ void apply_custom_levels(yaml_document_t* d, const yaml_node_t* col,
          item     != seq->data.sequence.items.top; ++item, ++index) {
         const yaml_node_t* n = yaml_document_get_node(d, *item);
         const char* nm = n != nullptr && n->type == YAML_MAPPING_NODE
-                       ? scalar_str(find_key(d, n, "name")) : nullptr;
+                       ? yaml_scalar(yaml_find_key(d, n, "name")) : nullptr;
         auto reject = [&](const char* why) {
             std::fprintf(stderr,
                 "budyk config: collection.levels[%zu] (%s): %s; level ignored\n",
@@ -181,7 +162,7 @@ void apply_custom_levels(yaml_document_t* d, const yaml_node_t* col,
         if (dup) { reject("duplicate name"); continue; }
 
         double interval_s = 0;
-        if (!parse_double_full(scalar_str(find_key(d, n, "interval")), &interval_s) ||
+        if (!parse_double_full(yaml_scalar(yaml_find_key(d, n, "interval")), &interval_s) ||
             interval_s < 0.1 || interval_s > 86400) {
             reject("'interval' is required: seconds from 0.1 to 86400");
             continue;
@@ -189,26 +170,26 @@ void apply_custom_levels(yaml_document_t* d, const yaml_node_t* col,
         lv.interval_ms = static_cast<int>(std::lround(interval_s * 1000.0));
 
         long prio = 0;
-        if (!parse_long_full(scalar_str(find_key(d, n, "priority")), &prio) ||
+        if (!parse_long_full(yaml_scalar(yaml_find_key(d, n, "priority")), &prio) ||
             prio < -1000 || prio > 1000) {
             reject("'priority' is required: an integer (L1 = 0, L2 = 20, L3 = 30)");
             continue;
         }
         lv.priority = static_cast<int>(prio);
 
-        if (const char* w = scalar_str(find_key(d, n, "when"))) lv.when = w;
+        if (const char* w = yaml_scalar(yaml_find_key(d, n, "when"))) lv.when = w;
 
-        if (const yaml_node_t* h = find_key(d, n, "hold")) {
+        if (const yaml_node_t* h = yaml_find_key(d, n, "hold")) {
             long hold = 0;
-            if (!parse_long_full(scalar_str(h), &hold) || hold < 0 || hold > 86400) {
+            if (!parse_long_full(yaml_scalar(h), &hold) || hold < 0 || hold > 86400) {
                 reject("'hold' must be whole seconds from 0 to 86400");
                 continue;
             }
             lv.hold_sec = static_cast<int>(hold);
         }
-        if (const yaml_node_t* s = find_key(d, n, "storage_mb")) {
+        if (const yaml_node_t* s = yaml_find_key(d, n, "storage_mb")) {
             long mb = 0;
-            if (!parse_long_full(scalar_str(s), &mb) || mb < 1 || mb > 100000) {
+            if (!parse_long_full(yaml_scalar(s), &mb) || mb < 1 || mb > 100000) {
                 reject("'storage_mb' must be an integer from 1 to 100000");
                 continue;
             }
@@ -259,26 +240,26 @@ void clamp_numbers(Config* c) {
 void apply_collection(yaml_document_t* d, const yaml_node_t* col, Config* out) {
     if (col == nullptr) return;
 
-    if (auto* l1 = find_key(d, col, "l1"))
+    if (auto* l1 = yaml_find_key(d, col, "l1"))
         apply_int(d, l1, "interval", &out->scheduler.l1_interval_sec);
 
-    if (auto* l2 = find_key(d, col, "l2")) {
+    if (auto* l2 = yaml_find_key(d, col, "l2")) {
         apply_int (d, l2, "interval",   &out->scheduler.l2_interval_sec);
         apply_bool(d, l2, "always_on",  &out->scheduler.l2_always_on);
         apply_int (d, l2, "hysteresis", &out->scheduler.hysteresis_sec);
-        if (auto* e = find_key(d, l2, "escalation_thresholds")) {
+        if (auto* e = yaml_find_key(d, l2, "escalation_thresholds")) {
             apply_double(d, e, "load_1m",           &out->scheduler.escalation_load_1m);
             apply_double(d, e, "cpu_percent",       &out->scheduler.escalation_cpu_percent);
             apply_double(d, e, "swap_used_percent", &out->scheduler.escalation_swap_percent);
         }
     }
-    if (auto* l3 = find_key(d, col, "l3")) {
+    if (auto* l3 = yaml_find_key(d, col, "l3")) {
         apply_int(d, l3, "interval",     &out->scheduler.l3_interval_sec);
         apply_int(d, l3, "grace_period", &out->scheduler.grace_period_sec);
     }
     apply_custom_levels(d, col, &out->scheduler.custom_levels);
 
-    if (auto* hb = find_key(d, col, "hot_buffer")) {
+    if (auto* hb = yaml_find_key(d, col, "hot_buffer")) {
         apply_int(d, hb, "capacity",    &out->hot_buffer_capacity);
         apply_int(d, hb, "warm_grace",  &out->hot_buffer_warm_grace);
     }
@@ -298,15 +279,15 @@ int parse_document(yaml_parser_t* parser, Config* out) {
     apply_int(&doc, root, "port",    &out->listen_port);
     apply_str(&doc, root, "data_dir", out->data_dir,    sizeof(out->data_dir));
 
-    apply_collection(&doc, find_key(&doc, root, "collection"), out);
+    apply_collection(&doc, yaml_find_key(&doc, root, "collection"), out);
 
-    if (auto* storage = find_key(&doc, root, "storage")) {
+    if (auto* storage = yaml_find_key(&doc, root, "storage")) {
         apply_int(&doc, storage, "tier1_max_mb", &out->tier1_max_mb);
         apply_int(&doc, storage, "tier2_max_mb", &out->tier2_max_mb);
         apply_int(&doc, storage, "tier3_max_mb", &out->tier3_max_mb);
     }
 
-    if (auto* rules = find_key(&doc, root, "rules")) {
+    if (auto* rules = yaml_find_key(&doc, root, "rules")) {
         apply_str (&doc, rules, "path",          out->rules_path, sizeof(out->rules_path));
         apply_bool(&doc, rules, "enable_exec",   &out->rules_enable_exec);  // legacy flat key
         apply_bool(&doc, rules, "persist_state", &out->rules_persist_state);
@@ -323,41 +304,41 @@ int parse_document(yaml_parser_t* parser, Config* out) {
         //       allow:
         //         - /usr/local/bin/alerter
         //         - /usr/bin/systemctl
-        if (auto* exec = find_key(&doc, rules, "exec")) {
+        if (auto* exec = yaml_find_key(&doc, rules, "exec")) {
             apply_bool    (&doc, exec, "enabled", &out->rules_enable_exec);
             apply_str_list(&doc, exec, "allow",   &out->rules_exec_allow);
         }
 
         // Nested `rules.freeze` block — gate + allowlist for
         // freeze() / unfreeze(). Format mirrors rules.exec.
-        if (auto* fr = find_key(&doc, rules, "freeze")) {
+        if (auto* fr = yaml_find_key(&doc, rules, "freeze")) {
             apply_bool    (&doc, fr, "enabled", &out->rules_enable_freeze);
             apply_str_list(&doc, fr, "allow",   &out->rules_freeze_allow);
         }
 
         // Nested `rules.limits` block — how much a single call into Lua
         // may run and how much memory the engine may hold.
-        if (auto* lim = find_key(&doc, rules, "limits")) {
+        if (auto* lim = yaml_find_key(&doc, rules, "limits")) {
             apply_int(&doc, lim, "instructions", &out->rules_instruction_limit);
             apply_int(&doc, lim, "memory_mb",    &out->rules_memory_mb);
         }
     }
 
-    if (auto* alerts = find_key(&doc, root, "alerts")) {
+    if (auto* alerts = yaml_find_key(&doc, root, "alerts")) {
         apply_alert_channels(&doc, alerts, &out->alert_channels);
     }
 
     // security.file_watch — inotify/kqueue watcher that feeds the Lua
     // `files` global so tamper-detection rules can fire.
-    if (auto* sec = find_key(&doc, root, "security")) {
-        if (auto* fw = find_key(&doc, sec, "file_watch")) {
+    if (auto* sec = yaml_find_key(&doc, root, "security")) {
+        if (auto* fw = yaml_find_key(&doc, sec, "file_watch")) {
             apply_bool    (&doc, fw, "enabled", &out->file_watch_enabled);
             apply_str_list(&doc, fw, "paths",   &out->file_watch_paths);
         }
     }
 
-    if (auto* web = find_key(&doc, root, "web")) {
-        if (auto* auth = find_key(&doc, web, "auth")) {
+    if (auto* web = yaml_find_key(&doc, root, "web")) {
+        if (auto* auth = yaml_find_key(&doc, web, "auth")) {
             apply_bool(&doc, auth, "enabled", &out->auth_enabled);
             apply_str (&doc, auth, "password_hash",
                        out->password_hash, sizeof(out->password_hash));

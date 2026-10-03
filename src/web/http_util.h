@@ -26,4 +26,9 @@ uint64_t query_u64(const std::string& query, const char* key, uint64_t fallback)
 // percent-decoding: callers only look up level names, [A-Za-z0-9_-].
 std::string query_str(const std::string& query, const char* key);
 
+// ASCII case-insensitive comparison and search, for header names and
+// token lists (RFC 7230).
+bool ascii_ieq(const std::string& a, const char* b);
+bool ascii_icontains(const std::string& hay, const char* needle);
+
 } // namespace budyk

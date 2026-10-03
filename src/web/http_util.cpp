@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #include "web/http_util.h"
 
+#include <cctype>
+#include <cstring>
+
 namespace budyk {
 
 // Extract the value of a single cookie name from a Cookie header line
@@ -36,48 +39,70 @@ void split_target(const std::string& target,
     }
 }
 
-// Pull a single unsigned 64-bit value for `key` out of a urlencoded
-// query string ("a=1&b=2"). Returns `fallback` when the key is absent
-// or doesn't parse as a non-negative integer. Only digits are accepted
-// — no signs, no units (callers pass nanoseconds / counts directly).
-uint64_t query_u64(const std::string& query, const char* key, uint64_t fallback) {
+namespace {
+
+// The raw value of `key` in "a=1&b=2", or false when absent. Shared by
+// query_u64 and query_str.
+bool query_find(const std::string& query, const char* key, std::string* value) {
     const std::string needle = std::string(key) + "=";
     size_t p = 0;
     while (p < query.size()) {
         size_t amp = query.find('&', p);
         if (amp == std::string::npos) amp = query.size();
         if (query.compare(p, needle.size(), needle) == 0) {
-            const std::string val = query.substr(p + needle.size(),
-                                                 amp - p - needle.size());
-            if (val.empty()) return fallback;
-            uint64_t out = 0;
-            for (char c : val) {
-                if (c < '0' || c > '9') return fallback;
-                const uint64_t digit = static_cast<uint64_t>(c - '0');
-                if (out > (UINT64_MAX - digit) / 10) return UINT64_MAX;   // saturate
-                out = out * 10 + digit;
-            }
-            return out;
+            *value = query.substr(p + needle.size(), amp - p - needle.size());
+            return true;
         }
         p = amp + 1;
     }
-    return fallback;
+    return false;
 }
 
-// Raw value of `key` in a query string ("" if absent). No percent-decoding:
-// callers only look up level names, which are [A-Za-z0-9_-].
-std::string query_str(const std::string& query, const char* key) {
-    const std::string needle = std::string(key) + "=";
-    size_t p = 0;
-    while (p < query.size()) {
-        size_t amp = query.find('&', p);
-        if (amp == std::string::npos) amp = query.size();
-        if (query.compare(p, needle.size(), needle) == 0) {
-            return query.substr(p + needle.size(), amp - p - needle.size());
-        }
-        p = amp + 1;
+} // namespace
+
+uint64_t query_u64(const std::string& query, const char* key, uint64_t fallback) {
+    std::string val;
+    if (!query_find(query, key, &val) || val.empty()) return fallback;
+    uint64_t out = 0;
+    for (char c : val) {
+        if (c < '0' || c > '9') return fallback;
+        const uint64_t digit = static_cast<uint64_t>(c - '0');
+        if (out > (UINT64_MAX - digit) / 10) return UINT64_MAX;   // saturate
+        out = out * 10 + digit;
     }
-    return std::string();
+    return out;
+}
+
+std::string query_str(const std::string& query, const char* key) {
+    std::string val;
+    return query_find(query, key, &val) ? val : std::string();
+}
+
+bool ascii_ieq(const std::string& a, const char* b) {
+    const size_t blen = std::strlen(b);
+    if (a.size() != blen) return false;
+    for (size_t i = 0; i < blen; ++i) {
+        if (std::tolower(static_cast<unsigned char>(a[i])) !=
+            std::tolower(static_cast<unsigned char>(b[i]))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool ascii_icontains(const std::string& hay, const char* needle) {
+    const size_t nlen = std::strlen(needle);
+    if (nlen == 0) return true;
+    for (size_t i = 0; i + nlen <= hay.size(); ++i) {
+        size_t k = 0;
+        while (k < nlen &&
+               std::tolower(static_cast<unsigned char>(hay[i + k])) ==
+               std::tolower(static_cast<unsigned char>(needle[k]))) {
+            ++k;
+        }
+        if (k == nlen) return true;
+    }
+    return false;
 }
 
 } // namespace budyk

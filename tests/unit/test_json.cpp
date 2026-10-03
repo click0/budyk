@@ -144,6 +144,20 @@ int main() {
         assert(json_unescape("\\u12G4") == "\xEF\xBF\xBD");      // U+FFFD
     }
 
+    // 5b. json_escape, the one implementation the alert payloads, the
+    //     LLM client and the TUI share: the named escapes, other control
+    //     characters as \u00xx, UTF-8 untouched, and a round trip.
+    {
+        assert(json_escape("plain") == "plain");
+        assert(json_escape("a\"b\\c") == "a\\\"b\\\\c");
+        assert(json_escape("\b\f\n\r\t") == "\\b\\f\\n\\r\\t");
+        assert(json_escape(std::string("\x01\x1f", 2)) == "\\u0001\\u001f");
+        assert(json_escape("\xD1\x83") == "\xD1\x83");                 // у, as is
+        assert(json_escape("/") == "/");
+        const std::string all = std::string("q\"b\\\x01\n\xE2\x82\xAC", 8);
+        assert(json_unescape(json_escape(all)) == all);
+    }
+
     // 6. json_get_string: the login body as the SPA and the TUI send
     //    it, with escapes in the password, whitespace around the colon,
     //    a quote inside the value, and the failure cases.

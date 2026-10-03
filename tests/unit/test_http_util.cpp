@@ -63,6 +63,19 @@ int main() {
         assert(query_str("levels=all", "level").empty());
     }
 
+    // 5. ascii_ieq / ascii_icontains: header names and token lists.
+    {
+        assert(ascii_ieq("Content-Length", "content-length"));
+        assert(ascii_ieq("UPGRADE", "upgrade"));
+        assert(!ascii_ieq("Upgrade", "upgrades"));
+        assert(!ascii_ieq("", "x") && ascii_ieq("", ""));
+        assert(ascii_icontains("keep-alive, Upgrade", "upgrade"));
+        assert(ascii_icontains("UPGRADE", "upgrade"));
+        assert(!ascii_icontains("keep-alive", "upgrade"));
+        assert(ascii_icontains("anything", ""));
+        assert(!ascii_icontains("", "x"));
+    }
+
     std::printf("test_http_util: PASS\n");
     return 0;
 }

@@ -2,6 +2,7 @@
 
 # Core library (C++17, no I/O)
 add_library(budyk_core STATIC
+    core/json_text.cpp
     core/sample.cpp
     core/codec.cpp
 )
@@ -47,6 +48,18 @@ endif()
 target_include_directories(budyk_collector PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 # Scheduler
+# Small shared helpers with I/O or a library behind them, which core/
+# (pure) must not carry: private temp files, libyaml DOM lookups.
+find_library(YAML_LIB_UTIL yaml REQUIRED)
+find_path(YAML_INCLUDE_DIR_UTIL yaml.h REQUIRED)
+add_library(budyk_util STATIC
+    util/tmpfile.cpp
+    util/yaml_dom.cpp
+)
+target_link_libraries(budyk_util PUBLIC ${YAML_LIB_UTIL})
+target_include_directories(budyk_util PUBLIC ${YAML_INCLUDE_DIR_UTIL})
+target_include_directories(budyk_util PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
 add_library(budyk_scheduler STATIC
     scheduler/scheduler.cpp
 )
@@ -79,7 +92,7 @@ add_library(budyk_rules STATIC
     rules/yaml_compat.cpp
 )
 find_package(Threads REQUIRED)
-target_link_libraries(budyk_rules PRIVATE budyk_core ${LUA_LIBRARIES})
+target_link_libraries(budyk_rules PRIVATE budyk_core budyk_util ${LUA_LIBRARIES})
 target_link_libraries(budyk_rules PUBLIC Threads::Threads)   # Worker threads
 target_include_directories(budyk_rules PRIVATE ${LUA_INCLUDE_DIR})
 # libyaml is in base and already used by budyk_config; needed here for
@@ -95,7 +108,7 @@ add_library(budyk_ai STATIC
     ai/suggest.cpp
     ai/llm_client.cpp
 )
-target_link_libraries(budyk_ai PRIVATE budyk_core budyk_storage)
+target_link_libraries(budyk_ai PRIVATE budyk_core budyk_util budyk_storage)
 # ENABLE_LLM is now an informational option only — llm_client invokes
 # curl(1) at runtime, so there's no build-time TLS / HTTP dep to gate.
 # The user opts in via `budyk suggest-rules --ai --api-key …`.
@@ -150,7 +163,7 @@ target_link_libraries(budyk_security PRIVATE budyk_core)
 add_library(budyk_config STATIC
     config/config.cpp
 )
-target_link_libraries(budyk_config PRIVATE budyk_core)
+target_link_libraries(budyk_config PRIVATE budyk_core budyk_util)
 find_library(YAML_LIB yaml REQUIRED)
 find_path(YAML_INCLUDE_DIR yaml.h REQUIRED)
 target_link_libraries(budyk_config PRIVATE ${YAML_LIB})

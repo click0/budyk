@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #include "web/server.h"
+#include "web/http_util.h"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -72,18 +73,6 @@ ssize_t read_full(int fd, char* dst, size_t want, Deadline deadline) {
         total += static_cast<size_t>(n);
     }
     return static_cast<ssize_t>(total);
-}
-
-bool ieq(const std::string& a, const char* b) {
-    const size_t blen = std::strlen(b);
-    if (a.size() != blen) return false;
-    for (size_t i = 0; i < blen; ++i) {
-        if (std::tolower(static_cast<unsigned char>(a[i])) !=
-            std::tolower(static_cast<unsigned char>(b[i]))) {
-            return false;
-        }
-    }
-    return true;
 }
 
 void trim_inplace(std::string* s) {
@@ -198,7 +187,7 @@ ssize_t send_response(int fd, const HttpResponse& r) {
 
 std::string HttpRequest::header(const std::string& name) const {
     for (const auto& kv : headers) {
-        if (ieq(kv.first, name.c_str())) return kv.second;
+        if (ascii_ieq(kv.first, name.c_str())) return kv.second;
     }
     return {};
 }

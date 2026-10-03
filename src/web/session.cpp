@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #include "web/session.h"
+#include "core/clock.h"
 
 #include "web/auth.h"
 
@@ -17,12 +18,6 @@ namespace budyk {
 
 namespace {
 
-uint64_t now_ns() {
-    struct timespec ts{};
-    ::clock_gettime(CLOCK_REALTIME, &ts);
-    return static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL +
-           static_cast<uint64_t>(ts.tv_nsec);
-}
 
 } // namespace
 
@@ -49,7 +44,7 @@ void SessionStore::autosave() const {
 std::string SessionStore::create() {
     const std::string tok = new_session_token();
     if (tok.empty()) return tok;
-    const uint64_t deadline = now_ns() + ttl_ns_;
+    const uint64_t deadline = now_realtime_ns() + ttl_ns_;
     {
         std::lock_guard<std::mutex> g(mtx_);
         deadline_[tok] = deadline;
@@ -60,7 +55,7 @@ std::string SessionStore::create() {
 
 bool SessionStore::verify(const std::string& token) {
     if (token.empty()) return false;
-    const uint64_t now = now_ns();
+    const uint64_t now = now_realtime_ns();
     bool evicted = false;
     bool ok      = false;
     {
@@ -88,7 +83,7 @@ void SessionStore::revoke(const std::string& token) {
 }
 
 size_t SessionStore::purge_expired() {
-    const uint64_t now = now_ns();
+    const uint64_t now = now_realtime_ns();
     std::lock_guard<std::mutex> g(mtx_);
     size_t purged = 0;
     for (auto it = deadline_.begin(); it != deadline_.end(); ) {
@@ -108,7 +103,7 @@ int SessionStore::load(const char* path) {
     std::FILE* f = std::fopen(path, "r");
     if (f == nullptr) return 0;   // no sessions yet — fresh install, fine
 
-    const uint64_t now = now_ns();
+    const uint64_t now = now_realtime_ns();
     char line[256];
     std::lock_guard<std::mutex> g(mtx_);
     while (std::fgets(line, sizeof(line), f) != nullptr) {
