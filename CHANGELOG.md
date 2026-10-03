@@ -30,6 +30,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `string.rep`, and a looping level condition. The hook costs nothing
   measurable in `test_rule_perf`.
 
+- **A stalled HTTP client no longer holds the server.** The embedded
+  server handles one connection at a time on one thread, and a client
+  that opened a connection and sent nothing, or dripped its request a
+  byte at a time, kept every other request — the login included —
+  waiting for as long as it liked. Each connection now has a budget
+  (`HttpServer::set_io_timeout_ms`, 5 s): socket timeouts bound each
+  read and write, and a deadline bounds the whole request, so a
+  stalled client is closed without a response and the next one is
+  served. The listen backlog grows from 16 to 64. Tests cover the
+  quiet client, the dripping client and a body that never arrives.
+- **A WebSocket client that stops reading is dropped, not waited on.**
+  The hub sent every frame with a blocking `send(2)` under its lock, so
+  one dashboard whose machine went to sleep (a half-open connection, or
+  a full socket buffer) blocked the collector tick — no samples
+  collected, stored or broadcast — until TCP gave up, minutes later.
+  Client sockets are now non-blocking, and a send that would block or
+  writes only part of a frame drops the client (spec §3.3 item 4).
+- **The hub reads from its clients.** It never did, so close frames
+  and pings were ignored and a client that vanished kept the client
+  count up, pinning the scheduler at L3. Once per tick the hub now
+  answers pings with pongs, answers close frames and drops the client,
+  drops a client that hung up or sends something that is not a
+  WebSocket frame, and skips data frames. A dashboard that vanishes
+  releases L3 on the next tick: measured on the daemon, the level goes
+  back to L1 within the grace period after the client's connection is
+  reset.
 - **Child processes no longer inherit the daemon's descriptors.** Rule
   `exec()` and the alert channels fork; the listening socket, client
   connections, the ring files and the sessions file were open in every

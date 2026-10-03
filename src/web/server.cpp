@@ -4,10 +4,12 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 #include <cctype>
 #include <cerrno>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -20,18 +22,32 @@ namespace {
 constexpr size_t kHeaderReadCap = 16 * 1024;   // 16 KiB header window
 constexpr size_t kMaxBodyBytes  = 64 * 1024;   // 64 KiB body cap
 
+using Clock    = std::chrono::steady_clock;
+using Deadline = Clock::time_point;
+
+// recv(2) with the per-request budget applied twice over: SO_RCVTIMEO
+// on the socket bounds one call (a client that sends nothing), and the
+// deadline bounds the whole request (a client that drips one byte at a
+// time, each within the socket timeout). Returns -1 on either.
+ssize_t recv_bounded(int fd, char* dst, size_t cap, Deadline deadline) {
+    for (;;) {
+        if (Clock::now() >= deadline) return -1;
+        const ssize_t n = ::recv(fd, dst, cap, 0);
+        if (n < 0 && errno == EINTR) continue;
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return -1;   // SO_RCVTIMEO
+        return n;
+    }
+}
+
 // Read into `buf` until "\r\n\r\n" is seen. Returns the index where
 // the body would start (i.e. byte after the marker). 0 on EOF before
-// finding the marker, -1 on error.
-ssize_t read_until_headers(int fd, std::vector<char>* buf) {
+// finding the marker, -1 on error or when the deadline passes.
+ssize_t read_until_headers(int fd, std::vector<char>* buf, Deadline deadline) {
     buf->resize(0);
     char tmp[1024];
     while (buf->size() < kHeaderReadCap) {
-        ssize_t n = ::recv(fd, tmp, sizeof(tmp), 0);
-        if (n < 0) {
-            if (errno == EINTR) continue;
-            return -1;
-        }
+        ssize_t n = recv_bounded(fd, tmp, sizeof(tmp), deadline);
+        if (n < 0) return -1;
         if (n == 0) return 0;
         buf->insert(buf->end(), tmp, tmp + n);
         // Search just the new chunk plus 3-byte overlap.
@@ -47,14 +63,11 @@ ssize_t read_until_headers(int fd, std::vector<char>* buf) {
     return -1;
 }
 
-ssize_t read_full(int fd, char* dst, size_t want) {
+ssize_t read_full(int fd, char* dst, size_t want, Deadline deadline) {
     size_t total = 0;
     while (total < want) {
-        ssize_t n = ::recv(fd, dst + total, want - total, 0);
-        if (n < 0) {
-            if (errno == EINTR) continue;
-            return -1;
-        }
+        ssize_t n = recv_bounded(fd, dst + total, want - total, deadline);
+        if (n < 0) return -1;
         if (n == 0) break;
         total += static_cast<size_t>(n);
     }
@@ -217,7 +230,10 @@ int HttpServer::start(const char* listen_addr, int port, HttpHandler handler) {
         ::close(fd);
         return -5;
     }
-    if (::listen(fd, 16) != 0) {
+    // Connections wait here while the single thread serves another;
+    // each one it serves is bounded by io_timeout_ms_, so the queue
+    // drains even under a stalled client.
+    if (::listen(fd, 64) != 0) {
         ::close(fd);
         return -6;
     }
@@ -249,6 +265,9 @@ void HttpServer::stop() {
 
 int HttpServer::bound_port() const { return bound_port_; }
 
+void HttpServer::set_io_timeout_ms(int ms) { io_timeout_ms_ = ms > 0 ? ms : 1; }
+int  HttpServer::io_timeout_ms() const     { return io_timeout_ms_; }
+
 void HttpServer::run_loop() {
     while (running_.load()) {
         sockaddr_in cli{};
@@ -265,8 +284,19 @@ void HttpServer::run_loop() {
 }
 
 bool HttpServer::handle_client(int client_fd) {
+    // Per-call socket timeouts plus a whole-request deadline; see
+    // recv_bounded. The send timeout also covers the response, and the
+    // handshake and catch-up frame a WebSocket hijack sends before the
+    // hub takes the fd non-blocking.
+    timeval tv{};
+    tv.tv_sec  = io_timeout_ms_ / 1000;
+    tv.tv_usec = (io_timeout_ms_ % 1000) * 1000;
+    ::setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    ::setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    const Deadline deadline = Clock::now() + std::chrono::milliseconds(io_timeout_ms_);
+
     std::vector<char> buf;
-    ssize_t hdr_end = read_until_headers(client_fd, &buf);
+    ssize_t hdr_end = read_until_headers(client_fd, &buf, deadline);
     if (hdr_end <= 0) return false;
 
     HttpRequest req;
@@ -292,7 +322,8 @@ bool HttpServer::handle_client(int client_fd) {
         if (req.body.size() < want) {
             const size_t need = want - req.body.size();
             std::vector<char> rest(need);
-            ssize_t got = read_full(client_fd, rest.data(), need);
+            ssize_t got = read_full(client_fd, rest.data(), need, deadline);
+            if (got < 0) return false;             // stalled mid-body
             if (got > 0) req.body.append(rest.data(), static_cast<size_t>(got));
         } else if (req.body.size() > want) {
             req.body.resize(want);

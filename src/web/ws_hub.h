@@ -29,20 +29,37 @@ std::string ws_handshake_response(const std::string& sec_websocket_key);
 // Upgrade, version 13, non-empty key.
 bool is_websocket_upgrade(const HttpRequest& req);
 
-// Broadcast hub. Stores connected client fds; sends each broadcast
-// frame to all of them, lazily dropping any whose write fails.
+// Broadcast hub. Holds the connected client fds, all non-blocking, and
+// never waits on a client (spec §3.3 item 4: one broadcast, slow
+// consumers are dropped). The collector tick calls broadcast() and
+// service(); the HTTP thread calls add(). A client is evicted, and
+// its fd closed, when:
+//   - a send would block or writes only part of a frame (the socket
+//     buffer is full: the peer has not read for a long time, or the
+//     connection is half-open);
+//   - it sends a close frame, or closes the connection;
+//   - it sends bytes that are not a WebSocket frame.
 class WebSocketHub {
 public:
     WebSocketHub();
     ~WebSocketHub();
 
     // After a successful handshake, register the fd. The hub now owns
-    // the fd — close() / close_all() will release it.
+    // the fd — it is switched to non-blocking, and close() / close_all()
+    // release it.
     void  add(int fd);
 
     // Send a text frame to every registered client. Clients whose
-    // write fails are removed and their fd closed.
+    // write fails or would block are removed and their fd closed.
     void  broadcast(const std::string& payload);
+
+    // Read whatever the clients have sent and act on it: answer pings
+    // with pongs, answer and honour close frames, drop clients that
+    // hung up or talk garbage, skip over data frames (the dashboard
+    // sends none). Returns the number of clients removed. Call it once
+    // per tick, before size() is used for the client count, so a
+    // vanished dashboard releases L3 within a tick.
+    size_t service();
 
     // Drop every client; closes all owned fds.
     void  close_all();
@@ -50,8 +67,18 @@ public:
     size_t size() const;
 
 private:
-    mutable std::mutex mtx_;
-    std::vector<int>   clients_;
+    struct Client {
+        int         fd;
+        std::string inbuf;      // bytes received, not yet parsed as a frame
+        uint64_t    skip;       // payload bytes of a data frame still to discard
+    };
+
+    // Parse and act on the frames in c->inbuf. Returns false when the
+    // client must be dropped (close frame, or not a WebSocket frame).
+    bool consume_frames(Client* c);
+
+    mutable std::mutex  mtx_;
+    std::vector<Client> clients_;
 };
 
 } // namespace budyk

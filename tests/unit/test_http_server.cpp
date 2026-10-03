@@ -10,6 +10,7 @@
 #include <unistd.h>
 
 #include <cassert>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -152,6 +153,82 @@ int main() {
         assert(resp.find("Content-Length: 8388608\r\n") != std::string::npos);
         assert(resp.size() - (hdr_end + 4) == big.size());
         assert(resp.compare(hdr_end + 4, big.size(), big) == 0);
+        s.stop();
+    }
+
+    // 2c. A client that opens a connection and goes quiet, or drips its
+    //     request a byte at a time, holds the single I/O thread for the
+    //     configured budget and no longer: the next client is served
+    //     after that. Without the deadline the second request would
+    //     wait forever.
+    {
+        HttpServer s;
+        s.set_io_timeout_ms(300);
+        assert(s.io_timeout_ms() == 300);
+        assert(s.start("127.0.0.1", 0,
+                       [](const HttpRequest&) {
+                           return HttpResponse{200, "text/plain", "served\n"};
+                       }) == 0);
+        auto connect = [&s]() {
+            int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+            assert(fd >= 0);
+            sockaddr_in sa{};
+            sa.sin_family = AF_INET;
+            sa.sin_port   = htons(static_cast<uint16_t>(s.bound_port()));
+            ::inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr);
+            assert(::connect(fd, reinterpret_cast<sockaddr*>(&sa), sizeof(sa)) == 0);
+            return fd;
+        };
+
+        // Quiet client: half a request line, then nothing.
+        int quiet = connect();
+        assert(::send(quiet, "GET / HT", 8, 0) == 8);
+        ::usleep(50000);                          // make sure it is being served
+        auto t0 = std::chrono::steady_clock::now();
+        std::string resp = http_round_trip(s.bound_port(),
+            "GET /after-quiet HTTP/1.1\r\nHost: x\r\n\r\n");
+        double secs = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - t0).count();
+        assert(resp.find("HTTP/1.1 200 OK") != std::string::npos);
+        assert(secs < 2.0);
+        char one;
+        assert(::recv(quiet, &one, 1, 0) == 0);   // server closed it, no response
+        ::close(quiet);
+
+        // Dripping client: a byte every 100 ms, each within the socket
+        // timeout; only the whole-request deadline stops it.
+        int drip = connect();
+        const std::string line = "GET / HTTP/1.1\r\nHost: x\r\n\r\n";
+        size_t sent = 0;
+        t0 = std::chrono::steady_clock::now();
+        while (sent < line.size() &&
+               ::send(drip, line.data() + sent, 1, MSG_NOSIGNAL) == 1) {
+            ++sent;
+            ::usleep(100000);
+            if (::recv(drip, &one, 1, MSG_DONTWAIT) == 0) break;   // server gave up
+        }
+        secs = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - t0).count();
+        assert(sent < line.size());               // cut off before the request completed
+        assert(secs < 2.0);
+        ::close(drip);
+
+        resp = http_round_trip(s.bound_port(),
+            "GET /after-drip HTTP/1.1\r\nHost: x\r\n\r\n");
+        assert(resp.find("HTTP/1.1 200 OK") != std::string::npos);
+
+        // A body that never arrives in full is cut off too.
+        int half = connect();
+        const std::string partial =
+            "POST /x HTTP/1.1\r\nHost: x\r\nContent-Length: 100\r\n\r\nonly-this";
+        assert(::send(half, partial.data(), partial.size(), 0) ==
+               static_cast<ssize_t>(partial.size()));
+        t0 = std::chrono::steady_clock::now();
+        assert(::recv(half, &one, 1, 0) == 0);    // closed, no 200
+        secs = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - t0).count();
+        assert(secs < 2.0);
+        ::close(half);
         s.stop();
     }
 
