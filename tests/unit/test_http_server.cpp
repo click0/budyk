@@ -63,7 +63,8 @@ int main() {
                              r.status       = 200;
                              r.content_type = "application/json";
                              r.body         = "{\"path\":\"" + req.path +
-                                              "\",\"method\":\"" + req.method + "\"}";
+                                              "\",\"method\":\"" + req.method +
+                                              "\",\"peer\":\"" + req.peer + "\"}";
                              return r;
                          });
         assert(rc == 0);
@@ -76,7 +77,24 @@ int main() {
         assert(resp.find("Content-Type: application/json") != std::string::npos);
         assert(resp.find("\"path\":\"/api/health\"") != std::string::npos);
         assert(resp.find("\"method\":\"GET\"") != std::string::npos);
+        assert(resp.find("\"peer\":\"127.0.0.1\"") != std::string::npos);
 
+        s.stop();
+    }
+
+    // 2a. 429 has a reason phrase, and extra headers (Retry-After) go out.
+    {
+        HttpServer s;
+        assert(s.start("127.0.0.1", 0,
+                       [](const HttpRequest&) {
+                           HttpResponse r{429, "application/json", "{}\n"};
+                           r.extra_headers.push_back({"Retry-After", "42"});
+                           return r;
+                       }) == 0);
+        std::string resp = http_round_trip(s.bound_port(),
+            "POST /api/auth/login HTTP/1.1\r\nHost: x\r\n\r\n");
+        assert(resp.find("HTTP/1.1 429 Too Many Requests") != std::string::npos);
+        assert(resp.find("Retry-After: 42\r\n") != std::string::npos);
         s.stop();
     }
 

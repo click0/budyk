@@ -24,6 +24,7 @@ namespace budyk {
 struct HttpRequest {
     std::string method;       // "GET", "POST", ...
     std::string path;         // "/api/health"
+    std::string peer;         // client address, dotted quad ("127.0.0.1")
     std::vector<std::pair<std::string, std::string>> headers;
     std::string body;
 
@@ -90,7 +91,7 @@ private:
     void run_loop();
     // Returns true if the handler set HttpResponse::hijack and the fd
     // ownership has moved out — the run loop must NOT close it.
-    bool handle_client(int client_fd);
+    bool handle_client(int client_fd, const char* peer);
 };
 
 } // namespace budyk

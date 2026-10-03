@@ -77,6 +77,11 @@ target_link_libraries(test_session PRIVATE budyk_web budyk_core)
 target_include_directories(test_session PRIVATE ${CMAKE_SOURCE_DIR}/src)
 add_test(NAME test_session COMMAND test_session)
 
+add_executable(test_login_limiter unit/test_login_limiter.cpp)
+target_link_libraries(test_login_limiter PRIVATE budyk_web budyk_core)
+target_include_directories(test_login_limiter PRIVATE ${CMAKE_SOURCE_DIR}/src)
+add_test(NAME test_login_limiter COMMAND test_login_limiter)
+
 add_executable(test_ws unit/test_ws.cpp)
 target_link_libraries(test_ws PRIVATE budyk_web budyk_core)
 target_include_directories(test_ws PRIVATE ${CMAKE_SOURCE_DIR}/src)

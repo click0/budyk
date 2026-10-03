@@ -72,16 +72,19 @@ int http_request(const char* host, int port, const char* method,
 }
 
 // POST /api/auth/login; on success *cookie becomes "budyk_session=<token>".
-bool login(const char* host, int port, const std::string& password,
-           std::string* cookie) {
+// Returns the HTTP status (200 = logged in; 401 wrong password; 429
+// throttled after too many failures), or -1 when the daemon can't be
+// reached or sent no cookie.
+int login(const char* host, int port, const std::string& password,
+          std::string* cookie) {
     tui_detail::HttpReply r;
     const std::string body = "{\"password\":" + tui_detail::json_quote(password) + "}";
     if (http_request(host, port, "POST", "/api/auth/login", "", body, &r) != 0) {
-        return false;
+        return -1;
     }
-    if (r.status != 200) return false;
+    if (r.status != 200) return r.status;
     *cookie = tui_detail::session_cookie(r.headers);
-    return !cookie->empty();
+    return cookie->empty() ? -1 : 200;
 }
 
 // --- formatting helpers ------------------------------------------------------
@@ -286,7 +289,14 @@ int tui_run(const char* host, int port, std::string (*ask_password)()) {
             }
             password = ask_password();
             std::string cookie;
-            if (!login(host, port, password, &cookie)) {
+            const int st = login(host, port, password, &cookie);
+            if (st == 429) {
+                std::fprintf(stderr, "budyk tui: %s:%d refuses logins for now "
+                             "(too many failed attempts); try again in a minute\n",
+                             host, port);
+                return -1;
+            }
+            if (st != 200) {
                 std::fprintf(stderr, "budyk tui: login to %s:%d failed (wrong password?)\n",
                              host, port);
                 return -1;
@@ -325,7 +335,7 @@ int tui_run(const char* host, int port, std::string (*ask_password)()) {
         int rc = http_request(host, port, "GET", "/api/samples", cookie_header, "", &r);
         if (rc == 0 && r.status == 401 && !password.empty()) {
             std::string cookie;                       // session expired: renew
-            if (login(host, port, password, &cookie)) {
+            if (login(host, port, password, &cookie) == 200) {
                 cookie_header = "Cookie: " + cookie + "\r\n";
                 rc = http_request(host, port, "GET", "/api/samples", cookie_header, "", &r);
             }

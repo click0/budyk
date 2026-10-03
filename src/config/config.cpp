@@ -249,6 +249,8 @@ void clamp_numbers(Config* c) {
     clamp_int(&c->tier3_max_mb, 1, 100000, d.tier3_max_mb, "storage.tier3_max_mb");
     clamp_int(&c->rules_instruction_limit, 10000, 1000000000, d.rules_instruction_limit, "rules.limits.instructions");
     clamp_int(&c->rules_memory_mb,         1,     1024,       d.rules_memory_mb,         "rules.limits.memory_mb");
+    clamp_int(&c->auth_max_login_failures, 1, 1000,  d.auth_max_login_failures, "web.auth.max_login_failures");
+    clamp_int(&c->auth_login_window_sec,   1, 86400, d.auth_login_window_sec,   "web.auth.login_window");
 }
 
 // --- Section walkers --------------------------------------------------------
@@ -360,6 +362,8 @@ int parse_document(yaml_parser_t* parser, Config* out) {
                        out->password_hash, sizeof(out->password_hash));
             apply_bool(&doc, auth, "persist_sessions",
                        &out->auth_persist_sessions);
+            apply_int (&doc, auth, "max_login_failures", &out->auth_max_login_failures);
+            apply_int (&doc, auth, "login_window",       &out->auth_login_window_sec);
         }
     }
 

@@ -110,6 +110,7 @@ add_library(budyk_web STATIC
     web/auth.cpp
     web/json.cpp
     web/session.cpp
+    web/login_limiter.cpp
     web/sha1_base64.cpp
     web/spa.cpp
 )
