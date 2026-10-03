@@ -3,61 +3,179 @@
 ## What is this project?
 
 budyk (Ukrainian "будик" — alarm clock) is a lightweight, self-contained server
-monitoring daemon for FreeBSD. Single static binary, no external dependencies,
-no database. BSD-3-Clause license.
+monitoring daemon for FreeBSD and Linux. Single static binary, no external
+dependencies at runtime, no database. BSD-3-Clause license.
 
 ## Architecture overview
 
-- **Language:** C++17 (business logic) + C (platform collectors)
-- **Build:** CMake 3.22+
-- **Key innovation:** 3-level adaptive collection model (L1 heartbeat / L2 watchful / L3 active)
-- **Rule engine:** embedded Lua 5.4 with sandboxed `watch()` API
-- **Storage:** tiered ring-buffer files (mmap, CRC32C, level markers)
-- **Web:** embedded HTTP/WS server (mongoose or libwebsockets — TBD)
-- **TUI:** ncurses-based terminal UI
+- **Language:** C++17 (everything except the collectors) + C (platform collectors)
+- **Build:** CMake 3.22+; a static binary by default (`STATIC_LINK=ON`)
+- **Collection:** 3-level adaptive model (L1 heartbeat / L2 watchful / L3 active)
+  plus custom levels (name, interval, priority, Lua `when` condition, hold)
+- **Rule engine:** embedded Lua 5.4, sandboxed `watch()` API, per-call
+  instruction and memory limits
+- **Storage:** one ring file per level (mmap'd header, `pwrite` records,
+  CRC32C, level markers). No aggregation on disk yet: `TierAggregator` exists
+  but is not wired in.
+- **Web:** hand-written HTTP/1.1 + WebSocket (RFC 6455) server in `src/web`.
+  No mongoose, no libwebsockets. The SPA is a string literal in
+  `src/web/spa.cpp`.
+- **TUI:** ncurses; polls `/api/samples` once a second
+- **Alerts:** ntfy / Discord / Telegram / SMTP / Twilio through `curl(1)`,
+  run from a worker thread
+
+## Threads and I/O (how it actually runs)
+
+There is no event-loop library (no libuv, kqueue or epoll). The daemon is:
+
+- **Main thread:** the collector tick: collect → store → hot buffer → Lua
+  rules → WebSocket broadcast → sleep until the next tick. The sleep is a
+  `poll()` on a wake pipe, so an escalation (a client connecting, a rule
+  calling `escalate()`) cuts it short.
+- **HTTP thread:** one blocking accept-handle-close loop. Every connection
+  is bounded by `HttpServer::set_io_timeout_ms` (5 s) so a stalled client
+  cannot hold it. A WebSocket upgrade hands the fd to the hub.
+- **WebSocket hub:** client fds are non-blocking. `broadcast()` drops a
+  client whose send would block or writes a partial frame; `service()`,
+  called by the main thread once per tick, answers pings, honours close
+  frames and drops clients that hung up.
+- **Worker threads** (`src/rules/worker.*`): one for alerts, one for
+  `exec()`. Bounded FIFO of 256 jobs, started on first use, cancelled on
+  shutdown after a grace period. Both survive a SIGHUP rules reload.
+- **Children:** `exec_command()` forks with `/dev/null` stdio, a new
+  process group, rlimits, a timeout and a cancel flag. Every descriptor the
+  daemon opens is close-on-exec; `tests/smoke/serve.sh` checks that.
+- **Shared state:** the hot buffer under a mutex; the ring files via
+  `pread`/`pwrite` plus an atomic `write_idx` in the mmap'd header; the hub
+  and the session store under their own mutexes.
 
 ## Directory structure
 
 ```
-src/core/          — Sample struct, MetricSource interface, codec (C++, no I/O)
-src/collector/     — platform-specific metric collection (C)
+src/core/          — Sample struct, codec (C++, no I/O)
+src/collector/     — platform metric collection (plain C)
   freebsd/         — sysctl, devstat, kvm, getifaddrs
   linux/           — /proc, /sys parsers
-src/scheduler/     — L1↔L2↔L3 tick scheduler with anomaly detection
-src/hot_buffer/    — in-memory circular buffer for WS catch-up (RAM-only)
-src/storage/       — tiered ring-buffer engine (mmap, pwrite, atomic write_idx)
-src/rules/         — Lua 5.4 rule engine (sandbox, watch/alert/exec/escalate)
-src/ai/            — AI-assisted rule generation (Tier A: local stats, Tier B: LLM)
-src/web/           — HTTP + WebSocket server + embedded SPA
-src/tui/           — terminal UI
-src/config/        — YAML config loader
+src/scheduler/     — L1↔L2↔L3 (+ custom levels) tick scheduler, anomaly detection
+src/hot_buffer/    — in-memory ring for WS catch-up (RAM-only)
+src/storage/       — ring files (mmap header, pwrite, CRC32C), TierManager
+src/rules/         — Lua 5.4 engine, sandbox, bindings, alerts, exec, freeze, Worker
+src/security/      — file watcher (inotify / kqueue) feeding the `files` Lua global
+src/ai/            — rule suggestions (Tier A: local stats; Tier B: LLM via curl)
+src/web/           — HTTP + WebSocket server, auth (Argon2id), sessions, login
+                     throttle, JSON, embedded SPA
+src/tui/           — ncurses terminal UI
+src/config/        — YAML config loader (libyaml)
+src/main.cpp       — CLI, serve loop, HTTP routes, reload, shutdown
+tests/unit/        — one assert()-based executable per module (ctest)
+tests/smoke/       — serve.sh (HTTP, WS, SIGHUP, fd check) and crash.sh (SIGKILL + restart)
+addons/            — FreeBSD port + rc.d, systemd unit, Docker
+docs/              — spec (en/uk), man page
 ```
 
-## Build commands
+## Build and test commands
 
 ```sh
-cmake -B build -DBUDYK_PLATFORM=freebsd   # or linux
-cmake --build build -j$(nproc)
-ctest --test-dir build                     # run tests
+cmake -B build                           # the host platform is detected;
+                                         # -DBUDYK_PLATFORM=linux|freebsd only checks it matches
+cmake --build build -j
+ctest --test-dir build                   # unit tests
+tests/smoke/serve.sh build/src/budyk     # daemon: endpoints, WS, SIGHUP, close-on-exec
+tests/smoke/crash.sh build/src/budyk     # daemon: SIGKILL + restart, at most one record lost
 ```
+
+CI (see `.github/workflows/linux-build.yml`) adds `-DENABLE_WERROR=ON`, runs
+the tests under ASan + UBSan (`-DSTATIC_LINK=OFF -DENABLE_SANITIZERS=ON`)
+together with both smoke scripts, runs cppcheck and clang-tidy (checks in
+`.clang-tidy`), gates line coverage of `core/` and `storage/` at 85%
+(`tests/coverage_report.py`), and builds and tests on FreeBSD 14.2 and 15.0.
+Everything must be green before a merge.
 
 ## Coding conventions
 
 - SPDX license header in every file
-- C++17, no exceptions (`-fno-exceptions`), no RTTI (`-fno-rtti`)
-- Collectors are plain C (no C++ in platform-specific code)
-- Errors via return codes, not exceptions
-- No dynamic allocation in hot paths (collector tick, rule eval)
-- All I/O non-blocking via event loop
-- `#ifdef BUDYK_FREEBSD` / `#ifdef BUDYK_LINUX` for platform branching
+- C++17, no exceptions (`-fno-exceptions`), no RTTI (`-fno-rtti`). Lua raises
+  errors with `luaL_error` (a longjmp): never hold a C++ object with a
+  destructor across a call that may raise — see the pattern in
+  `src/rules/lua_stdlib.cpp`.
+- Collectors are plain C (no C++ in `src/collector/`)
+- Errors via return codes. Two conventions exist today: `-errno` (collectors,
+  file watcher, freeze, state files) and small negative ordinals (ring file,
+  tier manager, HTTP server, exec, alerts). New code uses `-errno`, and every
+  operator-facing message includes `strerror`.
+- **Never block the collector tick.** No network I/O, no waiting on a child,
+  no blocking send from the main thread: post the work to a `Worker` or use
+  non-blocking I/O. Per-tick allocation of small strings and vectors is
+  tolerated; unbounded growth is not.
+- Platform branching only through `#ifdef BUDYK_FREEBSD` / `#ifdef BUDYK_LINUX`
+- Tests are `assert()`-based and built with `-UNDEBUG`. New behaviour gets a
+  unit test; a change in the daemon's behaviour gets a check in
+  `tests/smoke/` too. When a test guards a fix, break the fix on purpose once
+  and confirm the test fails — and confirm the broken build actually
+  compiled under `-Werror`, or the old binary runs and the check proves
+  nothing.
+- Squash-merge; after the merge, confirm the tree on `main` is identical to
+  the commit that was tested.
 
-## Key design decisions
+## Key design decisions (as implemented)
 
-1. Collector runs in a separate thread; results piped to event loop
-2. Lua rules sandboxed: no io/os/loadfile/require; exec() gated by --enable-exec
-3. Hot buffer is RAM-only, never touches disk
-4. Storage records carry absolute timestamps + level markers (L1/L2/L3)
-5. Ring-buffer write_idx updated atomically via mmap — crash loses at most 1 record
+1. The collector tick runs on the main thread; HTTP on its own thread; slow
+   work (alert delivery, `exec()`) on Worker threads with bounded queues.
+2. Lua rules are sandboxed: no `io`/`os`/`load`/`loadfile`/`dofile`/`require`;
+   `exec()` is gated by `--enable-exec` or `rules.exec.enabled` plus an
+   allowlist; every call into Lua is limited to `rules.limits.instructions`
+   (default 1 000 000) and the engine to `rules.limits.memory_mb`
+   (default 16). A runaway rule gets an error, not the daemon.
+3. The hot buffer is RAM-only and never touches disk.
+4. Storage records carry an absolute timestamp, a level marker and a CRC32C;
+   each level has its own ring; `write_idx` is advanced only after the
+   `pwrite`, so a crash loses at most one record (`tests/smoke/crash.sh`).
+5. `exec()` is asynchronous: it returns `{ queued = true }` and the outcome
+   is logged. `exec(cmd, { timeout = s, wait = true })` is the inline form,
+   capped at 60 s.
+6. Slow WebSocket consumers are dropped, not waited on; a vanished client
+   releases L3 on the next tick.
+7. Failed logins are throttled per client address (429 + `Retry-After`);
+   no password hash is computed for a throttled attempt.
+8. The version string comes from `project(VERSION)` only (`BUDYK_VERSION`).
+
+## Release procedure
+
+1. Bump `project(budyk VERSION x.y.z)` in `CMakeLists.txt`, the `.TH` line in
+   `docs/budyk.8` (date and version) and `DISTVERSION` in
+   `addons/freebsd/Makefile`.
+2. In `CHANGELOG.md` turn `[Unreleased]` into `[x.y.z] — YYYY-MM-DD` with a
+   summary paragraph, add the tag link at the bottom, and open a new empty
+   `[Unreleased]`. `release.yml` publishes exactly this section as the notes.
+3. Open the PR; start a `release.yml` dry run (`workflow_dispatch` from the
+   branch — it builds everything and skips publish); merge when all checks
+   and the dry run are green.
+4. The maintainer creates tag `vx.y.z` on `main`. The tag push builds static
+   tarballs for linux-amd64, freebsd14.2-amd64 and freebsd15.0-amd64 (release
+   and debug), checks every `.sha256` in one `sha256sum -c` run, and
+   publishes the release.
+5. Verify the published release: tag → commit, the body, 12 assets, checksums,
+   `file` on every binary, `budyk version`, and the smoke scripts against the
+   published Linux binary.
+
+## Known gaps against the spec (`docs/budyk-spec-en.md`)
+
+- No tier aggregation on disk; `TierAggregator` is unused. While a client
+  holds L3, the L1 ring receives nothing.
+- The metric set is roughly 40% of §2.1: no per-core CPU, per-device disk,
+  per-interface network, TCP/socket counters, filesystem usage or process
+  list.
+- No `fsck`; damaged records are skipped on read.
+- Every collector runs at every level; no per-level metric sets, no
+  `collection.mode`.
+- `hot_buffer.warm_grace` is parsed but not applied.
+- No L2 → L3 escalation on a sustained anomaly.
+- Rule semantics that differ from §3.6: `cooldown` defaults to 0; a `nil`
+  from `when()` resets the sustain counter; `action = { alert, exec(...) }`
+  tables are rejected; `alert()` emits no WebSocket event.
+- `/api/range?level=all` thins evenly across time, so a small `limit` does
+  not return the newest samples.
+- No Doxygen, no deb/rpm, no cross-compilation toolchains, FreeBSD 13 not in CI.
 
 ## Full technical specification
 
