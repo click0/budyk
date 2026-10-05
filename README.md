@@ -191,6 +191,11 @@ minute (`web.auth.max_login_failures`, `web.auth.login_window`), further
 attempts from that address get HTTP 429 until the minute is up, and no
 password hash is computed for them. A successful login clears the count.
 
+budyk speaks plain HTTP. To reach the dashboard from another machine,
+keep `listen: 127.0.0.1` and put a TLS reverse proxy in front that sets
+`X-Forwarded-Proto: https`; the session cookie is then marked `Secure`.
+With auth on and a non-loopback `listen`, the daemon warns at start-up.
+
 If the dashboard is password-protected, `budyk tui` asks for the password
 once at startup (without echoing it) and logs in. If the session later
 expires, for example after a daemon restart, it logs in again by itself.
