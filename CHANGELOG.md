@@ -49,6 +49,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   atomic now and the loop reads it once. No observed misbehaviour, but
   a plain `int` shared between threads is undefined behaviour.
 
+- **`hot_buffer.warm_grace` is applied.** The key was parsed, clamped
+  and documented, and did nothing: a client connecting long after the
+  last one left got a catch-up that replayed the old 1 Hz session glued
+  to sparse L1 samples. Once no client (WebSocket or `/api/samples`
+  poller) has been connected for `warm_grace` seconds, the hot buffer
+  is now emptied (spec §3.4, M4.2). The serve loop wakes for it, so an
+  L1 sleep of minutes does not delay the reset. `WarmGrace` is unit
+  tested (once per idle spell, never before the first client, a
+  returning client keeps the buffer, a clock step back re-anchors), and
+  the new `tests/smoke/warm_grace.sh` checks it on the daemon: a client
+  5 s after a 4 s session gets a 1-sample catch-up instead of 7.
+- **`/api/range?...&limit=1` returns the newest sample.** With a limit
+  of one, each ring contributed its *oldest* record in the window, so
+  `level=all&limit=1` answered with a sample from the start of the
+  window. One record now means the newest, as the API documents; two
+  or more still span the window end to end.
+
 ### Changed
 
 - **No Lua tables allocated per tick.** The ten sample tables were

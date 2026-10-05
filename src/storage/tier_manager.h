@@ -102,7 +102,8 @@ private:
                    std::size_t max_records, std::vector<Sample>* out) const;
     // Like query_ring, but when the window holds more than max_records it
     // reads max_records records evenly spread across the window instead
-    // of the newest ones. The window's bounds are found by binary search
+    // of the newest ones; both ends are included, and max_records == 1
+    // gives the newest. The window's bounds are found by binary search
     // over the ring (records are in time order), so the cost is
     // O(log n + max_records) reads whatever the window size.
     int query_ring_spread(const RingFile* ring, int override_level,

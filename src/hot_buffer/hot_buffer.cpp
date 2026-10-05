@@ -28,6 +28,29 @@ size_t HotBuffer::dump(Sample* out, size_t out_cap) const {
 }
 
 void HotBuffer::reset() { head_ = 0; count_ = 0; }
+
+bool WarmGrace::should_reset(int clients, uint64_t now_ns) {
+    if (clients > 0) {
+        last_client_ns_ = now_ns;
+        pending_        = true;
+        return false;
+    }
+    if (!pending_) return false;
+    if (now_ns < last_client_ns_) {          // clock stepped back
+        last_client_ns_ = now_ns;
+        return false;
+    }
+    if (now_ns - last_client_ns_ < grace_ns_) return false;
+    pending_ = false;
+    return true;
+}
+
+uint64_t WarmGrace::ns_until_due(uint64_t now_ns) const {
+    if (!pending_) return UINT64_MAX;
+    if (now_ns < last_client_ns_) return grace_ns_;
+    const uint64_t idle = now_ns - last_client_ns_;
+    return idle >= grace_ns_ ? 0 : grace_ns_ - idle;
+}
 size_t HotBuffer::size() const { return count_; }
 
 } // namespace budyk
