@@ -102,7 +102,7 @@ int main() {
             assert(rf.count()       == 0);
 
             for (uint64_t i = 0; i < 5; ++i) {
-                Sample s = make_sample((i + 1) * 1000, Level::L3, 0.1 * (i + 1));
+                Sample s = make_sample((i + 1) * 1000, Level::L3, 0.1 * static_cast<double>(i + 1));
                 uint8_t rec[512] = {0};
                 size_t  len = 0;
                 assert(record_encode(s, rec, sizeof(rec), &len) == 0);

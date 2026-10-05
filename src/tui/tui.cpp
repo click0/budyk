@@ -119,10 +119,10 @@ int login(const char* host, int port, const std::string& password,
 // --- formatting helpers ------------------------------------------------------
 std::string fmt_bytes(uint64_t b) {
     char buf[32];
-    if      (b >= (1ULL << 40)) std::snprintf(buf, sizeof(buf), "%.1fT", b / 1099511627776.0);
-    else if (b >= (1ULL << 30)) std::snprintf(buf, sizeof(buf), "%.1fG", b / 1073741824.0);
-    else if (b >= (1ULL << 20)) std::snprintf(buf, sizeof(buf), "%.1fM", b / 1048576.0);
-    else if (b >= (1ULL << 10)) std::snprintf(buf, sizeof(buf), "%.1fK", b / 1024.0);
+    if      (b >= (1ULL << 40)) std::snprintf(buf, sizeof(buf), "%.1fT", static_cast<double>(b) / 1099511627776.0);
+    else if (b >= (1ULL << 30)) std::snprintf(buf, sizeof(buf), "%.1fG", static_cast<double>(b) / 1073741824.0);
+    else if (b >= (1ULL << 20)) std::snprintf(buf, sizeof(buf), "%.1fM", static_cast<double>(b) / 1048576.0);
+    else if (b >= (1ULL << 10)) std::snprintf(buf, sizeof(buf), "%.1fK", static_cast<double>(b) / 1024.0);
     else                        std::snprintf(buf, sizeof(buf), "%lluB", static_cast<unsigned long long>(b));
     return buf;
 }

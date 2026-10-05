@@ -19,7 +19,8 @@ static std::string hex(const std::string& bin) {
     static const char* d = "0123456789abcdef";
     std::string out;
     out.reserve(bin.size() * 2);
-    for (unsigned char b : bin) {
+    for (char ch : bin) {
+        const unsigned char b = static_cast<unsigned char>(ch);
         out.push_back(d[(b >> 4) & 0xF]);
         out.push_back(d[ b       & 0xF]);
     }

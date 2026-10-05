@@ -27,7 +27,8 @@ namespace {
 std::string url_encode(const std::string& s) {
     std::string out;
     out.reserve(s.size() + 8);
-    for (unsigned char c : s) {
+    for (char ch : s) {
+        const unsigned char c = static_cast<unsigned char>(ch);
         const bool unreserved =
             (c >= 'A' && c <= 'Z') ||
             (c >= 'a' && c <= 'z') ||

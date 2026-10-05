@@ -170,7 +170,7 @@ bool WebSocketHub::consume_frames(Client* c) {
                    static_cast<uint64_t>(static_cast<uint8_t>(b[3]));
         } else if (len == 127) {
             len = 0;
-            for (int i = 0; i < 8; ++i) {
+            for (size_t i = 0; i < 8; ++i) {
                 len = (len << 8) | static_cast<uint8_t>(b[2 + i]);
             }
         }

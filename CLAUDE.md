@@ -93,10 +93,14 @@ tests/smoke/crash.sh build/src/budyk     # daemon: SIGKILL + restart, at most on
 
 CI (see `.github/workflows/linux-build.yml`) adds `-DENABLE_WERROR=ON`, runs
 the tests under ASan + UBSan (`-DSTATIC_LINK=OFF -DENABLE_SANITIZERS=ON`)
-together with both smoke scripts, runs cppcheck and clang-tidy (checks in
-`.clang-tidy`), gates line coverage of `core/` and `storage/` at 85%
-(`tests/coverage_report.py`), and builds and tests on FreeBSD 14.2 and 15.0.
-Everything must be green before a merge.
+together with both smoke scripts, under ThreadSanitizer
+(`-DSTATIC_LINK=OFF -DENABLE_TSAN=ON`) with the serve smoke test, runs
+cppcheck and clang-tidy (checks in `.clang-tidy`), gates line coverage of
+`core/` and `storage/` at 85% (`tests/coverage_report.py`), and builds and
+tests on FreeBSD 14.2 and 15.0 with clang. Everything must be green before a
+merge. Warnings are `-Wall -Wextra -Wshadow -Wconversion -Wsign-conversion`
+on every target; a new implicit sign or width change is a build error in CI
+(GCC and clang both).
 
 ## Coding conventions
 

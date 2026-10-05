@@ -52,7 +52,7 @@ std::string json_unescape(const std::string& s) {
             case 'u': {
                 if (i + 5 >= s.size()) { out += s[i++]; break; }
                 unsigned code = 0;
-                for (int k = 0; k < 4; ++k) {
+                for (size_t k = 0; k < 4; ++k) {
                     const char h = s[i + 2 + k];
                     code <<= 4;
                     if      (h >= '0' && h <= '9') code |= static_cast<unsigned>(h - '0');

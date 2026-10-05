@@ -118,6 +118,13 @@ public:
     // An empty allowlist allows any absolute-path command (still subject
     // to the no-traversal / must-be-absolute checks in l_exec).
     void set_exec_allowlist(std::vector<std::string> paths);
+    // The allowlist with every entry passed through realpath(3) when it
+    // was set (an entry that does not resolve is kept as given). exec()
+    // compares the command's realpath against this, so "/usr/bin//x",
+    // "/usr/bin/./x" and a symlink to the allowed binary match, while
+    // an allowed path that is later replaced by a symlink to something
+    // else does not: it resolved to the original when it was allowed.
+    const std::vector<std::string>& exec_allowlist_resolved() const;
     const std::vector<std::string>& exec_allowlist() const;
 
     // freeze() / unfreeze() gate. Disabled by default; admins opt in
@@ -175,6 +182,7 @@ private:
     bool                     exec_enabled_    = false;
     int                      last_fire_count_ = 0;
     std::vector<std::string> exec_allowlist_;
+    std::vector<std::string> exec_allowlist_resolved_;
     bool                     freeze_enabled_  = false;
     std::vector<std::string> freeze_allowlist_;
     AlertDispatcher          alerts_;

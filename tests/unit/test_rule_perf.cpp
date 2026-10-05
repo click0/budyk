@@ -85,7 +85,7 @@ int main(int argc, char** argv) {
     for (int i = 0; i < 64; ++i) samples.push_back(mk(i));
 
     // Warm up the Lua VM and the allocator.
-    for (int i = 0; i < 200; ++i) e.eval_tick(samples[i % samples.size()]);
+    for (int i = 0; i < 200; ++i) e.eval_tick(samples[static_cast<size_t>(i) % samples.size()]);
 
     constexpr int kTicks = 2000;
     std::vector<double> us;
@@ -93,7 +93,7 @@ int main(int argc, char** argv) {
     long fired = 0;
     for (int i = 0; i < kTicks; ++i) {
         const auto t0 = std::chrono::steady_clock::now();
-        const int  n  = e.eval_tick(samples[i % samples.size()]);
+        const int  n  = e.eval_tick(samples[static_cast<size_t>(i) % samples.size()]);
         const auto t1 = std::chrono::steady_clock::now();
         if (n < 0) {
             std::fprintf(stderr, "FAIL: eval_tick returned %d\n", n);

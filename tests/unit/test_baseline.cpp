@@ -104,10 +104,10 @@ int main() {
     {
         Sample s[5]{};
         for (int i = 0; i < 5; ++i) {
-            s[i].disk.read_bytes_per_sec  = static_cast<uint64_t>(1'000'000ULL * (i + 1));
-            s[i].disk.write_bytes_per_sec = static_cast<uint64_t>(  500'000ULL * (i + 1));
-            s[i].net.rx_bytes_per_sec     = static_cast<uint64_t>(2'000'000ULL * (i + 1));
-            s[i].net.tx_bytes_per_sec     = static_cast<uint64_t>(  750'000ULL * (i + 1));
+            s[i].disk.read_bytes_per_sec  = static_cast<uint64_t>(1'000'000ULL * static_cast<unsigned long long>(i + 1));
+            s[i].disk.write_bytes_per_sec = static_cast<uint64_t>(  500'000ULL * static_cast<unsigned long long>(i + 1));
+            s[i].net.rx_bytes_per_sec     = static_cast<uint64_t>(2'000'000ULL * static_cast<unsigned long long>(i + 1));
+            s[i].net.tx_bytes_per_sec     = static_cast<uint64_t>(  750'000ULL * static_cast<unsigned long long>(i + 1));
         }
         MetricBaseline dr = compute_disk_read_bytes_per_sec_stats (s, 5);
         MetricBaseline dw = compute_disk_write_bytes_per_sec_stats(s, 5);

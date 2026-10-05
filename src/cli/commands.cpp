@@ -129,7 +129,7 @@ std::string read_password(const char* prompt) {
     if (is_tty) {
         if (::tcgetattr(STDIN_FILENO, &saved) == 0) {
             struct termios noecho = saved;
-            noecho.c_lflag &= ~ECHO;
+            noecho.c_lflag &= ~static_cast<tcflag_t>(ECHO);
             ::tcsetattr(STDIN_FILENO, TCSAFLUSH, &noecho);
         }
     }
@@ -233,7 +233,8 @@ int cmd_suggest_rules(int argc, char* argv[]) {
     }
 
     const uint32_t record_size = static_cast<uint32_t>(budyk::record_size_for_sample());
-    uint64_t cap = (static_cast<uint64_t>(cfg.tier1_max_mb) * 1024ULL * 1024ULL) / record_size;
+    constexpr uint64_t kMiB = 1024 * 1024;
+    uint64_t cap = (static_cast<uint64_t>(cfg.tier1_max_mb) * kMiB) / record_size;
     if (cap == 0) cap = 1;
 
     std::vector<budyk::Sample> samples;

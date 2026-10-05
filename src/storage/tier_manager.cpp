@@ -20,7 +20,8 @@ constexpr uint8_t kCustomRingTier = 0x80;
 
 uint64_t records_from_mb(int mb, size_t record_size) {
     if (mb <= 0 || record_size == 0) return 1;
-    const uint64_t bytes = static_cast<uint64_t>(mb) * 1024ULL * 1024ULL;
+    constexpr uint64_t kMiB  = 1024 * 1024;
+    const uint64_t bytes = static_cast<uint64_t>(mb) * kMiB;
     const uint64_t cap   = bytes / record_size;
     return cap == 0 ? 1 : cap;
 }

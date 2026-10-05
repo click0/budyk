@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **The `exec()` allowlist is compared by resolved path.** Entries
+  were matched by spelling, so `/usr/bin//x` or `./` in a path slipped
+  past an exact entry, and an allowed path replaced by a symlink to
+  another program still matched. The list is now resolved with
+  `realpath(3)` when it is set, and the command's resolved path is
+  compared against it: a symlink to an allowed binary and a path with
+  `//` are allowed; an allowed path later re-pointed at another binary
+  is refused, because it resolved to the original when it was allowed.
+- **Start-up warnings for two risky set-ups.** A config or rules file
+  that group or others can write (whoever can write `rules.lua` runs
+  Lua as the daemon) gets a warning with its mode; `web.auth.enabled`
+  with a listen address off loopback gets one too, since budyk speaks
+  plain HTTP and the password and session cookie would travel in the
+  clear. The serve smoke test checks the first.
+
+### Fixed
+
+- **A data race between `HttpServer::stop()` and the accept loop.**
+  `stop()` closed the listening socket and wrote -1 into `listen_fd_`
+  while the loop thread read the same field for every `accept4()`.
+  ThreadSanitizer reported it on `test_http_server`. The field is
+  atomic now and the loop reads it once. No observed misbehaviour, but
+  a plain `int` shared between threads is undefined behaviour.
+
+### CI
+
+- **ThreadSanitizer job.** `-DENABLE_TSAN=ON` builds with
+  `-fsanitize=thread`; the new `Linux TSan` job runs every unit test
+  and the serve smoke test under it. The collector tick, the HTTP
+  thread and the Workers share the hot buffer, the rings, the hub and
+  the session store, and nothing checked those for races before. The
+  smoke scripts fail on a ThreadSanitizer report as they do on ASan.
+- **`-Wshadow -Wconversion -Wsign-conversion` everywhere.** The 31
+  warnings they produced (implicit sign changes between `int`, `size_t`
+  and `uint64_t`, `uint64_t` to `double`, one `~ECHO` into `tcflag_t`)
+  are fixed with explicit casts or typed constants; none was a bug.
+  Checked with GCC and with clang, which the FreeBSD jobs use with
+  `-Werror`.
+
 ## [0.6.4] — 2026-10-03
 
 A maintenance release, the rest of the code review after 0.6.3. Two

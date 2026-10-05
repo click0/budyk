@@ -72,11 +72,11 @@ int main() {
 
         // L3 → tier1 (raw)
         for (int i = 0; i < 3; ++i) {
-            assert(tm.store(mk(Level::L3, 1000ULL + i)) == 0);
+            assert(tm.store(mk(Level::L3, 1000ULL + static_cast<unsigned long long>(i))) == 0);
         }
         // L2 → tier2 (1-min aggregate)
         for (int i = 0; i < 2; ++i) {
-            assert(tm.store(mk(Level::L2, 2000ULL + i)) == 0);
+            assert(tm.store(mk(Level::L2, 2000ULL + static_cast<unsigned long long>(i))) == 0);
         }
         // L1 → tier3 (5-min aggregate)
         assert(tm.store(mk(Level::L1, 3000ULL)) == 0);
@@ -138,7 +138,7 @@ int main() {
 
         // Ten L3 samples at ts = 1000, 1100, ... 1900.
         for (int i = 0; i < 10; ++i) {
-            assert(tm.store(mk(Level::L3, 1000ULL + i * 100)) == 0);
+            assert(tm.store(mk(Level::L3, 1000ULL + static_cast<unsigned long long>(i) * 100)) == 0);
         }
 
         // Full read, no bounds → all 10, oldest-first.
