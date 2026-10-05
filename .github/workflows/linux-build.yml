@@ -135,6 +135,46 @@ jobs:
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
         run: tests/smoke/crash.sh build/src/budyk
 
+  # ThreadSanitizer: the collector tick, the HTTP thread and the Workers
+  # share the hot buffer, the rings, the hub and the session store. Every
+  # unit test plus the serve smoke test; any report fails the job.
+  tsan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    name: Linux TSan
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain and dependencies
+        run: |
+          set -ex
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            cmake g++ pkg-config python3 curl \
+            liblua5.4-dev libyaml-dev libargon2-dev libncurses-dev
+
+      - name: Configure
+        run: |
+          cmake -B build \
+            -DBUDYK_PLATFORM=linux \
+            -DSTATIC_LINK=OFF \
+            -DENABLE_TSAN=ON \
+            -DBUILD_TESTS=ON \
+            -DENABLE_WERROR=ON
+
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
+      - name: Run ctest
+        env:
+          TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Smoke-test the daemon
+        env:
+          TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1
+        run: tests/smoke/serve.sh build/src/budyk
+
   # cppcheck + clang-tidy (checks in .clang-tidy). Any finding fails the
   # job; suppress a false positive inline with a comment saying why.
   static-analysis:

@@ -11,6 +11,7 @@ extern "C" {
 }
 
 #include <cerrno>
+#include <climits>
 #include <strings.h>
 #include <cstdio>
 #include <cstdlib>
@@ -310,6 +311,16 @@ const std::vector<LuaRule>& LuaEngine::rules() const { return rules_; }
 
 void LuaEngine::set_exec_allowlist(std::vector<std::string> paths) {
     exec_allowlist_ = std::move(paths);
+    exec_allowlist_resolved_.clear();
+    for (const auto& p : exec_allowlist_) {
+        char buf[PATH_MAX];
+        const char* r = ::realpath(p.c_str(), buf);
+        exec_allowlist_resolved_.push_back(r != nullptr ? std::string(r) : p);
+    }
+}
+
+const std::vector<std::string>& LuaEngine::exec_allowlist_resolved() const {
+    return exec_allowlist_resolved_;
 }
 
 const std::vector<std::string>& LuaEngine::exec_allowlist() const {

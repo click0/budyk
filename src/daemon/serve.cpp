@@ -33,6 +33,7 @@
 
 #include <fcntl.h>
 #include <poll.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 // ----------------------------------------------------------------------------
@@ -80,7 +81,8 @@ void wake_collection_loop() {
 // any other poller) has no WebSocket, so a poll within kPollerWindowNs
 // counts as one connected client for the scheduler.
 static std::atomic<uint64_t> g_last_poll_ns{0};
-constexpr uint64_t kPollerWindowNs = 5ULL * 1000000000ULL;
+constexpr uint64_t kNsPerSec       = 1000000000;
+constexpr uint64_t kPollerWindowNs = 5 * kNsPerSec;
 
 void install_signal_handlers() {
     struct sigaction sa{};
@@ -94,6 +96,16 @@ void install_signal_handlers() {
     struct sigaction ign{};
     ign.sa_handler = SIG_IGN;
     ::sigaction(SIGPIPE, &ign, nullptr);
+}
+
+void warn_if_writable_by_others(const char* what, const char* path) {
+    struct stat st{};
+    if (path == nullptr || *path == '\0' || ::stat(path, &st) != 0) return;
+    if ((st.st_mode & (S_IWGRP | S_IWOTH)) == 0) return;
+    std::fprintf(stderr,
+        "budyk serve: WARNING: %s '%s' is writable by group or others (mode %04o); "
+        "whoever can write it controls this daemon\n",
+        what, path, static_cast<unsigned>(st.st_mode & 07777));
 }
 
 // Sleep for at most `ms` milliseconds, returning early when:
@@ -159,6 +171,22 @@ int cmd_serve(int argc, char* argv[], const char* version) {
     // CLI flags override config (operator intent on the command line wins).
     if (cli_enable_exec)   cfg.rules_enable_exec   = true;
     if (cli_enable_freeze) cfg.rules_enable_freeze = true;
+
+    // Anyone who can write the rules file runs Lua as this daemon, and
+    // anyone who can write the config decides what it does; say so when
+    // group or others can.
+    warn_if_writable_by_others("config", config_path);
+    if (cfg.rules_path[0] != '\0') warn_if_writable_by_others("rules file", cfg.rules_path);
+    // budyk speaks plain HTTP. With a password on and a non-loopback
+    // listen address, the password and the session cookie cross the
+    // network in the clear.
+    if (cfg.auth_enabled && std::strncmp(cfg.listen_addr, "127.", 4) != 0) {
+        std::fprintf(stderr,
+            "budyk serve: WARNING: web.auth is enabled but listen=%s is not loopback; "
+            "budyk serves plain HTTP, so the password and the session cookie travel "
+            "unencrypted. Bind to 127.0.0.1 and put a TLS reverse proxy in front.\n",
+            cfg.listen_addr);
+    }
 
     install_signal_handlers();
     if (::pipe2(g_wake_pipe, O_NONBLOCK | O_CLOEXEC) != 0) {
@@ -436,7 +464,7 @@ int cmd_serve(int argc, char* argv[], const char* version) {
     // whose `when` holds on the current sample.
     uint64_t level_hold_ns[budyk::kMaxLevelId + 1] = {};
     for (const auto& lv : cfg.scheduler.custom_levels) {
-        level_hold_ns[lv.id] = static_cast<uint64_t>(lv.hold_sec) * 1000000000ULL;
+        level_hold_ns[lv.id] = static_cast<uint64_t>(lv.hold_sec) * kNsPerSec;
     }
     std::vector<uint8_t> level_hits;
 
@@ -507,7 +535,7 @@ int cmd_serve(int argc, char* argv[], const char* version) {
         engine.eval_tick(s);
         for (const auto& e : engine.take_escalations()) {
             sched.request_by_name(e.level, now_realtime_ns() +
-                static_cast<uint64_t>(e.seconds) * 1000000000ULL);
+                static_cast<uint64_t>(e.seconds) * kNsPerSec);
         }
 
         {

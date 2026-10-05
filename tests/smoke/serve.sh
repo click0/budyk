@@ -35,6 +35,10 @@ watch("tick", { when = function() n = n + 1; return true end, action = "log", me
 watch("esc",  { when = function() return n == 3 end, action = function() escalate("L3", 2) end })
 EOF
 
+# The rules file is left group/world-writable on purpose: the daemon
+# must warn about it (whoever can write it runs Lua as the daemon).
+chmod 666 "$DIR/rules.lua"
+
 "$BIN" serve --config "$DIR/config.yaml" > "$DIR/log" 2>&1 &
 PID=$!
 
@@ -47,6 +51,11 @@ until curl -s -o /dev/null "http://127.0.0.1:$PORT/api/health"; do
 done
 
 fail=0
+if grep -q "rules file '$DIR/rules.lua' is writable by group or others" "$DIR/log"; then
+    echo "ok   warned about the world-writable rules file"
+else
+    echo "FAIL: no warning about the world-writable rules file"; fail=1
+fi
 expect() {   # expect <status> <path>
     got=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT$2")
     if [ "$got" != "$1" ]; then
@@ -135,7 +144,7 @@ if ! wait "$PID"; then
 fi
 PID=
 
-if grep -qE 'ERROR: (Address|Leak)Sanitizer|runtime error:' "$DIR/log"; then
+if grep -qE 'ERROR: (Address|Leak)Sanitizer|ThreadSanitizer|runtime error:' "$DIR/log"; then
     echo "FAIL: sanitizer report"; fail=1
 fi
 grep -q 'rules reloaded' "$DIR/log" || { echo "FAIL: SIGHUP reload not logged"; fail=1; }

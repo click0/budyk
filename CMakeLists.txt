@@ -19,7 +19,7 @@ add_compile_options(-D_FORTIFY_SOURCE=2 -fstack-protector-strong)
 # Warnings are always on. CI adds -DENABLE_WERROR=ON so a new warning
 # fails the build; a local or distro build with a newer compiler that
 # warns about something new still builds.
-add_compile_options(-Wall -Wextra)
+add_compile_options(-Wall -Wextra -Wshadow -Wconversion -Wsign-conversion)
 option(ENABLE_WERROR "Treat compiler warnings as errors (used by CI)" OFF)
 if(ENABLE_WERROR)
     add_compile_options(-Werror)
@@ -70,6 +70,23 @@ if(ENABLE_SANITIZERS)
                         -fno-sanitize-recover=all -fno-omit-frame-pointer -g)
     add_link_options(-fsanitize=address,undefined)
     message(STATUS "Sanitizers: address, undefined")
+endif()
+
+# ThreadSanitizer, for CI: two threads (collector tick, HTTP) plus the
+# Workers share the hot buffer, the rings, the hub and the session
+# store. Not combinable with ASan; -fno-sanitize-recover so a report
+# fails the test.
+option(ENABLE_TSAN "Build with ThreadSanitizer (needs STATIC_LINK=OFF)" OFF)
+if(ENABLE_TSAN)
+    if(STATIC_LINK)
+        message(FATAL_ERROR "ENABLE_TSAN needs -DSTATIC_LINK=OFF")
+    endif()
+    if(ENABLE_SANITIZERS)
+        message(FATAL_ERROR "ENABLE_TSAN and ENABLE_SANITIZERS cannot be combined")
+    endif()
+    add_compile_options(-fsanitize=thread -fno-sanitize-recover=all -fno-omit-frame-pointer -g)
+    add_link_options(-fsanitize=thread)
+    message(STATUS "Sanitizers: thread")
 endif()
 
 # Find dependencies

@@ -175,10 +175,10 @@ int main() {
             s[i].mem.available_percent = 30.0 - i;
             s[i].swap.used_percent     = 10.0 + i;
             s[i].load.avg_1m           = 0.5 + 0.1 * i;
-            s[i].disk.read_bytes_per_sec  = (uint64_t)(100ULL*1024*1024 + i*1024*1024);
-            s[i].disk.write_bytes_per_sec = (uint64_t)( 60ULL*1024*1024 + i*1024*1024);
-            s[i].net.rx_bytes_per_sec     = (uint64_t)( 20ULL*1024*1024 + i*1024*1024);
-            s[i].net.tx_bytes_per_sec     = (uint64_t)( 10ULL*1024*1024 + i*1024*1024);
+            s[i].disk.read_bytes_per_sec  = (uint64_t)(100ULL*1024*1024 + static_cast<unsigned long long>(i)*1024*1024);
+            s[i].disk.write_bytes_per_sec = (uint64_t)( 60ULL*1024*1024 + static_cast<unsigned long long>(i)*1024*1024);
+            s[i].net.rx_bytes_per_sec     = (uint64_t)( 20ULL*1024*1024 + static_cast<unsigned long long>(i)*1024*1024);
+            s[i].net.tx_bytes_per_sec     = (uint64_t)( 10ULL*1024*1024 + static_cast<unsigned long long>(i)*1024*1024);
         }
         std::string doc = suggest_rules_for_samples(s, 10);
         assert(contains(doc, "disk_read_high"));

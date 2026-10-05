@@ -832,6 +832,63 @@ int main() {
         ::rmdir(dir);
     }
 
+    // 36. The exec() allowlist is compared by realpath, resolved when the
+    //     list is set: a symlink to an allowed binary and a path with
+    //     "//" are allowed; an allowed path that is later re-pointed at
+    //     another binary is not.
+    if (access("/bin/true", X_OK) == 0 && access("/bin/false", X_OK) == 0) {
+        char tmpl[] = "/tmp/budyk_allow_XXXXXX";
+        const char* dir = ::mkdtemp(tmpl);
+        assert(dir != nullptr);
+        const std::string link = std::string(dir) + "/cmd";
+        assert(::symlink("/bin/true", link.c_str()) == 0);
+
+        auto run = [](LuaEngine& e, const std::string& cmd) {
+            // One rule whose when() runs the command inline; a rejected
+            // exec() raises, which eval_tick logs and counts as no hit.
+            const std::string src =
+                "watch('x', { when = function() local r = exec('" + cmd +
+                "', { timeout = 5, wait = true }) return r.ok == true end })\n";
+            assert(e.load_string(src.c_str()) == 0);
+            const int fired = e.eval_tick(mk(0, 0, 0, 0));
+            const std::string err = e.rules().back().last_error;
+            e.shutdown();
+            return std::make_pair(fired, err);
+        };
+
+        // Allowed by resolved identity, not by spelling.
+        {
+            LuaEngine e;
+            assert(e.init(true) == 0);
+            e.set_exec_allowlist({"/bin/true"});
+            auto [fired, err] = run(e, link);                 // symlink -> /bin/true
+            assert(fired == 1 && err.empty());
+        }
+        {
+            LuaEngine e;
+            assert(e.init(true) == 0);
+            e.set_exec_allowlist({"/bin/true"});
+            auto [fired, err] = run(e, "/bin//true");
+            assert(fired == 1 && err.empty());
+        }
+        // The allowed entry is the symlink; it resolved to /bin/true when
+        // set. Re-point it at /bin/false: the command's realpath no
+        // longer matches, so it is refused even though the spelling is
+        // exactly the allowed one.
+        {
+            LuaEngine e;
+            assert(e.init(true) == 0);
+            e.set_exec_allowlist({link});
+            assert(::unlink(link.c_str()) == 0);
+            assert(::symlink("/bin/false", link.c_str()) == 0);
+            auto [fired, err] = run(e, link);
+            assert(fired == 0);
+            assert(err.find("not in allowlist") != std::string::npos);
+        }
+        ::unlink(link.c_str());
+        ::rmdir(dir);
+    }
+
     std::printf("test_lua_engine: PASS\n");
     return 0;
 }

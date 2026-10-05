@@ -183,7 +183,7 @@ int yaml_rules_to_lua_file(const char* path, std::string* out) {
     std::fseek(f, 0, SEEK_SET);
 
     std::string text(static_cast<size_t>(sz), '\0');
-    if (sz > 0 && std::fread(&text[0], 1, sz, f) != static_cast<size_t>(sz)) {
+    if (sz > 0 && std::fread(&text[0], 1, static_cast<size_t>(sz), f) != static_cast<size_t>(sz)) {
         std::fclose(f);
         return -EIO;
     }

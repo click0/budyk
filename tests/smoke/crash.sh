@@ -134,7 +134,7 @@ kill -TERM "$PID"
 wait "$PID" || { echo "FAIL: daemon exited non-zero after SIGTERM"; fail=1; }
 PID=
 
-if grep -E "ERROR: (Address|Leak)Sanitizer|runtime error:" "$DIR/log"; then
+if grep -E "ERROR: (Address|Leak)Sanitizer|ThreadSanitizer|runtime error:" "$DIR/log"; then
     echo "FAIL: sanitizer report in the daemon log"; fail=1
 fi
 

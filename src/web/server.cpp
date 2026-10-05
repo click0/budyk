@@ -53,7 +53,8 @@ ssize_t read_until_headers(int fd, std::vector<char>* buf, Deadline deadline) {
         buf->insert(buf->end(), tmp, tmp + n);
         // Search just the new chunk plus 3-byte overlap.
         const size_t end = buf->size();
-        for (size_t i = (end > static_cast<size_t>(n) + 3 ? end - n - 3 : 0);
+        const size_t got = static_cast<size_t>(n);
+        for (size_t i = (end > got + 3 ? end - got - 3 : 0);
              i + 3 < end; ++i) {
             if ((*buf)[i] == '\r' && (*buf)[i + 1] == '\n' &&
                 (*buf)[i + 2] == '\r' && (*buf)[i + 3] == '\n') {
@@ -94,7 +95,7 @@ bool parse_headers(const char* buf, size_t end_offset, HttpRequest* req) {
     const char* sp1 = static_cast<const char*>(std::memchr(buf, ' ', llen));
     if (sp1 == nullptr) return false;
     const char* sp2 = static_cast<const char*>(
-        std::memchr(sp1 + 1, ' ', llen - (sp1 + 1 - buf)));
+        std::memchr(sp1 + 1, ' ', llen - static_cast<size_t>(sp1 + 1 - buf)));
     if (sp2 == nullptr) return false;
     req->method.assign(buf, sp1);
     req->path  .assign(sp1 + 1, sp2);
@@ -277,10 +278,15 @@ void HttpServer::set_io_timeout_ms(int ms) { io_timeout_ms_ = ms > 0 ? ms : 1; }
 int  HttpServer::io_timeout_ms() const     { return io_timeout_ms_; }
 
 void HttpServer::run_loop() {
+    // Read once: stop() closes the socket and writes -1 to listen_fd_
+    // from another thread, and the loop must not read the member while
+    // that happens (ThreadSanitizer reported the race). accept4 on the
+    // closed fd fails with EBADF and the loop ends.
+    const int lfd = listen_fd_;
     while (running_.load()) {
         sockaddr_in cli{};
         socklen_t   clen = sizeof(cli);
-        int cfd = ::accept4(listen_fd_, reinterpret_cast<sockaddr*>(&cli), &clen,
+        int cfd = ::accept4(lfd, reinterpret_cast<sockaddr*>(&cli), &clen,
                             SOCK_CLOEXEC);
         if (cfd < 0) {
             if (errno == EINTR) continue;
@@ -318,7 +324,7 @@ bool HttpServer::handle_client(int client_fd, const char* peer) {
 
     // Prefix bytes already in `buf` past the headers belong to the body.
     if (static_cast<size_t>(hdr_end) < buf.size()) {
-        req.body.assign(buf.data() + hdr_end, buf.size() - hdr_end);
+        req.body.assign(buf.data() + hdr_end, buf.size() - static_cast<size_t>(hdr_end));
     }
 
     // If Content-Length is set, pull the rest of the body off the wire.

@@ -10,6 +10,8 @@ extern "C" {
 #include <lua.h>
 }
 
+#include <climits>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -248,10 +250,14 @@ int exec_impl(lua_State* L, budyk::LuaEngine* eng, char* err, size_t err_cap) {
         std::snprintf(err, err_cap, "exec: path traversal (..) forbidden in argv[0]");
         return -1;
     }
-    const auto& allow = eng->exec_allowlist();
+    const auto& allow = eng->exec_allowlist_resolved();
     if (!allow.empty()) {
+        // Compare resolved paths (see LuaEngine::exec_allowlist_resolved).
+        char rbuf[PATH_MAX];
+        const char* r = ::realpath(cmd.c_str(), rbuf);
+        const std::string resolved = r != nullptr ? std::string(r) : cmd;
         bool found = false;
-        for (const auto& a : allow) if (a == cmd) { found = true; break; }
+        for (const auto& a : allow) if (a == resolved) { found = true; break; }
         if (!found) {
             std::snprintf(err, err_cap, "exec: '%s' not in allowlist", cmd.c_str());
             return -1;

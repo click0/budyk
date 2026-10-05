@@ -87,7 +87,9 @@ public:
     int  io_timeout_ms() const;
 
 private:
-    int                    listen_fd_   = -1;
+    // Written by start() and stop() on the caller's thread, read by the
+    // loop thread: atomic so the two never race (ThreadSanitizer).
+    std::atomic<int>       listen_fd_{-1};
     int                    bound_port_  = 0;
     int                    io_timeout_ms_ = 5000;
     int                    last_errno_    = 0;
