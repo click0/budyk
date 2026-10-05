@@ -137,6 +137,8 @@ on every target; a new implicit sign or width change is a build error in CI
 1. The collector tick runs on the main thread; HTTP on its own thread; slow
    work (alert delivery, `exec()`) on Worker threads with bounded queues.
 2. Lua rules are sandboxed: no `io`/`os`/`load`/`loadfile`/`dofile`/`require`;
+   the sample tables are read-only proxies, created once and updated in
+   place (`src/rules/lua_bindings.cpp`);
    `exec()` is gated by `--enable-exec` or `rules.exec.enabled` plus an
    allowlist; every call into Lua is limited to `rules.limits.instructions`
    (default 1 000 000) and the engine to `rules.limits.memory_mb`

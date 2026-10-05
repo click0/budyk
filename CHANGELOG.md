@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Sample tables are read-only to rules.** `cpu`, `mem`, `swap`,
+  `load`, `disk`, `net`, `proc`, `entropy`, `self_` and `thermal` were
+  ordinary Lua tables, so a rule that wrote `cpu.total_percent = ...`
+  changed what every later rule saw on that tick, although the header
+  and spec §3.6 said the values were read-only. They are now proxies:
+  an assignment raises "cpu.total_percent is read-only" at the rule's
+  line (logged once, like any rule error), `pairs()` still iterates the
+  fields, `getmetatable()` returns "read-only" and `setmetatable()`
+  cannot replace it. A rule that reassigns the global or `rawset()`s a
+  field affects that tick at most.
+- **The session cookie is `Secure` behind a TLS proxy.** When the
+  login request carries `X-Forwarded-Proto: https`, the cookie (and the
+  logout cookie) get `Secure`, so the browser never sends the session
+  token over plain HTTP. Plain-HTTP requests keep the old attributes,
+  since a `Secure` cookie would not be sent back at all.
+
 - **The `exec()` allowlist is compared by resolved path.** Entries
   were matched by spelling, so `/usr/bin//x` or `./` in a path slipped
   past an exact entry, and an allowed path replaced by a symlink to
@@ -32,6 +48,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ThreadSanitizer reported it on `test_http_server`. The field is
   atomic now and the loop reads it once. No observed misbehaviour, but
   a plain `int` shared between threads is undefined behaviour.
+
+### Changed
+
+- **No Lua tables allocated per tick.** The ten sample tables were
+  created afresh twice a tick (for the custom-level conditions and for
+  the rules) and left to the garbage collector (review M6). They are
+  created once and updated in place now. `test_rule_perf`: median
+  about 11 µs per tick (was about 13), p99 about 25 µs (was 50-70), and
+  the slowest tick under 0.1 ms (was up to 1 ms) — the collector
+  pauses are gone from the tail.
 
 ### CI
 

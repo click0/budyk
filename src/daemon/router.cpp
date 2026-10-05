@@ -17,6 +17,35 @@
 
 namespace budyk {
 
+namespace {
+
+// True when the browser reached us over HTTPS through a reverse proxy:
+// the proxy says so in X-Forwarded-Proto (the first entry, when proxies
+// are chained). budyk itself speaks plain HTTP, and the start-up warning
+// for a non-loopback listen address recommends exactly such a proxy.
+// A client that sends the header itself only makes its own cookie
+// stricter.
+bool via_https(const HttpRequest& req) {
+    std::string proto = req.header("X-Forwarded-Proto");
+    const size_t comma = proto.find(',');
+    if (comma != std::string::npos) proto.resize(comma);
+    while (!proto.empty() && (proto.back() == ' ' || proto.back() == '\t')) proto.pop_back();
+    size_t b = 0;
+    while (b < proto.size() && (proto[b] == ' ' || proto[b] == '\t')) ++b;
+    return ascii_ieq(proto.substr(b), "https");
+}
+
+// Attributes of the session cookie: HttpOnly and SameSite=Strict always,
+// Secure when the request came over HTTPS, so the browser never sends
+// the bearer token over plain HTTP.
+std::string cookie_attrs(const HttpRequest& req) {
+    std::string a = "; HttpOnly; Path=/; SameSite=Strict";
+    if (via_https(req)) a += "; Secure";
+    return a;
+}
+
+} // namespace
+
 HttpHandler make_router(const RouterDeps& d) {
     return [d](const HttpRequest& req) -> HttpResponse {
         const Config&   cfg           = *d.cfg;
@@ -104,7 +133,7 @@ HttpHandler make_router(const RouterDeps& d) {
             r.content_type = "application/json";
             r.body         = "{\"ok\":true}\n";
             r.extra_headers.push_back({"Set-Cookie",
-                "budyk_session=" + tok + "; HttpOnly; Path=/; SameSite=Strict"});
+                "budyk_session=" + tok + cookie_attrs(req)});
             return r;
         }
 
@@ -116,7 +145,7 @@ HttpHandler make_router(const RouterDeps& d) {
             }
             budyk::HttpResponse r{200, "application/json", "{\"ok\":true}\n"};
             r.extra_headers.push_back({"Set-Cookie",
-                "budyk_session=; HttpOnly; Path=/; Max-Age=0"});
+                "budyk_session=" + cookie_attrs(req) + "; Max-Age=0"});
             return r;
         }
 

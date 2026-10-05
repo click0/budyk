@@ -147,10 +147,32 @@ int main() {
         assert(w.handler(get("/api/levels", cookie)).status  == 200);
         assert(w.handler(get("/api/samples", "budyk_session=forged")).status == 401);
 
+        // Plain HTTP: no Secure (the browser would drop the cookie).
+        assert(!has(set, "Secure"));
+        // Behind a TLS proxy: Secure, whatever the case or a proxy chain.
+        for (const char* proto : {"https", "HTTPS", "https, http", " https "}) {
+            HttpRequest via = post("/api/auth/login", "{\"password\":\"hunter2\"}", "10.0.0.3");
+            via.headers.push_back({"X-Forwarded-Proto", proto});
+            r = w.handler(via);
+            assert(r.status == 200);
+            assert(has(header(r, "Set-Cookie"), "; Secure"));
+            assert(has(header(r, "Set-Cookie"), "HttpOnly"));
+        }
+        for (const char* proto : {"http", "http, https", ""}) {
+            HttpRequest via = post("/api/auth/login", "{\"password\":\"hunter2\"}", "10.0.0.3");
+            via.headers.push_back({"X-Forwarded-Proto", proto});
+            r = w.handler(via);
+            assert(r.status == 200);
+            assert(!has(header(r, "Set-Cookie"), "Secure"));
+        }
+
         HttpRequest lo = post("/api/auth/logout", "");
         lo.headers.push_back({"Cookie", cookie});
+        lo.headers.push_back({"X-Forwarded-Proto", "https"});
         r = w.handler(lo);
         assert(r.status == 200 && has(header(r, "Set-Cookie"), "Max-Age=0"));
+        assert(has(header(r, "Set-Cookie"), "; Secure"));
+        assert(has(header(r, "Set-Cookie"), "budyk_session=;"));
         assert(w.handler(get("/api/samples", cookie)).status == 401);   // revoked
         // Logout without a cookie is harmless.
         assert(w.handler(post("/api/auth/logout", "")).status == 200);

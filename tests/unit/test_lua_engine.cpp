@@ -889,6 +889,77 @@ int main() {
         ::rmdir(dir);
     }
 
+    // 37. Sample tables are read-only proxies, created once and updated in
+    //     place (spec §3.6, review M6):
+    //     - assigning a field raises, names the field, and the next rule
+    //       still sees the real value;
+    //     - the global is the same table from tick to tick, with new values;
+    //     - pairs() iterates the real fields; getmetatable() says
+    //       "read-only" and setmetatable() cannot replace it;
+    //     - a rule that replaces the global, or rawset()s onto the proxy,
+    //       affects that tick at most.
+    {
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        assert(e.load_string(
+            "tick = 0\n"
+            "watch('writer', { when = function() cpu.total_percent = 0 return true end })\n"
+            "watch('reader', { when = function() return cpu.total_percent > 50 end })\n"
+            "watch('same', { when = function()\n"
+            "  tick = tick + 1\n"
+            "  if tick == 1 then first = cpu return false end\n"
+            "  return rawequal(cpu, first) and cpu.total_percent == 20\n"
+            "end })\n"
+            "watch('pairs', { when = function()\n"
+            "  local n = 0\n"
+            "  for k, v in pairs(cpu) do n = n + 1 end\n"
+            "  return n == 2\n"
+            "end })\n"
+            "watch('meta', { when = function()\n"
+            "  local ok = pcall(setmetatable, cpu, nil)\n"
+            "  return getmetatable(cpu) == 'read-only' and not ok\n"
+            "end })\n") == 0);
+
+        // Tick 1: cpu 90. 'writer' errors; 'reader' still sees 90.
+        assert(e.eval_tick(mk(90.0, 50.0, 0.1, 0.0)) == 3);   // reader, pairs, meta
+        assert(e.rules()[0].fire_count == 0);
+        assert(e.rules()[0].last_error.find("cpu.total_percent is read-only") != std::string::npos);
+        // ...prefixed with the rule's chunk and line, like any Lua error.
+        assert(e.rules()[0].last_error.find("]:2: cpu.total_percent") != std::string::npos);
+        assert(e.rules()[1].fire_count == 1);
+        assert(e.rules()[2].fire_count == 0);                  // stashed the table
+        // Tick 2: cpu 20. The same table, the new value.
+        assert(e.eval_tick(mk(20.0, 50.0, 0.1, 0.0)) == 3);   // same, pairs, meta
+        assert(e.rules()[1].fire_count == 1);                  // 20 is not > 50
+        assert(e.rules()[2].fire_count == 1);
+        assert(e.rules()[3].fire_count == 2 && e.rules()[4].fire_count == 2);
+        e.shutdown();
+    }
+    {
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        assert(e.load_string(
+            "t = 0\n"
+            "watch('clobber', { when = function()\n"
+            "  t = t + 1\n"
+            "  if t == 1 then rawset(cpu, 'total_percent', -1) mem = nil end\n"
+            "  return false\n"
+            "end })\n"
+            "watch('see', { when = function()\n"
+            "  seen_cpu = cpu.total_percent\n"
+            "  seen_mem = mem and mem.available_percent\n"
+            "  return true\n"
+            "end })\n") == 0);
+        // Tick 1: the bypasses work within the tick...
+        assert(e.load_string("seen_cpu = nil seen_mem = nil") == 0);
+        assert(e.eval_tick(mk(90.0, 25.0, 0.1, 0.0)) == 1);
+        assert(e.load_string("assert(seen_cpu == -1 and seen_mem == nil)") == 0);
+        // ...and are gone on the next one.
+        assert(e.eval_tick(mk(70.0, 30.0, 0.1, 0.0)) == 1);
+        assert(e.load_string("assert(seen_cpu == 70 and seen_mem == 30)") == 0);
+        e.shutdown();
+    }
+
     std::printf("test_lua_engine: PASS\n");
     return 0;
 }
