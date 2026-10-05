@@ -183,7 +183,9 @@ HttpHandler make_router(const RouterDeps& d) {
         //     since  — lower bound on timestamp_nanos (default 0 = all)
         //     until  — upper bound, 0 = now (default 0)
         //     tier   — 1 raw L3 / 2 1-min L2 / 3 5-min L1 (default 1)
-        //     limit  — max samples returned, newest kept (default+cap 5000)
+        //     limit  — max samples returned, newest kept (default+cap 5000);
+        //              with level=all, thinned over the window, the newest
+        //              sample always included
         {
             std::string rpath, rquery;
             split_target(req.path, &rpath, &rquery);

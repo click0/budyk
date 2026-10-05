@@ -75,7 +75,8 @@ src/cli/           — the one-shot commands: hash-password, suggest-rules,
                      watch-files, tui
 src/main.cpp       — dispatch only
 tests/unit/        — one assert()-based executable per module (ctest)
-tests/smoke/       — serve.sh (HTTP, WS, SIGHUP, fd check) and crash.sh (SIGKILL + restart)
+tests/smoke/       — serve.sh (HTTP, WS, SIGHUP, fd check), crash.sh (SIGKILL +
+                     restart), warm_grace.sh (hot buffer emptied after warm_grace)
 addons/            — FreeBSD port + rc.d, systemd unit, Docker
 docs/              — spec (en/uk), man page
 ```
@@ -89,6 +90,7 @@ cmake --build build -j
 ctest --test-dir build                   # unit tests
 tests/smoke/serve.sh build/src/budyk     # daemon: endpoints, WS, SIGHUP, close-on-exec
 tests/smoke/crash.sh build/src/budyk     # daemon: SIGKILL + restart, at most one record lost
+tests/smoke/warm_grace.sh build/src/budyk  # daemon: hot buffer emptied after warm_grace
 ```
 
 CI (see `.github/workflows/linux-build.yml`) adds `-DENABLE_WERROR=ON`, runs
@@ -143,7 +145,8 @@ on every target; a new implicit sign or width change is a build error in CI
    allowlist; every call into Lua is limited to `rules.limits.instructions`
    (default 1 000 000) and the engine to `rules.limits.memory_mb`
    (default 16). A runaway rule gets an error, not the daemon.
-3. The hot buffer is RAM-only and never touches disk.
+3. The hot buffer is RAM-only and never touches disk; it is emptied once no
+   client has been connected for `hot_buffer.warm_grace` (`WarmGrace`).
 4. Storage records carry an absolute timestamp, a level marker and a CRC32C;
    each level has its own ring; `write_idx` is advanced only after the
    `pwrite`, so a crash loses at most one record (`tests/smoke/crash.sh`).
@@ -185,13 +188,10 @@ on every target; a new implicit sign or width change is a build error in CI
 - No `fsck`; damaged records are skipped on read.
 - Every collector runs at every level; no per-level metric sets, no
   `collection.mode`.
-- `hot_buffer.warm_grace` is parsed but not applied.
 - No L2 → L3 escalation on a sustained anomaly.
 - Rule semantics that differ from §3.6: `cooldown` defaults to 0; a `nil`
   from `when()` resets the sustain counter; `action = { alert, exec(...) }`
   tables are rejected; `alert()` emits no WebSocket event.
-- `/api/range?level=all` thins evenly across time, so a small `limit` does
-  not return the newest samples.
 - No Doxygen, no deb/rpm, no cross-compilation toolchains, FreeBSD 13 not in CI.
 
 ### Kept on purpose for later milestones (do not remove as dead code)

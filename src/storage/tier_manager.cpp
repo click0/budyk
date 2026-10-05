@@ -287,7 +287,9 @@ int TierManager::query_ring_spread(const RingFile* ring, int override_level,
     int added = 0;
     uint64_t prev = UINT64_MAX;
     for (uint64_t k = 0; k < take; ++k) {
-        const uint64_t idx = take == 1 ? first
+        // Evenly spread, both ends included; one record means the newest,
+        // as everywhere else a limit applies.
+        const uint64_t idx = take == 1 ? end - 1
                            : first + (k * (count - 1)) / (take - 1);
         if (idx == prev) continue;
         prev = idx;

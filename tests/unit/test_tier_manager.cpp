@@ -379,6 +379,36 @@ int main() {
         assert(tm.last_error().find(std::strerror(ENOENT)) != std::string::npos);
     }
 
+    // N+6. A limit of 1 returns the newest sample in the window, from
+    //      query_all() as from the per-level queries. Each ring used to
+    //      contribute its oldest record when the spread was one record
+    //      wide, so /api/range?level=all&limit=1 answered with a sample
+    //      from the start of the window.
+    {
+        const std::string d = mkdtmp();
+        TierManager tm;
+        assert(tm.init(d.c_str(), 1, 1, 1) == 0);
+        for (uint64_t i = 0; i < 10; ++i) {
+            assert(tm.store(mk(Level::L3, 1000 + i)) == 0);   // 1000..1009
+            assert(tm.store(mk(Level::L1, 2000 + i)) == 0);   // 2000..2009
+        }
+        std::vector<Sample> one;
+        assert(tm.query_all(0, 0, 1, &one) == 1);
+        assert(one[0].timestamp_nanos == 2009 && one[0].level == Level::L1);
+        one.clear();
+        assert(tm.query_all(0, 1500, 1, &one) == 1);          // within a window
+        assert(one[0].timestamp_nanos == 1009);
+        one.clear();
+        assert(tm.query_level(Level::L3, 0, 0, 1, &one) == 1);
+        assert(one[0].timestamp_nanos == 1009);
+        // Two or more still span the window end to end.
+        std::vector<Sample> two;
+        assert(tm.query_all(0, 0, 2, &two) == 2);
+        assert(two[0].timestamp_nanos < 1010 && two[1].timestamp_nanos == 2009);
+        tm.close();
+        rmrf(d);
+    }
+
     std::printf("test_tier_manager: PASS\n");
     return 0;
 }

@@ -460,6 +460,10 @@ int cmd_serve(int argc, char* argv[], const char* version) {
     // and the table (and sessions.tsv) would hold every past login.
     time_t next_session_purge = next_state_save;
 
+    // hot_buffer.warm_grace: empty the hot buffer once no client has been
+    // connected for this long (see WarmGrace).
+    budyk::WarmGrace warm(static_cast<uint64_t>(cfg.hot_buffer_warm_grace) * kNsPerSec);
+
     // Hold time per custom level id, and a reusable list of the levels
     // whose `when` holds on the current sample.
     uint64_t level_hold_ns[budyk::kMaxLevelId + 1] = {};
@@ -517,6 +521,10 @@ int cmd_serve(int argc, char* argv[], const char* version) {
                 ++clients;
             }
             sched.set_client_count(clients);
+            if (warm.should_reset(clients, s.timestamp_nanos)) {
+                std::lock_guard<std::mutex> g(hot_mtx);
+                hot.reset();
+            }
         }
         // Custom levels whose `when` holds on this sample stay requested
         // for their hold time (0 = this tick only).
@@ -559,7 +567,15 @@ int cmd_serve(int argc, char* argv[], const char* version) {
         // this sleep, not only from the next tick. The sample's own level
         // holds until the next tick re-checks its condition.
         const budyk::Level next = sched.higher(s.level, sched.select(now_realtime_ns()));
-        interruptible_sleep(sched.interval_ms(next));
+        // Wake for the warm-grace reset too, or an L1 sleep of minutes
+        // would leave stale samples for the next client's catch-up.
+        int sleep_ms = sched.interval_ms(next);
+        const uint64_t due_ns = warm.ns_until_due(now_realtime_ns());
+        if (due_ns != UINT64_MAX) {
+            const uint64_t due_ms = due_ns / 1000000 + 1;
+            if (due_ms < static_cast<uint64_t>(sleep_ms)) sleep_ms = static_cast<int>(due_ms);
+        }
+        interruptible_sleep(sleep_ms);
     }
 
     std::fprintf(stderr, "budyk serve: shutting down\n");
