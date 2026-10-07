@@ -16,7 +16,10 @@ bool write_private_tmp(const char* prefix, const std::string& body,
     const char* dir = std::getenv("TMPDIR");
     if (dir == nullptr || *dir == '\0') dir = "/tmp";
     const int n = std::snprintf(path_out, cap, "%s/%sXXXXXX", dir, prefix);
-    if (n < 0 || static_cast<size_t>(n) >= cap) return false;
+    if (n < 0 || static_cast<size_t>(n) >= cap) {
+        errno = ENAMETOOLONG;
+        return false;
+    }
 
     const int fd = ::mkstemp(path_out);
     if (fd < 0) return false;
@@ -26,8 +29,10 @@ bool write_private_tmp(const char* prefix, const std::string& body,
         const ssize_t w = ::write(fd, body.data() + done, body.size() - done);
         if (w < 0) {
             if (errno == EINTR) continue;
+            const int err = errno;
             ::close(fd);
             ::unlink(path_out);
+            errno = err;
             return false;
         }
         done += static_cast<size_t>(w);

@@ -220,6 +220,7 @@ int cmd_serve(int argc, char* argv[], const char* version) {
 
     budyk::TierManager tm;
     std::vector<budyk::LevelRingSpec> level_rings;
+    level_rings.reserve(cfg.scheduler.custom_levels.size());
     for (const auto& lv : cfg.scheduler.custom_levels) {
         level_rings.push_back(budyk::LevelRingSpec{lv.id, lv.name, lv.storage_mb});
     }

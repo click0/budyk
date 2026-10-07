@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #include "rules/yaml_compat.h"
+#include "core/parse_int.h"
 #include "util/yaml_dom.h"
 
 extern "C" {
@@ -7,6 +8,7 @@ extern "C" {
 }
 
 #include <cerrno>
+#include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -69,6 +71,12 @@ int transpile_rule(yaml_document_t* doc, const yaml_node_t* item,
     const char* action    = yaml_scalar(yaml_find_key(doc, item, "action"));
     const char* message   = yaml_scalar(yaml_find_key(doc, item, "message"));
 
+    // Whole non-negative integers; "5s", "-1" or "abc" is an error, not
+    // a silently dropped field.
+    long for_ticks_v = 0, cooldown_v = 0;
+    if (for_ticks != nullptr && !parse_int_full(for_ticks, 0, INT_MAX, &for_ticks_v)) return -EINVAL;
+    if (cooldown  != nullptr && !parse_int_full(cooldown,  0, INT_MAX, &cooldown_v))  return -EINVAL;
+
     if (severity == nullptr || !valid_severity(severity)) severity = "warning";
     if (action   == nullptr)                              action   = "alert";
     if (message  == nullptr)                              message  = name;
@@ -101,21 +109,15 @@ int transpile_rule(yaml_document_t* doc, const yaml_node_t* item,
     }
     *out += " end,\n";
 
-    if (for_ticks != nullptr) {
-        const int v = std::atoi(for_ticks);
-        if (v > 0) {
-            char tmp[64];
-            std::snprintf(tmp, sizeof(tmp), "  for_ticks = %d,\n", v);
-            *out += tmp;
-        }
+    if (for_ticks_v > 0) {
+        char tmp[64];
+        std::snprintf(tmp, sizeof(tmp), "  for_ticks = %ld,\n", for_ticks_v);
+        *out += tmp;
     }
     if (cooldown != nullptr) {
-        const int v = std::atoi(cooldown);
-        if (v >= 0) {
-            char tmp[64];
-            std::snprintf(tmp, sizeof(tmp), "  cooldown = %d,\n", v);
-            *out += tmp;
-        }
+        char tmp[64];
+        std::snprintf(tmp, sizeof(tmp), "  cooldown = %ld,\n", cooldown_v);
+        *out += tmp;
     }
     *out += "})\n";
     return 0;

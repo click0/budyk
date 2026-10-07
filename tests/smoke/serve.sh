@@ -69,6 +69,21 @@ if [ "$ring_mode" = 600 ]; then
 else
     echo "FAIL: tier1.ring has mode $ring_mode, expected 600"; fail=1
 fi
+# Numbers on the command line are parsed whole (atoi() read "99999" as
+# a port and "5s" as 5 ms): a bad one is an error that names it.
+cli_rejects() {   # cli_rejects <expected message> <args...>
+    msg=$1; shift
+    if "$BIN" "$@" > /dev/null 2> "$DIR/cli.err" < /dev/null; then
+        echo "FAIL: budyk $* succeeded"; fail=1
+    elif ! grep -qF -- "$msg" "$DIR/cli.err"; then
+        echo "FAIL: budyk $*: no '$msg' in: $(cat "$DIR/cli.err")"; fail=1
+    else
+        echo "ok   budyk $* -> rejected"
+    fi
+}
+cli_rejects "--port wants a number from 1 to 65535, got '99999'" tui --port 99999
+cli_rejects "--timeout wants milliseconds (-1 for none), got '5s'" watch-files --timeout 5s "$DIR"
+
 expect() {   # expect <status> <path>
     got=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT$2")
     if [ "$got" != "$1" ]; then

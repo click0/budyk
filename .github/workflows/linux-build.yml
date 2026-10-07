@@ -6,6 +6,10 @@ name: Linux Build
 #
 # This complements the FreeBSD workflows — it is the cheapest signal and
 # runs on every push/PR.
+#
+# apt runs with a 30 s per-request timeout and three retries
+# (80-ci-timeouts): a mirror that stops answering otherwise holds the job
+# until its timeout-minutes.
 
 on:
   push:
@@ -42,6 +46,8 @@ jobs:
       - name: Install toolchain and dependencies
         run: |
           set -ex
+          echo 'Acquire::Retries "3"; Acquire::http::Timeout "30";' \
+            | sudo tee /etc/apt/apt.conf.d/80-ci-timeouts > /dev/null
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
             cmake g++ pkg-config \
@@ -100,6 +106,8 @@ jobs:
       - name: Install toolchain and dependencies
         run: |
           set -ex
+          echo 'Acquire::Retries "3"; Acquire::http::Timeout "30";' \
+            | sudo tee /etc/apt/apt.conf.d/80-ci-timeouts > /dev/null
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
             cmake g++ pkg-config python3 curl \
@@ -154,6 +162,8 @@ jobs:
       - name: Install toolchain and dependencies
         run: |
           set -ex
+          echo 'Acquire::Retries "3"; Acquire::http::Timeout "30";' \
+            | sudo tee /etc/apt/apt.conf.d/80-ci-timeouts > /dev/null
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
             cmake g++ pkg-config python3 curl \
@@ -183,6 +193,7 @@ jobs:
 
   # cppcheck + clang-tidy (checks in .clang-tidy). Any finding fails the
   # job; suppress a false positive inline with a comment saying why.
+  # The whitespace rules from .editorconfig are checked here too.
   static-analysis:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -190,9 +201,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Whitespace (trailing blanks, tabs, CR, final newline)
+        run: tests/check_whitespace.sh
+
       - name: Install tools and dependencies
         run: |
           set -ex
+          echo 'Acquire::Retries "3"; Acquire::http::Timeout "30";' \
+            | sudo tee /etc/apt/apt.conf.d/80-ci-timeouts > /dev/null
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
             cmake g++ pkg-config cppcheck clang-tidy \
@@ -229,6 +245,8 @@ jobs:
       - name: Install toolchain and dependencies
         run: |
           set -ex
+          echo 'Acquire::Retries "3"; Acquire::http::Timeout "30";' \
+            | sudo tee /etc/apt/apt.conf.d/80-ci-timeouts > /dev/null
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
             cmake g++ pkg-config python3 curl lcov \

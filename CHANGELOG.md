@@ -22,6 +22,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Ring files are created 0600.** They were 0644, so any local user
   could read the history (load, memory, process counts, file-watch
   events). Existing files keep their mode.
+- **`suggest-rules --ai` runs curl without a shell.** The curl command
+  line was put together as a string from the temp-file paths and run
+  with `popen(3)`. Those paths come from `$TMPDIR`, so a `TMPDIR` with
+  a space broke the call and one with `;`, `$(...)` or backquotes ran
+  commands. curl is now started directly (fork + exec, as the alert
+  channels do), the response and curl's own error message go to
+  private temp files, and a failure says what went wrong ("curl(1)
+  exited with status 6: Could not resolve host ...", or the API's error
+  body) instead of `rc=-4`. The unit test runs it against a stand-in
+  `curl` with such a `TMPDIR`.
 
 - **Sample tables are read-only to rules.** `cpu`, `mem`, `swap`,
   `load`, `disk`, `net`, `proc`, `entropy`, `self_` and `thermal` were
@@ -89,6 +99,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   returning client keeps the buffer, a clock step back re-anchors), and
   the new `tests/smoke/warm_grace.sh` checks it on the daemon: a client
   5 s after a 4 s session gets a 1-sample catch-up instead of 7.
+- **Temp-file paths fit any `$TMPDIR`.** Alert delivery and the LLM
+  client built their temp-file paths in 64-byte buffers, so a `TMPDIR`
+  longer than about 45 characters made every alert fail. The buffers
+  are `PATH_MAX` now, and a path that still does not fit is reported as
+  `ENAMETOOLONG`.
+- **Numbers are parsed whole.** `budyk tui --port`, `budyk watch-files
+  --timeout` and the YAML rules' `for_ticks` and `cooldown` went
+  through `atoi()`: `--port 99999` tried port 99999, `--timeout 5s`
+  meant 5 ms, `for_ticks: 5s` meant 5, and `cooldown: -1` or `abc`
+  dropped the field without a word. A value that is not a whole number
+  in range is now an error naming it (a YAML rule with one is rejected,
+  like a rule without `when`). The TUI no longer wraps an out-of-range
+  level id or interval from `/api/levels` into a small number.
 - **`/api/range?...&limit=1` returns the newest sample.** With a limit
   of one, each ring contributed its *oldest* record in the window, so
   `level=all&limit=1` answered with a sample from the start of the
@@ -97,6 +120,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Release by default, with more hardening.** A plain `cmake -B
+  build` set no build type: no optimisation, no `NDEBUG`, and
+  `_FORTIFY_SOURCE=2` did nothing without optimisation. The default is
+  now Release (RelWithDebInfo for the sanitizer builds); a Debug build
+  goes without `_FORTIFY_SOURCE`. Every build gets
+  `-fstack-protector-strong` as before, plus `-fstack-clash-protection`,
+  `-fcf-protection=full` and `-z relro -z now` where the compiler and
+  linker take them. GCC's TSan build, now optimised, keeps
+  `-Warray-bounds` as a warning rather than an error: GCC 12/13 report
+  a false positive inside libstdc++'s `std::string` there.
 - **No Lua tables allocated per tick.** The ten sample tables were
   created afresh twice a tick (for the custom-level conditions and for
   the rules) and left to the garbage collector (review M6). They are
@@ -107,6 +140,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### CI
 
+- **FreeBSD: the static build and the smoke scripts.** The FreeBSD
+  jobs built only the port's configuration (shared) and ran the unit
+  tests; the static binary the release ships was built only on a tag,
+  without tests, and the smoke scripts never ran on FreeBSD. Each
+  FreeBSD job now also builds the static configuration with `-Werror`,
+  checks it is statically linked, runs the unit tests against it, and
+  runs `serve.sh`, `crash.sh` and `warm_grace.sh` on it.
+- **More clang-tidy checks.** `performance-*`, `portability-*`,
+  `cert-err34-c` (string-to-number conversions that cannot report an
+  error) and `cert-env33-c` (`system`/`popen`) join `bugprone-*` and
+  `clang-analyzer-*`. They found the `atoi()` calls and the `popen()`
+  above and one missing `reserve()`; the collectors, which `sscanf`
+  kernel-formatted text and check the match count, are exempt from
+  `cert-err34-c` (`src/collector/.clang-tidy`).
+- **Whitespace check and `.editorconfig`.** `tests/check_whitespace.sh`
+  (run by the static-analysis job) fails on trailing blanks, tabs
+  outside Makefiles, carriage returns and a missing final newline;
+  `.editorconfig` sets the same defaults for editors. There is no
+  clang-format configuration: the code has a consistent hand-kept
+  layout (aligned declarations and tables) that a formatter would
+  churn, so formatting stays a review matter.
+- **apt gives up on a hung mirror.** The Ubuntu jobs run apt with a
+  30 s per-request timeout and three retries; a mirror that stopped
+  answering used to hold a job until its `timeout-minutes` ran out.
+- **One helper per unit test.** `tests/CMakeLists.txt` declares each
+  test with `budyk_add_test(name LIBS ... [INCLUDES ...] [ARGS ...])`
+  instead of four repeated commands; the set of tests and how they run
+  is unchanged.
 - **ThreadSanitizer job.** `-DENABLE_TSAN=ON` builds with
   `-fsanitize=thread`; the new `Linux TSan` job runs every unit test
   and the serve smoke test under it. The collector tick, the HTTP

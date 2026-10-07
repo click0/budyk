@@ -1,5 +1,4 @@
 # SPDX-License-Identifier: BSD-3-Clause
-# TODO: add cmocka (C) and/or gtest (C++) tests
 
 # The tests are plain assert()s, many of which call the code under test.
 # A Release / RelWithDebInfo build defines NDEBUG, which would compile
@@ -7,173 +6,82 @@
 # Keep assert() live in the tests whatever the build type.
 add_compile_options(-UNDEBUG)
 
-add_executable(test_codec unit/test_codec.cpp)
-target_link_libraries(test_codec PRIVATE budyk_core)
-target_include_directories(test_codec PRIVATE ${CMAKE_SOURCE_DIR}/src)
-add_test(NAME test_codec COMMAND test_codec)
+# budyk_add_test(<name> LIBS <lib>... [INCLUDES <dir>...] [ARGS <arg>...])
+#
+# One unit test: unit/<name>.cpp built into <name>, linked against LIBS,
+# with src/ (plus INCLUDES) on the include path, registered with ctest
+# as <name> and run with ARGS.
+function(budyk_add_test name)
+    cmake_parse_arguments(T "" "" "LIBS;INCLUDES;ARGS" ${ARGN})
+    add_executable(${name} unit/${name}.cpp)
+    target_link_libraries(${name} PRIVATE ${T_LIBS})
+    target_include_directories(${name} PRIVATE ${CMAKE_SOURCE_DIR}/src ${T_INCLUDES})
+    add_test(NAME ${name} COMMAND ${name} ${T_ARGS})
+endfunction()
 
-add_executable(test_storage_codec unit/test_storage_codec.cpp)
-target_link_libraries(test_storage_codec PRIVATE budyk_storage budyk_core)
-target_include_directories(test_storage_codec PRIVATE ${CMAKE_SOURCE_DIR}/src)
-add_test(NAME test_storage_codec COMMAND test_storage_codec)
+# core, storage, scheduler, hot buffer
+budyk_add_test(test_codec           LIBS budyk_core)
+budyk_add_test(test_parse_int       LIBS budyk_core)
+budyk_add_test(test_storage_codec   LIBS budyk_storage budyk_core)
+budyk_add_test(test_hot_buffer      LIBS budyk_hot_buffer budyk_core)
+budyk_add_test(test_scheduler       LIBS budyk_scheduler budyk_core)
+budyk_add_test(test_ring_file       LIBS budyk_storage budyk_core)
+budyk_add_test(test_tier_aggregator LIBS budyk_storage budyk_core)
+budyk_add_test(test_tier_manager    LIBS budyk_storage budyk_core)
 
-add_executable(test_hot_buffer unit/test_hot_buffer.cpp)
-target_link_libraries(test_hot_buffer PRIVATE budyk_hot_buffer budyk_core)
-target_include_directories(test_hot_buffer PRIVATE ${CMAKE_SOURCE_DIR}/src)
-add_test(NAME test_hot_buffer COMMAND test_hot_buffer)
+# AI suggestions
+budyk_add_test(test_baseline        LIBS budyk_ai budyk_core)
+budyk_add_test(test_suggest         LIBS budyk_ai budyk_core)
+budyk_add_test(test_llm_client      LIBS budyk_ai budyk_core)
 
-add_executable(test_scheduler unit/test_scheduler.cpp)
-target_link_libraries(test_scheduler PRIVATE budyk_scheduler budyk_core)
-target_include_directories(test_scheduler PRIVATE ${CMAKE_SOURCE_DIR}/src)
-add_test(NAME test_scheduler COMMAND test_scheduler)
+# web
+budyk_add_test(test_auth            LIBS budyk_web budyk_core)
+budyk_add_test(test_http_server     LIBS budyk_web budyk_core)
+budyk_add_test(test_json            LIBS budyk_web budyk_core)
+budyk_add_test(test_session         LIBS budyk_web budyk_core)
+budyk_add_test(test_login_limiter   LIBS budyk_web budyk_core)
+budyk_add_test(test_ws              LIBS budyk_web budyk_core)
+budyk_add_test(test_http_util       LIBS budyk_web budyk_core)
 
-add_executable(test_ring_file unit/test_ring_file.cpp)
-target_link_libraries(test_ring_file PRIVATE budyk_storage budyk_core)
-target_include_directories(test_ring_file PRIVATE ${CMAKE_SOURCE_DIR}/src)
-add_test(NAME test_ring_file COMMAND test_ring_file)
+budyk_add_test(test_config          LIBS budyk_config budyk_scheduler budyk_core)
 
-add_executable(test_tier_aggregator unit/test_tier_aggregator.cpp)
-target_link_libraries(test_tier_aggregator PRIVATE budyk_storage budyk_core)
-target_include_directories(test_tier_aggregator PRIVATE ${CMAKE_SOURCE_DIR}/src)
-add_test(NAME test_tier_aggregator COMMAND test_tier_aggregator)
-
-add_executable(test_tier_manager unit/test_tier_manager.cpp)
-target_link_libraries(test_tier_manager PRIVATE budyk_storage budyk_core)
-target_include_directories(test_tier_manager PRIVATE ${CMAKE_SOURCE_DIR}/src)
-add_test(NAME test_tier_manager COMMAND test_tier_manager)
-
-add_executable(test_baseline unit/test_baseline.cpp)
-target_link_libraries(test_baseline PRIVATE budyk_ai budyk_core)
-target_include_directories(test_baseline PRIVATE ${CMAKE_SOURCE_DIR}/src)
-add_test(NAME test_baseline COMMAND test_baseline)
-
-add_executable(test_suggest unit/test_suggest.cpp)
-target_link_libraries(test_suggest PRIVATE budyk_ai budyk_core)
-target_include_directories(test_suggest PRIVATE ${CMAKE_SOURCE_DIR}/src)
-add_test(NAME test_suggest COMMAND test_suggest)
-
-add_executable(test_llm_client unit/test_llm_client.cpp)
-target_link_libraries(test_llm_client PRIVATE budyk_ai budyk_core)
-target_include_directories(test_llm_client PRIVATE ${CMAKE_SOURCE_DIR}/src)
-add_test(NAME test_llm_client COMMAND test_llm_client)
-
-add_executable(test_auth unit/test_auth.cpp)
-target_link_libraries(test_auth PRIVATE budyk_web budyk_core)
-target_include_directories(test_auth PRIVATE ${CMAKE_SOURCE_DIR}/src)
-add_test(NAME test_auth COMMAND test_auth)
-
-add_executable(test_http_server unit/test_http_server.cpp)
-target_link_libraries(test_http_server PRIVATE budyk_web budyk_core)
-target_include_directories(test_http_server PRIVATE ${CMAKE_SOURCE_DIR}/src)
-add_test(NAME test_http_server COMMAND test_http_server)
-
-add_executable(test_json unit/test_json.cpp)
-target_link_libraries(test_json PRIVATE budyk_web budyk_core)
-target_include_directories(test_json PRIVATE ${CMAKE_SOURCE_DIR}/src)
-add_test(NAME test_json COMMAND test_json)
-
-add_executable(test_session unit/test_session.cpp)
-target_link_libraries(test_session PRIVATE budyk_web budyk_core)
-target_include_directories(test_session PRIVATE ${CMAKE_SOURCE_DIR}/src)
-add_test(NAME test_session COMMAND test_session)
-
-add_executable(test_login_limiter unit/test_login_limiter.cpp)
-target_link_libraries(test_login_limiter PRIVATE budyk_web budyk_core)
-target_include_directories(test_login_limiter PRIVATE ${CMAKE_SOURCE_DIR}/src)
-add_test(NAME test_login_limiter COMMAND test_login_limiter)
-
-add_executable(test_ws unit/test_ws.cpp)
-target_link_libraries(test_ws PRIVATE budyk_web budyk_core)
-target_include_directories(test_ws PRIVATE ${CMAKE_SOURCE_DIR}/src)
-add_test(NAME test_ws COMMAND test_ws)
-
-add_executable(test_config unit/test_config.cpp)
-target_link_libraries(test_config PRIVATE budyk_config budyk_scheduler budyk_core)
-target_include_directories(test_config PRIVATE ${CMAKE_SOURCE_DIR}/src)
-add_test(NAME test_config COMMAND test_config)
-
+# platform collectors
 if(BUDYK_PLATFORM STREQUAL "linux")
-    add_executable(test_linux_collector unit/test_linux_collector.cpp)
-    target_link_libraries(test_linux_collector PRIVATE budyk_collector)
-    target_include_directories(test_linux_collector PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    add_test(NAME test_linux_collector COMMAND test_linux_collector)
+    budyk_add_test(test_linux_collector   LIBS budyk_collector)
 endif()
-
 if(BUDYK_PLATFORM STREQUAL "freebsd")
-    add_executable(test_freebsd_collector unit/test_freebsd_collector.cpp)
-    target_link_libraries(test_freebsd_collector PRIVATE budyk_collector)
-    target_include_directories(test_freebsd_collector PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    add_test(NAME test_freebsd_collector COMMAND test_freebsd_collector)
+    budyk_add_test(test_freebsd_collector LIBS budyk_collector)
 endif()
 
+# rules
 if(LUA_FOUND)
-    add_executable(test_lua_engine unit/test_lua_engine.cpp)
-    target_link_libraries(test_lua_engine PRIVATE budyk_rules budyk_security budyk_core ${LUA_LIBRARIES})
-    target_include_directories(test_lua_engine PRIVATE ${CMAKE_SOURCE_DIR}/src ${LUA_INCLUDE_DIR})
-    add_test(NAME test_lua_engine COMMAND test_lua_engine)
+    budyk_add_test(test_lua_engine
+        LIBS budyk_rules budyk_security budyk_core ${LUA_LIBRARIES}
+        INCLUDES ${LUA_INCLUDE_DIR})
 
     # Spec §5 item 13: 100 rules per tick within 1 ms (median). Sanitizer
     # and coverage instrumentation slow the VM down several times over,
     # so those builds only report the timing.
-    add_executable(test_rule_perf unit/test_rule_perf.cpp)
-    target_link_libraries(test_rule_perf PRIVATE budyk_rules budyk_security budyk_core ${LUA_LIBRARIES})
-    target_include_directories(test_rule_perf PRIVATE ${CMAKE_SOURCE_DIR}/src ${LUA_INCLUDE_DIR})
     set(RULE_PERF_BUDGET_US 1000)
     if(ENABLE_SANITIZERS OR ENABLE_TSAN OR CMAKE_CXX_FLAGS MATCHES "--coverage")
         set(RULE_PERF_BUDGET_US 0)
     endif()
-    add_test(NAME test_rule_perf COMMAND test_rule_perf ${RULE_PERF_BUDGET_US})
+    budyk_add_test(test_rule_perf
+        LIBS budyk_rules budyk_security budyk_core ${LUA_LIBRARIES}
+        INCLUDES ${LUA_INCLUDE_DIR}
+        ARGS ${RULE_PERF_BUDGET_US})
+
+    budyk_add_test(test_yaml_rules
+        LIBS budyk_rules budyk_core ${LUA_LIBRARIES}
+        INCLUDES ${LUA_INCLUDE_DIR})
 endif()
+budyk_add_test(test_exec_action     LIBS budyk_rules budyk_core)
+budyk_add_test(test_worker          LIBS budyk_rules budyk_core)
+budyk_add_test(test_alert           LIBS budyk_rules budyk_core)
+budyk_add_test(test_freeze          LIBS budyk_rules budyk_core)
 
-add_executable(test_exec_action unit/test_exec_action.cpp)
-target_link_libraries(test_exec_action PRIVATE budyk_rules budyk_core)
-target_include_directories(test_exec_action PRIVATE ${CMAKE_SOURCE_DIR}/src)
-add_test(NAME test_exec_action COMMAND test_exec_action)
-
-add_executable(test_worker unit/test_worker.cpp)
-target_link_libraries(test_worker PRIVATE budyk_rules budyk_core)
-target_include_directories(test_worker PRIVATE ${CMAKE_SOURCE_DIR}/src)
-add_test(NAME test_worker COMMAND test_worker)
-
-add_executable(test_alert unit/test_alert.cpp)
-target_link_libraries(test_alert PRIVATE budyk_rules budyk_core)
-target_include_directories(test_alert PRIVATE ${CMAKE_SOURCE_DIR}/src)
-add_test(NAME test_alert COMMAND test_alert)
-
-if(LUA_FOUND)
-    add_executable(test_yaml_rules unit/test_yaml_rules.cpp)
-    target_link_libraries(test_yaml_rules PRIVATE budyk_rules budyk_core ${LUA_LIBRARIES})
-    target_include_directories(test_yaml_rules PRIVATE ${CMAKE_SOURCE_DIR}/src ${LUA_INCLUDE_DIR})
-    add_test(NAME test_yaml_rules COMMAND test_yaml_rules)
-endif()
-
-add_executable(test_freeze unit/test_freeze.cpp)
-target_link_libraries(test_freeze PRIVATE budyk_rules budyk_core)
-target_include_directories(test_freeze PRIVATE ${CMAKE_SOURCE_DIR}/src)
-add_test(NAME test_freeze COMMAND test_freeze)
-
-add_executable(test_file_watcher unit/test_file_watcher.cpp)
-target_link_libraries(test_file_watcher PRIVATE budyk_security budyk_core)
-target_include_directories(test_file_watcher PRIVATE ${CMAKE_SOURCE_DIR}/src)
-add_test(NAME test_file_watcher COMMAND test_file_watcher)
-
-add_executable(test_util unit/test_util.cpp)
-target_link_libraries(test_util PRIVATE budyk_util budyk_core)
-target_include_directories(test_util PRIVATE ${CMAKE_SOURCE_DIR}/src)
-add_test(NAME test_util COMMAND test_util)
-
-add_executable(test_http_util unit/test_http_util.cpp)
-target_link_libraries(test_http_util PRIVATE budyk_web budyk_core)
-target_include_directories(test_http_util PRIVATE ${CMAKE_SOURCE_DIR}/src)
-add_test(NAME test_http_util COMMAND test_http_util)
-
+budyk_add_test(test_file_watcher    LIBS budyk_security budyk_core)
+budyk_add_test(test_util            LIBS budyk_util budyk_core)
 # The daemon's routes, through make_router(): needs the whole app library.
-add_executable(test_router unit/test_router.cpp)
-target_link_libraries(test_router PRIVATE budyk_app)
-target_include_directories(test_router PRIVATE ${CMAKE_SOURCE_DIR}/src)
-add_test(NAME test_router COMMAND test_router)
-
-add_executable(test_tui unit/test_tui.cpp)
-target_link_libraries(test_tui PRIVATE budyk_tui budyk_core)
-target_include_directories(test_tui PRIVATE ${CMAKE_SOURCE_DIR}/src)
-add_test(NAME test_tui COMMAND test_tui)
+budyk_add_test(test_router          LIBS budyk_app)
+budyk_add_test(test_tui             LIBS budyk_tui budyk_core)

@@ -84,23 +84,27 @@ docs/              — spec (en/uk), man page
 ## Build and test commands
 
 ```sh
-cmake -B build                           # the host platform is detected;
+cmake -B build                           # Release unless -DCMAKE_BUILD_TYPE says otherwise;
+                                         # the host platform is detected,
                                          # -DBUDYK_PLATFORM=linux|freebsd only checks it matches
 cmake --build build -j
 ctest --test-dir build                   # unit tests
 tests/smoke/serve.sh build/src/budyk     # daemon: endpoints, WS, SIGHUP, close-on-exec
 tests/smoke/crash.sh build/src/budyk     # daemon: SIGKILL + restart, at most one record lost
 tests/smoke/warm_grace.sh build/src/budyk  # daemon: hot buffer emptied after warm_grace
+tests/check_whitespace.sh                # trailing blanks, tabs, CR, final newline
 ```
 
 CI (see `.github/workflows/linux-build.yml`) adds `-DENABLE_WERROR=ON`, runs
 the tests under ASan + UBSan (`-DSTATIC_LINK=OFF -DENABLE_SANITIZERS=ON`)
-together with both smoke scripts, under ThreadSanitizer
+together with the smoke scripts, under ThreadSanitizer
 (`-DSTATIC_LINK=OFF -DENABLE_TSAN=ON`) with the serve smoke test, runs
-cppcheck and clang-tidy (checks in `.clang-tidy`), gates line coverage of
-`core/` and `storage/` at 85% (`tests/coverage_report.py`), and builds and
-tests on FreeBSD 14.2 and 15.0 with clang. Everything must be green before a
-merge. Warnings are `-Wall -Wextra -Wshadow -Wconversion -Wsign-conversion`
+cppcheck, clang-tidy (checks in `.clang-tidy`) and
+`tests/check_whitespace.sh`, gates line coverage of `core/` and `storage/`
+at 85% (`tests/coverage_report.py`), and on FreeBSD 14.2 and 15.0 (clang)
+builds and tests both the shared (port) and the static (release)
+configuration and runs the smoke scripts on the static binary. Everything
+must be green before a merge. Warnings are `-Wall -Wextra -Wshadow -Wconversion -Wsign-conversion`
 on every target; a new implicit sign or width change is a build error in CI
 (GCC and clang both).
 
@@ -124,9 +128,17 @@ on every target; a new implicit sign or width change is a build error in CI
   no blocking send from the main thread: post the work to a `Worker` or use
   non-blocking I/O. Per-tick allocation of small strings and vectors is
   tolerated; unbounded growth is not.
+- Numbers from a user (command line, config, rules) go through
+  `parse_int_full()` (`src/core/parse_int.h`): whole string, in range, or
+  an error that names the value. No `atoi()`; clang-tidy (`cert-err34-c`)
+  rejects it outside the collectors.
+- Other programs run through `exec_command()` with an argv, never a shell
+  (`system`/`popen` are rejected by `cert-env33-c`); secrets go in 0600
+  temp files from `write_private_tmp()`, not on the command line.
 - Platform branching only through `#ifdef BUDYK_FREEBSD` / `#ifdef BUDYK_LINUX`
-- Tests are `assert()`-based and built with `-UNDEBUG`. New behaviour gets a
-  unit test; a change in the daemon's behaviour gets a check in
+- Tests are `assert()`-based and built with `-UNDEBUG`, one
+  `budyk_add_test()` line each in `tests/CMakeLists.txt`. New behaviour
+  gets a unit test; a change in the daemon's behaviour gets a check in
   `tests/smoke/` too. When a test guards a fix, break the fix on purpose once
   and confirm the test fails — and confirm the broken build actually
   compiled under `-Werror`, or the old binary runs and the check proves

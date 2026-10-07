@@ -9,6 +9,7 @@
 
 #include <atomic>
 #include <cerrno>
+#include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -146,7 +147,7 @@ int curl_post(const char* url,
               const std::string& body,
               const std::vector<std::string>& extra_headers,
               const std::atomic<bool>* cancel) {
-    char body_path[64];
+    char body_path[PATH_MAX];
     if (!write_tmp(body, body_path, sizeof(body_path))) return -1;
 
     std::string headers;
@@ -154,12 +155,12 @@ int curl_post(const char* url,
         headers += h;
         headers += "\n";
     }
-    char hdr_path[64];
+    char hdr_path[PATH_MAX];
     if (!write_tmp(headers, hdr_path, sizeof(hdr_path))) {
         ::unlink(body_path);
         return -2;
     }
-    char url_path[64];
+    char url_path[PATH_MAX];
     if (!write_url_config(url, url_path, sizeof(url_path))) {
         ::unlink(body_path);
         ::unlink(hdr_path);
@@ -183,18 +184,18 @@ int curl_basic_form_post(const char* url,
                          const std::string& user_pass,
                          const std::string& form_body,
               const std::atomic<bool>* cancel) {
-    char body_path[64];
+    char body_path[PATH_MAX];
     if (!write_tmp(form_body, body_path, sizeof(body_path))) return -1;
 
     // netrc: curl --netrc-file matches by host, taken from the URL.
     std::string netrc_blob;
     if (!netrc_for(url, user_pass, &netrc_blob)) { ::unlink(body_path); return -2; }
-    char netrc_path[64];
+    char netrc_path[PATH_MAX];
     if (!write_tmp(netrc_blob, netrc_path, sizeof(netrc_path))) {
         ::unlink(body_path);
         return -3;
     }
-    char url_path[64];
+    char url_path[PATH_MAX];
     if (!write_url_config(url, url_path, sizeof(url_path))) {
         ::unlink(body_path);
         ::unlink(netrc_path);
@@ -223,10 +224,10 @@ int curl_smtp(const char* url,
               const std::string& to,
               const std::string& message,
               const std::atomic<bool>* cancel) {
-    char body_path[64];
+    char body_path[PATH_MAX];
     if (!write_tmp(message, body_path, sizeof(body_path))) return -1;
 
-    char netrc_path[64] = {0};
+    char netrc_path[PATH_MAX] = {0};
     if (!user_pass.empty()) {
         std::string netrc_blob;
         if (!netrc_for(url, user_pass, &netrc_blob)) { ::unlink(body_path); return -2; }
@@ -241,7 +242,7 @@ int curl_smtp(const char* url,
         args.push_back("--netrc-file");
         args.push_back(netrc_path);
     }
-    char url_path[64];
+    char url_path[PATH_MAX];
     if (!write_url_config(url, url_path, sizeof(url_path))) {
         ::unlink(body_path);
         if (netrc_path[0] != '\0') ::unlink(netrc_path);

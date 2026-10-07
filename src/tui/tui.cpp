@@ -10,6 +10,7 @@
 #include <unistd.h>
 
 #include <cerrno>
+#include <climits>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -232,6 +233,20 @@ double sample_number(const std::string& body, const char* section,
     return v;
 }
 
+namespace {
+
+// The integer at `p` (as in `"id":4,`), or `fallback` when there is no
+// number there or it does not fit an int.
+int json_int_at(const char* p, int fallback) {
+    char* end = nullptr;
+    errno = 0;
+    const long v = std::strtol(p, &end, 10);
+    if (end == p || errno == ERANGE || v < INT_MIN || v > INT_MAX) return fallback;
+    return static_cast<int>(v);
+}
+
+} // namespace
+
 std::vector<LevelInfo> parse_levels(const std::string& body) {
     std::vector<LevelInfo> out;
     size_t pos = 0;
@@ -242,7 +257,7 @@ std::vector<LevelInfo> parse_levels(const std::string& body) {
         pos = end + 1;
 
         LevelInfo lv;
-        lv.id = std::atoi(obj.c_str() + 6);
+        lv.id = json_int_at(obj.c_str() + 6, 0);
         const std::string nk = "\"name\":\"";
         const size_t n = obj.find(nk);
         if (n != std::string::npos) {
@@ -250,7 +265,7 @@ std::vector<LevelInfo> parse_levels(const std::string& body) {
             if (q != std::string::npos) lv.name = obj.substr(n + nk.size(), q - n - nk.size());
         }
         const size_t iv = obj.find("\"interval_ms\":");
-        if (iv != std::string::npos) lv.interval_ms = std::atoi(obj.c_str() + iv + 14);
+        if (iv != std::string::npos) lv.interval_ms = json_int_at(obj.c_str() + iv + 14, 0);
         if (lv.id > 0 && !lv.name.empty()) out.push_back(lv);
     }
     return out;
