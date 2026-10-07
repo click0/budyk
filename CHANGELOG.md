@@ -174,9 +174,12 @@ configuration keys or the on-disk format.
   clang-format configuration: the code has a consistent hand-kept
   layout (aligned declarations and tables) that a formatter would
   churn, so formatting stays a review matter.
-- **apt gives up on a hung mirror.** The Ubuntu jobs run apt with a
-  30 s per-request timeout and three retries; a mirror that stopped
-  answering used to hold a job until its `timeout-minutes` ran out.
+- **apt gives up on a hung mirror.** A stalled Ubuntu mirror held
+  `apt-get update` until the job's `timeout-minutes` ran out, with
+  apt's own `Acquire::http::Timeout` set or not. The Ubuntu jobs now
+  install through `.github/scripts/apt-install.sh`, which runs
+  `apt-get update` (2 min) and `apt-get install` (5 min) under
+  `timeout(1)` with three attempts each.
 - **One helper per unit test.** `tests/CMakeLists.txt` declares each
   test with `budyk_add_test(name LIBS ... [INCLUDES ...] [ARGS ...])`
   instead of four repeated commands; the set of tests and how they run
