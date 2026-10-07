@@ -40,9 +40,25 @@ ssize_t recv_bounded(int fd, char* dst, size_t cap, Deadline deadline) {
     }
 }
 
-// Read into `buf` until "\r\n\r\n" is seen. Returns the index where
-// the body would start (i.e. byte after the marker). 0 on EOF before
-// finding the marker, -1 on error or when the deadline passes.
+// Index one past the blank line that ends the header block, or 0 if
+// buf[from, n) holds none yet. A line ends in CRLF or a bare LF (RFC 7230
+// §3.5 lets a server accept the latter), so the block ends at the first
+// "\n\n", "\n\r\n" (which covers "\r\n\r\n") after `from`.
+size_t find_header_end(const std::vector<char>& b, size_t from) {
+    for (size_t i = from; i + 1 < b.size(); ++i) {
+        if (b[i] != '\n') continue;
+        if (b[i + 1] == '\n') return i + 2;
+        if (b[i + 1] == '\r' && i + 2 < b.size() && b[i + 2] == '\n') return i + 3;
+    }
+    return 0;
+}
+
+constexpr ssize_t kHeadersTooLarge = -2;
+
+// Read into `buf` until the header block is complete. Returns the index
+// where the body starts (one past the blank line); 0 on EOF before that;
+// -1 on error or when the deadline passes; kHeadersTooLarge when the
+// block outgrows kHeaderReadCap.
 ssize_t read_until_headers(int fd, std::vector<char>* buf, Deadline deadline) {
     buf->resize(0);
     char tmp[1024];
@@ -50,19 +66,13 @@ ssize_t read_until_headers(int fd, std::vector<char>* buf, Deadline deadline) {
         ssize_t n = recv_bounded(fd, tmp, sizeof(tmp), deadline);
         if (n < 0) return -1;
         if (n == 0) return 0;
+        // Search the new chunk plus a 2-byte overlap with the old data.
+        const size_t from = buf->size() > 2 ? buf->size() - 2 : 0;
         buf->insert(buf->end(), tmp, tmp + n);
-        // Search just the new chunk plus 3-byte overlap.
-        const size_t end = buf->size();
-        const size_t got = static_cast<size_t>(n);
-        for (size_t i = (end > got + 3 ? end - got - 3 : 0);
-             i + 3 < end; ++i) {
-            if ((*buf)[i] == '\r' && (*buf)[i + 1] == '\n' &&
-                (*buf)[i + 2] == '\r' && (*buf)[i + 3] == '\n') {
-                return static_cast<ssize_t>(i + 4);
-            }
-        }
+        const size_t end = find_header_end(*buf, from);
+        if (end != 0) return static_cast<ssize_t>(end);
     }
-    return -1;
+    return kHeadersTooLarge;
 }
 
 ssize_t read_full(int fd, char* dst, size_t want, Deadline deadline) {
@@ -84,42 +94,89 @@ void trim_inplace(std::string* s) {
     if (b > 0 || e < s->size()) *s = s->substr(b, e - b);
 }
 
-// Pull METHOD and PATH out of the first line ("METHOD PATH HTTP/1.x"),
-// then walk the remaining header lines into `req->headers`.
-bool parse_headers(const char* buf, size_t end_offset, HttpRequest* req) {
-    // First line
-    const char* eol = static_cast<const char*>(std::memchr(buf, '\r', end_offset));
-    if (eol == nullptr) return false;
-    const size_t llen = static_cast<size_t>(eol - buf);
+// One line of the header block, without its CRLF / LF.
+struct Line { const char* p; size_t n; };
 
-    const char* sp1 = static_cast<const char*>(std::memchr(buf, ' ', llen));
-    if (sp1 == nullptr) return false;
-    const char* sp2 = static_cast<const char*>(
-        std::memchr(sp1 + 1, ' ', llen - static_cast<size_t>(sp1 + 1 - buf)));
-    if (sp2 == nullptr) return false;
-    req->method.assign(buf, sp1);
-    req->path  .assign(sp1 + 1, sp2);
+// Parse the header block buf[0, end) — request line, then header lines —
+// into req. False on anything that is not a well-formed HTTP/1.x request
+// head: the caller answers 400.
+//   request line  METHOD SP target SP HTTP/1.x, the method in A-Z, the
+//                 target starting with '/'; the target is split into
+//                 path and query at the first '?'.
+//   header line   name ":" value, the name non-empty with no whitespace
+//                 (RFC 7230 §3.2.4: whitespace before the colon is an
+//                 error, and a line that starts with whitespace is
+//                 obsolete folding, which this server does not accept).
+bool parse_headers(const char* buf, size_t end, HttpRequest* req) {
+    std::vector<Line> lines;
+    size_t pos = 0;
+    while (pos < end) {
+        const char* nl = static_cast<const char*>(std::memchr(buf + pos, '\n', end - pos));
+        if (nl == nullptr) break;
+        size_t n = static_cast<size_t>(nl - (buf + pos));
+        if (n > 0 && buf[pos + n - 1] == '\r') --n;
+        lines.push_back(Line{buf + pos, n});
+        pos = static_cast<size_t>(nl - buf) + 1;
+    }
+    // The last line is the blank one that ends the block.
+    if (lines.size() < 2 || lines.back().n != 0) return false;
+    lines.pop_back();
 
-    // Subsequent header lines
-    size_t pos = llen + 2;                 // skip "\r\n"
-    while (pos + 1 < end_offset - 2) {     // up to the trailing "\r\n\r\n"
-        const char* line = buf + pos;
-        const char* line_eol = static_cast<const char*>(
-            std::memchr(line, '\r', end_offset - pos));
-        if (line_eol == nullptr) break;
-        const size_t line_len = static_cast<size_t>(line_eol - line);
-        if (line_len == 0) break;
+    const Line& rl = lines.front();
+    const char* sp1 = static_cast<const char*>(std::memchr(rl.p, ' ', rl.n));
+    if (sp1 == nullptr || sp1 == rl.p) return false;
+    const size_t rest = rl.n - static_cast<size_t>(sp1 + 1 - rl.p);
+    const char* sp2 = static_cast<const char*>(std::memchr(sp1 + 1, ' ', rest));
+    if (sp2 == nullptr || sp2 == sp1 + 1) return false;
+    const std::string version(sp2 + 1, rl.p + rl.n);
+    if (version.compare(0, 7, "HTTP/1.") != 0 || version.size() != 8) return false;
+    req->method.assign(rl.p, sp1);
+    for (char c : req->method) {
+        if (c < 'A' || c > 'Z') return false;
+    }
+    const std::string target(sp1 + 1, sp2);
+    if (target.empty() || target[0] != '/') return false;
+    split_target(target, &req->path, &req->query);
 
-        const char* colon = static_cast<const char*>(std::memchr(line, ':', line_len));
-        if (colon != nullptr) {
-            std::string key  (line,        colon);
-            std::string value(colon + 1,   line + line_len);
-            trim_inplace(&value);
-            req->headers.emplace_back(std::move(key), std::move(value));
+    for (size_t i = 1; i < lines.size(); ++i) {
+        const Line& l = lines[i];
+        if (l.n == 0) return false;
+        if (l.p[0] == ' ' || l.p[0] == '\t') return false;            // obs-fold
+        const char* colon = static_cast<const char*>(std::memchr(l.p, ':', l.n));
+        if (colon == nullptr || colon == l.p) return false;
+        std::string key(l.p, colon);
+        for (char c : key) {
+            if (c == ' ' || c == '\t') return false;
         }
-        pos += line_len + 2;
+        std::string value(colon + 1, l.p + l.n);
+        trim_inplace(&value);
+        req->headers.emplace_back(std::move(key), std::move(value));
     }
     return true;
+}
+
+// The body length a request declares. Every Content-Length header must
+// be all digits and they must agree (RFC 7230 §3.3.2: differing values
+// are an error — a request-smuggling vector behind a proxy). -1 when a
+// header is malformed or they disagree; *present tells whether any was
+// sent.
+long long declared_length(const HttpRequest& req, bool* present) {
+    *present = false;
+    long long value = -1;
+    for (const auto& kv : req.headers) {
+        if (!ascii_ieq(kv.first, "Content-Length")) continue;
+        const std::string& v = kv.second;
+        if (v.empty() || v.size() > 18) return -1;
+        long long n = 0;
+        for (char c : v) {
+            if (c < '0' || c > '9') return -1;
+            n = n * 10 + (c - '0');
+        }
+        if (*present && n != value) return -1;
+        *present = true;
+        value    = n;
+    }
+    return *present ? value : 0;
 }
 
 const char* status_phrase(int status) {
@@ -132,8 +189,10 @@ const char* status_phrase(int status) {
         case 404: return "Not Found";
         case 405: return "Method Not Allowed";
         case 413: return "Payload Too Large";
+        case 431: return "Request Header Fields Too Large";
         case 429: return "Too Many Requests";
         case 500: return "Internal Server Error";
+        case 501: return "Not Implemented";
         default:  return "OK";
     }
 }
@@ -313,6 +372,10 @@ bool HttpServer::handle_client(int client_fd, const char* peer) {
 
     std::vector<char> buf;
     ssize_t hdr_end = read_until_headers(client_fd, &buf, deadline);
+    if (hdr_end == kHeadersTooLarge) {
+        send_response(client_fd, HttpResponse{431, "text/plain", "request headers too large\n"});
+        return false;
+    }
     if (hdr_end <= 0) return false;
 
     HttpRequest req;
@@ -327,24 +390,33 @@ bool HttpServer::handle_client(int client_fd, const char* peer) {
         req.body.assign(buf.data() + hdr_end, buf.size() - static_cast<size_t>(hdr_end));
     }
 
-    // If Content-Length is set, pull the rest of the body off the wire.
-    const std::string cl = req.header("Content-Length");
-    if (!cl.empty()) {
-        char* endp = nullptr;
-        unsigned long want = std::strtoul(cl.c_str(), &endp, 10);
-        if (endp == cl.c_str() || want > kMaxBodyBytes) {
-            send_response(client_fd, HttpResponse{413, "text/plain", "body too large\n"});
-            return false;
-        }
-        if (req.body.size() < want) {
-            const size_t need = want - req.body.size();
-            std::vector<char> rest(need);
-            ssize_t got = read_full(client_fd, rest.data(), need, deadline);
-            if (got < 0) return false;             // stalled mid-body
-            if (got > 0) req.body.append(rest.data(), static_cast<size_t>(got));
-        } else if (req.body.size() > want) {
-            req.body.resize(want);
-        }
+    // No chunked (or any other) transfer coding: say so rather than read
+    // a body of unknown length (RFC 7230 §3.3.1).
+    if (!req.header("Transfer-Encoding").empty()) {
+        send_response(client_fd, HttpResponse{501, "text/plain",
+                                              "transfer-encoding not supported\n"});
+        return false;
+    }
+    bool has_length = false;
+    const long long want = declared_length(req, &has_length);
+    if (want < 0) {
+        send_response(client_fd, HttpResponse{400, "text/plain", "bad content-length\n"});
+        return false;
+    }
+    if (static_cast<unsigned long long>(want) > kMaxBodyBytes) {
+        send_response(client_fd, HttpResponse{413, "text/plain", "body too large\n"});
+        return false;
+    }
+    // Pull the rest of the body off the wire; drop anything past it.
+    const size_t len = static_cast<size_t>(want);
+    if (req.body.size() < len) {
+        const size_t need = len - req.body.size();
+        std::vector<char> rest(need);
+        ssize_t got = read_full(client_fd, rest.data(), need, deadline);
+        if (got < 0) return false;             // stalled mid-body
+        if (got > 0) req.body.append(rest.data(), static_cast<size_t>(got));
+    } else if (req.body.size() > len) {
+        req.body.resize(len);
     }
 
     HttpResponse resp = handler_(req);

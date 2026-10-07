@@ -23,7 +23,8 @@ namespace budyk {
 
 struct HttpRequest {
     std::string method;       // "GET", "POST", ...
-    std::string path;         // "/api/health"
+    std::string path;         // "/api/health" — the target up to '?'
+    std::string query;        // what follows '?', raw (not percent-decoded)
     std::string peer;         // client address, dotted quad ("127.0.0.1")
     std::vector<std::pair<std::string, std::string>> headers;
     std::string body;

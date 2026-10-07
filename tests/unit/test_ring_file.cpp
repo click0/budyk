@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <sys/stat.h>
 #include <unistd.h>
 
 using namespace budyk;
@@ -207,6 +208,25 @@ int main() {
             assert(std::string(RingFile::describe(-3)) == "open failed");
         }
         ::unlink(path);
+    }
+
+    // 8b. A new ring file is created mode 0600 (the daemon's history,
+    //     like sessions.tsv), whatever the umask lets through.
+    {
+        char tmpl[] = "/tmp/budyk_ringmode_XXXXXX";
+        const char* dir = ::mkdtemp(tmpl);
+        assert(dir != nullptr);
+        const std::string path = std::string(dir) + "/r.ring";
+        const mode_t old = ::umask(0);
+        RingFile rf;
+        assert(rf.open(path.c_str(), 1, 64, 4) == 0);
+        ::umask(old);
+        struct stat st{};
+        assert(::stat(path.c_str(), &st) == 0);
+        assert((st.st_mode & 0777) == 0600);
+        rf.close();
+        ::unlink(path.c_str());
+        ::rmdir(dir);
     }
 
     // 9. read_at out of range + len mismatch rejected.

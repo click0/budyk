@@ -7,6 +7,9 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+# ProtectSystem=strict makes /var read-only and ReadWritePaths needs the
+# directory to exist; create it first, outside the sandbox ("+").
+ExecStartPre=+/usr/bin/install -d -o budyk -g budyk -m 0750 /var/db/budyk
 ExecStart=/usr/local/bin/budyk serve --config /etc/budyk/config.yaml
 Restart=on-failure
 RestartSec=5

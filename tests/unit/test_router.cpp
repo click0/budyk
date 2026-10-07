@@ -61,19 +61,21 @@ struct World {
     }
 };
 
-HttpRequest get(const char* path, const std::string& cookie = "") {
+// Requests as the HTTP server hands them over: the target already split
+// into path and query.
+HttpRequest get(const char* target, const std::string& cookie = "") {
     HttpRequest r;
     r.method = "GET";
-    r.path   = path;
+    split_target(target, &r.path, &r.query);
     r.peer   = "127.0.0.1";
     if (!cookie.empty()) r.headers.push_back({"Cookie", cookie});
     return r;
 }
 
-HttpRequest post(const char* path, const std::string& body, const std::string& peer = "127.0.0.1") {
+HttpRequest post(const char* target, const std::string& body, const std::string& peer = "127.0.0.1") {
     HttpRequest r;
     r.method = "POST";
-    r.path   = path;
+    split_target(target, &r.path, &r.query);
     r.body   = body;
     r.peer   = peer;
     return r;

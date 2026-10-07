@@ -18,8 +18,9 @@ PORT=${2:-18765}
 DIR=$(mktemp -d)
 trap 'kill "$PID" 2>/dev/null || true; rm -rf "$DIR"' EXIT
 
+# data_dir does not exist yet: the daemon creates it (mode 0750).
 cat > "$DIR/config.yaml" <<EOF
-data_dir: $DIR
+data_dir: $DIR/data
 listen: 127.0.0.1
 port: $PORT
 rules: { path: $DIR/rules.lua }
@@ -55,6 +56,18 @@ if grep -q "rules file '$DIR/rules.lua' is writable by group or others" "$DIR/lo
     echo "ok   warned about the world-writable rules file"
 else
     echo "FAIL: no warning about the world-writable rules file"; fail=1
+fi
+if grep -q "created data_dir '$DIR/data'" "$DIR/log" && [ -d "$DIR/data" ] &&
+   [ "$(stat -c %a "$DIR/data" 2>/dev/null || stat -f %Lp "$DIR/data")" = 750 ]; then
+    echo "ok   created the missing data_dir, mode 0750"
+else
+    echo "FAIL: data_dir was not created (or not 0750)"; fail=1
+fi
+ring_mode=$(stat -c %a "$DIR/data/tier1.ring" 2>/dev/null || stat -f %Lp "$DIR/data/tier1.ring")
+if [ "$ring_mode" = 600 ]; then
+    echo "ok   ring files are 0600"
+else
+    echo "FAIL: tier1.ring has mode $ring_mode, expected 600"; fail=1
 fi
 expect() {   # expect <status> <path>
     got=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT$2")
