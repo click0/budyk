@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.5] — 2026-10-07
+
+A maintenance release that finishes the code review. Security: the
+HTTP parser is strict about the request line, the headers and
+`Content-Length` (400, 431 or 501 instead of a guess), ring files are
+created 0600, `suggest-rules --ai` no longer runs curl through a shell,
+the `exec()` allowlist compares resolved paths, and the session cookie
+is `Secure` behind a TLS proxy. Two changes rule authors may notice:
+the sample tables (`cpu`, `mem`, ...) are read-only, so a rule that
+assigned to them now gets an error, and a YAML rule whose `for_ticks`
+or `cooldown` is not a whole number is rejected instead of half-read.
+`hot_buffer.warm_grace` now takes effect, `budyk serve` creates a
+missing `data_dir`, and a plain `cmake -B build` is a hardened Release
+build. CI adds ThreadSanitizer, more clang-tidy checks, and the smoke
+scripts on FreeBSD against the static binary. No change to the
+configuration keys or the on-disk format.
+
 ### Security
 
 - **Stricter HTTP request parsing.** The parser accepted a
@@ -32,7 +49,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exited with status 6: Could not resolve host ...", or the API's error
   body) instead of `rc=-4`. The unit test runs it against a stand-in
   `curl` with such a `TMPDIR`.
-
 - **Sample tables are read-only to rules.** `cpu`, `mem`, `swap`,
   `load`, `disk`, `net`, `proc`, `entropy`, `self_` and `thermal` were
   ordinary Lua tables, so a rule that wrote `cpu.total_percent = ...`
@@ -48,7 +64,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   logout cookie) get `Secure`, so the browser never sends the session
   token over plain HTTP. Plain-HTTP requests keep the old attributes,
   since a `Secure` cookie would not be sent back at all.
-
 - **The `exec()` allowlist is compared by resolved path.** Entries
   were matched by spelling, so `/usr/bin//x` or `./` in a path slipped
   past an exact entry, and an allowed path replaced by a symlink to
@@ -80,14 +95,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   creates `/var/db/budyk` in `ExecStartPre`, since `ProtectSystem=strict`
   with `ReadWritePaths=` refuses to start the service when it is
   missing.
-
 - **A data race between `HttpServer::stop()` and the accept loop.**
   `stop()` closed the listening socket and wrote -1 into `listen_fd_`
   while the loop thread read the same field for every `accept4()`.
   ThreadSanitizer reported it on `test_http_server`. The field is
   atomic now and the loop reads it once. No observed misbehaviour, but
   a plain `int` shared between threads is undefined behaviour.
-
 - **`hot_buffer.warm_grace` is applied.** The key was parsed, clamped
   and documented, and did nothing: a client connecting long after the
   last one left got a catch-up that replayed the old 1 Hz session glued
@@ -476,6 +489,7 @@ it turned up two untested storage paths, which are now covered.
   opened, and init with the original size works again. tier_manager.cpp
   coverage went from 84.3% to 94.4%.
 
+[0.6.5]: https://github.com/click0/budyk/releases/tag/v0.6.5
 [0.6.4]: https://github.com/click0/budyk/releases/tag/v0.6.4
 [0.6.3]: https://github.com/click0/budyk/releases/tag/v0.6.3
 [0.6.2]: https://github.com/click0/budyk/releases/tag/v0.6.2
