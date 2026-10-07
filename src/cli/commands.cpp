@@ -6,6 +6,7 @@
 #include "ai/suggest.h"
 #include "config/config.h"
 #include "core/clock.h"
+#include "core/parse_int.h"
 #include "core/sample.h"
 #include "security/file_watcher.h"
 #include "storage/codec.h"
@@ -14,6 +15,7 @@
 #include "web/auth.h"
 
 #include <cerrno>
+#include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -248,11 +250,9 @@ int cmd_suggest_rules(int argc, char* argv[]) {
     std::string doc;
     if (ai) {
         const std::string summary = build_llm_summary(samples.data(), samples.size());
-        const int rc = budyk::suggest_rules_llm(api_key, summary, &doc);
-        if (rc != 0) {
-            std::fprintf(stderr,
-                "budyk suggest-rules: LLM call failed (rc=%d). "
-                "Check the API key, network, and that curl(1) is on PATH.\n", rc);
+        std::string why;
+        if (budyk::suggest_rules_llm(api_key, summary, &doc, &why) != 0) {
+            std::fprintf(stderr, "budyk suggest-rules: LLM call failed: %s\n", why.c_str());
             return 1;
         }
         // Prefix the doc with a header so the user knows it's Tier B.
@@ -296,7 +296,14 @@ int cmd_watch_files(int argc, char* argv[]) {
     std::vector<std::string>  paths;
     for (int i = 2; i < argc; ++i) {
         if (std::strcmp(argv[i], "--timeout") == 0 && i + 1 < argc) {
-            timeout_ms = std::atoi(argv[++i]);
+            long ms = 0;
+            if (!parse_int_full(argv[++i], -1, INT_MAX, &ms)) {
+                std::fprintf(stderr,
+                    "budyk watch-files: --timeout wants milliseconds "
+                    "(-1 for none), got '%s'\n", argv[i]);
+                return 1;
+            }
+            timeout_ms = static_cast<int>(ms);
         } else if (argv[i][0] == '-') {
             std::fprintf(stderr,
                 "budyk watch-files: unknown arg '%s'\n", argv[i]);
@@ -356,7 +363,14 @@ int cmd_tui(int argc, char* argv[]) {
             if (std::strcmp(argv[i], "--host") == 0 && i + 1 < argc) {
                 host = argv[++i];
             } else if (std::strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
-                port = std::atoi(argv[++i]);
+                long p = 0;
+                if (!parse_int_full(argv[++i], 1, 65535, &p)) {
+                    std::fprintf(stderr,
+                        "budyk tui: --port wants a number from 1 to 65535, got '%s'\n",
+                        argv[i]);
+                    return 1;
+                }
+                port = static_cast<int>(p);
             } else {
                 std::fprintf(stderr, "budyk tui: unknown arg '%s'\n", argv[i]);
                 return 1;

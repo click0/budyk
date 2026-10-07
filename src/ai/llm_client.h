@@ -11,16 +11,17 @@ namespace budyk {
 // link-time dependency on TLS / HTTP libraries.
 //
 // Returns 0 on success and writes the LLM-produced Lua rules to `out`.
-// Negative on the various failure paths:
-//   -1  invalid args (null / empty / buf too small)
-//   -2  could not write the temp request file
-//   -3  curl popen failed
-//   -4  curl exited non-zero (network / API error)
-//   -5  response missing the expected text field
-//   -6  output buffer too small for the parsed Lua
+// Negative on the various failure paths, with what went wrong in
+// `error` (optional) for the operator:
+//   -1  invalid args (empty key / null out)
+//   -2  could not write a temp file
+//   -3  curl could not be started (fork failed, not on PATH)
+//   -4  curl failed (network / TLS / timeout; curl's message in error)
+//   -5  the response has no text field (an API error; its body in error)
 int suggest_rules_llm(const std::string& api_key,
                       const std::string& summary,
-                      std::string*       out);
+                      std::string*       out,
+                      std::string*       error = nullptr);
 
 // Helpers reused by the test surface — exported so we can verify the
 // JSON escape / unescape round-trip without touching the network.

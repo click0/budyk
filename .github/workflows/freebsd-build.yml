@@ -1,6 +1,9 @@
 name: FreeBSD Build (full)
 
-# Full build + ctest on a FreeBSD matrix.
+# Full build + ctest on a FreeBSD matrix: the port's configuration
+# (shared, as addons/freebsd/Makefile builds it) and the release one
+# (static, as release.yml ships it), plus the smoke scripts against the
+# static binary.
 # Runs on:
 #   * push to main       (gates mainline);
 #   * pull_request → main (gates merge);
@@ -54,7 +57,8 @@ jobs:
             set -ex
 
             echo "::group::Install dependencies"
-            sudo pkg install -y cmake pkgconf lua54 libyaml libargon2
+            # curl and python3: the smoke scripts' HTTP and WebSocket clients.
+            sudo pkg install -y cmake pkgconf lua54 libyaml libargon2 curl python3
             echo "::endgroup::"
 
             echo "::group::System info"
@@ -84,6 +88,25 @@ jobs:
             ctest --test-dir build --output-on-failure
             echo "::endgroup::"
 
+            echo "::group::Static build + ctest (the release configuration)"
+            cmake -B build-static \
+              -DBUDYK_PLATFORM=freebsd \
+              -DSTATIC_LINK=ON \
+              -DBUILD_TESTS=ON \
+              -DENABLE_WERROR=ON
+            cmake --build build-static -j"$JOBS"
+            file build-static/src/budyk
+            file build-static/src/budyk | grep -q "statically linked"
+            build-static/src/budyk version
+            ctest --test-dir build-static --output-on-failure
+            echo "::endgroup::"
+
+            echo "::group::Smoke tests (static binary)"
+            tests/smoke/serve.sh build-static/src/budyk
+            tests/smoke/crash.sh build-static/src/budyk
+            tests/smoke/warm_grace.sh build-static/src/budyk
+            echo "::endgroup::"
+
             echo "::group::Disk usage"
             df -h
             du -sh build 2>/dev/null || true
@@ -104,6 +127,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ctest-logs-${{ matrix.freebsd-version }}
-          path: build/Testing/
+          path: |
+            build/Testing/
+            build-static/Testing/
           if-no-files-found: ignore
           retention-days: 14

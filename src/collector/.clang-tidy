@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# The collectors parse kernel-generated text (/proc, /sys) with sscanf
+# and check how many fields matched; cert-err34-c (which wants strtol
+# for range errors) does not fit that, the values cannot overflow the
+# types they are read into.
+InheritParentConfig: true
+Checks: '-cert-err34-c'

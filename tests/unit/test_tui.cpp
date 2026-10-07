@@ -101,6 +101,13 @@ int main() {
         assert(level_label(lv, 7) == "level 7");          // unknown id
         assert(parse_levels("").empty());
         assert(parse_levels("{\"error\":\"unauthenticated\"}").empty());
+
+        // An id past int (or not a number) is no id; an interval past
+        // int reads as 0 instead of a truncated value.
+        const auto odd = parse_levels(
+            "[{\"id\":4294967300,\"name\":\"wrap\"},{\"id\":x,\"name\":\"nan\"},"
+            "{\"id\":5,\"name\":\"big\",\"interval_ms\":99999999999}]");
+        assert(odd.size() == 1 && odd[0].id == 5 && odd[0].interval_ms == 0);
     }
 
     std::printf("test_tui: PASS\n");

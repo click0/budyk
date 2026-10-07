@@ -124,6 +124,25 @@ int main() {
         assert(yaml_rules_to_lua(y, &lua) != 0);
     }
 
+    // 8b. for_ticks / cooldown must be whole non-negative numbers: "5s",
+    //     "-1", "abc", "1.5" or past INT_MAX is an error (atoi() used to
+    //     turn them into 5, nothing, 0, 1 or a wrapped value). 0 is
+    //     accepted; for_ticks 0 is the default and is left out.
+    {
+        const char* bad[] = { "for_ticks: 5s", "for_ticks: -1", "for_ticks: abc",
+                              "cooldown: 1.5", "cooldown: -1", "cooldown: ''",
+                              "cooldown: 99999999999" };
+        for (const char* field : bad) {
+            const std::string y = std::string("- name: n\n  when: \"true\"\n  ") + field + "\n";
+            std::string lua;
+            assert(yaml_rules_to_lua(y.c_str(), &lua) != 0);
+        }
+        std::string lua;
+        assert(yaml_rules_to_lua("- name: n\n  when: \"true\"\n  for_ticks: 0\n  cooldown: 0\n", &lua) == 0);
+        assert(!contains(lua, "for_ticks"));
+        assert(contains(lua, "cooldown = 0,"));
+    }
+
     // 9. Malformed YAML rejected, no crash.
     {
         std::string lua;

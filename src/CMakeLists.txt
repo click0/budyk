@@ -108,7 +108,8 @@ add_library(budyk_ai STATIC
     ai/suggest.cpp
     ai/llm_client.cpp
 )
-target_link_libraries(budyk_ai PRIVATE budyk_core budyk_util budyk_storage)
+# budyk_rules for exec_command(): llm_client runs curl(1) through it.
+target_link_libraries(budyk_ai PRIVATE budyk_core budyk_util budyk_storage budyk_rules)
 # ENABLE_LLM is now an informational option only — llm_client invokes
 # curl(1) at runtime, so there's no build-time TLS / HTTP dep to gate.
 # The user opts in via `budyk suggest-rules --ai --api-key …`.
