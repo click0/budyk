@@ -187,11 +187,8 @@ HttpHandler make_router(const RouterDeps& d) {
         //              with level=all, thinned over the window, the newest
         //              sample always included
         {
-            std::string rpath, rquery;
-            split_target(req.path, &rpath, &rquery);
-            // cppcheck can't see split_target fill rpath through the pointer.
-            // cppcheck-suppress knownConditionTrueFalse
-            if (req.method == "GET" && rpath == "/api/range") {
+            const std::string& rquery = req.query;
+            if (req.method == "GET" && req.path == "/api/range") {
                 if (!authed(req)) {
                     return budyk::HttpResponse{
                         401, "application/json",

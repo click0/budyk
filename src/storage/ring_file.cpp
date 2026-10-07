@@ -39,7 +39,10 @@ int RingFile::open(const char* path, uint8_t tier, uint32_t record_size, uint64_
     // CLOEXEC: a child forked by rule exec() or an alert channel must
     // not hold the ring open — it could outlive the daemon and write
     // into a ring the next instance has already reopened.
-    int fd = ::open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0644);
+    // 0600: the history (load, memory, process counts, file-watch events)
+    // is the daemon's, like sessions.tsv; readers go through the API.
+    // An existing file keeps its mode.
+    int fd = ::open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
     if (fd < 0)                      { last_errno_ = errno; return -3; }
 
     struct stat st{};

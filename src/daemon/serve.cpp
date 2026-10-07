@@ -198,6 +198,26 @@ int cmd_serve(int argc, char* argv[], const char* version) {
         g_wake_pipe[0] = g_wake_pipe[1] = -1;
     }
 
+    // Create data_dir if it is missing (one level, mode 0750 as the rc.d
+    // script does), so a manual `budyk serve` on a fresh host works; a
+    // missing parent is still an error, reported by TierManager below.
+    {
+        struct stat st{};
+        if (::stat(cfg.data_dir, &st) != 0 && errno == ENOENT) {
+            if (::mkdir(cfg.data_dir, 0750) == 0) {
+                std::fprintf(stderr, "budyk serve: created data_dir '%s'\n", cfg.data_dir);
+            } else if (errno != ENOENT) {
+                std::fprintf(stderr, "budyk serve: cannot create data_dir '%s': %s\n",
+                             cfg.data_dir, std::strerror(errno));
+                return 1;
+            }
+        } else if (::stat(cfg.data_dir, &st) == 0 && !S_ISDIR(st.st_mode)) {
+            std::fprintf(stderr, "budyk serve: data_dir '%s' is not a directory\n",
+                         cfg.data_dir);
+            return 1;
+        }
+    }
+
     budyk::TierManager tm;
     std::vector<budyk::LevelRingSpec> level_rings;
     for (const auto& lv : cfg.scheduler.custom_levels) {

@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Stricter HTTP request parsing.** The parser accepted a
+  `Content-Length` with trailing garbage (`12abc` read as 12), took the
+  first of two disagreeing `Content-Length` headers (a request-smuggling
+  shape behind a proxy), ignored `Transfer-Encoding` and read no body,
+  and closed a connection whose headers outgrew 16 KiB without a word.
+  Now every `Content-Length` must be all digits and duplicates must
+  agree, or the answer is 400; any `Transfer-Encoding` gets 501; an
+  oversized header block gets 431. The request line must be
+  `METHOD /target HTTP/1.x`, and header lines need a name without
+  whitespace (no obsolete folding), or the answer is 400.
+- **Ring files are created 0600.** They were 0644, so any local user
+  could read the history (load, memory, process counts, file-watch
+  events). Existing files keep their mode.
+
 - **Sample tables are read-only to rules.** `cpu`, `mem`, `swap`,
   `load`, `disk`, `net`, `proc`, `entropy`, `self_` and `thermal` were
   ordinary Lua tables, so a rule that wrote `cpu.total_percent = ...`
@@ -41,6 +55,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   clear. The serve smoke test checks the first.
 
 ### Fixed
+
+- **`/api/samples?x=1` is no longer a 404.** Only `/api/range` split
+  the query string off the request target; every other route compared
+  the whole target. The parser now splits it (`HttpRequest::query`), so
+  every route matches whatever the query.
+- **Bare-LF requests are accepted.** A request whose lines end in `\n`
+  alone (RFC 7230 §3.5) waited out the 5 s timeout; it is parsed like
+  CRLF now, mixed endings included.
+- **A missing `data_dir` is created.** `budyk serve` on a fresh host
+  stopped with "tier1.ring: open failed: No such file or directory"
+  unless the rc.d script had made the directory. The daemon now creates
+  it (one level, mode 0750, as the rc.d script does). The systemd unit
+  creates `/var/db/budyk` in `ExecStartPre`, since `ProtectSystem=strict`
+  with `ReadWritePaths=` refuses to start the service when it is
+  missing.
 
 - **A data race between `HttpServer::stop()` and the accept loop.**
   `stop()` closed the listening socket and wrote -1 into `listen_fd_`

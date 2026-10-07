@@ -83,6 +83,7 @@ int main() {
                              r.status       = 200;
                              r.content_type = "application/json";
                              r.body         = "{\"path\":\"" + req.path +
+                                              "\",\"query\":\"" + req.query +
                                               "\",\"method\":\"" + req.method +
                                               "\",\"peer\":\"" + req.peer + "\"}";
                              return r;
@@ -393,6 +394,74 @@ int main() {
         std::string resp = http_round_trip(s.bound_port(),
             "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 1000000\r\n\r\n");
         assert(resp.find("HTTP/1.1 413 Payload Too Large") != std::string::npos);
+        s.stop();
+    }
+
+    // 11. Request parsing (review L1). A server whose handler echoes what
+    //     it was given: method, path, query, body length.
+    {
+        HttpServer s;
+        assert(s.start("127.0.0.1", 0,
+                       [](const HttpRequest& req) {
+                           HttpResponse r;
+                           r.status       = 200;
+                           r.content_type = "text/plain";
+                           r.body = req.method + " path=" + req.path + " query=" + req.query +
+                                    " body=" + std::to_string(req.body.size()) + "\n";
+                           return r;
+                       }) == 0);
+        auto send = [&s](const std::string& raw) { return http_round_trip(s.bound_port(), raw); };
+        auto status = [](const std::string& resp) { return resp.substr(0, resp.find("\r\n")); };
+
+        // The target is split at the first '?': the path matches routes
+        // whatever the query (/api/samples?x=1 used to be a 404).
+        std::string r = send("GET /api/samples?x=1&y=2 HTTP/1.1\r\nHost: x\r\n\r\n");
+        assert(status(r) == "HTTP/1.1 200 OK");
+        assert(r.find("GET path=/api/samples query=x=1&y=2 body=0") != std::string::npos);
+        r = send("GET /a?b?c HTTP/1.0\r\n\r\n");
+        assert(r.find("path=/a query=b?c") != std::string::npos);
+
+        // Bare LF line endings are accepted (RFC 7230 §3.5), as is a mix.
+        r = send("GET /lf HTTP/1.1\nHost: x\n\n");
+        assert(r.find("path=/lf") != std::string::npos);
+        r = send("POST /mix HTTP/1.1\r\nContent-Length: 3\n\r\nabc");
+        assert(r.find("path=/mix query= body=3") != std::string::npos);
+
+        // Content-Length: digits only, duplicates must agree.
+        assert(status(send("POST /x HTTP/1.1\r\nContent-Length: 12abc\r\n\r\n")) ==
+               "HTTP/1.1 400 Bad Request");
+        assert(status(send("POST /x HTTP/1.1\r\nContent-Length: -1\r\n\r\n")) ==
+               "HTTP/1.1 400 Bad Request");
+        assert(status(send("POST /x HTTP/1.1\r\nContent-Length: 3\r\nContent-Length: 4\r\n\r\nabcd")) ==
+               "HTTP/1.1 400 Bad Request");
+        r = send("POST /x HTTP/1.1\r\nContent-Length: 3\r\ncontent-length: 3\r\n\r\nabc");
+        assert(r.find("body=3") != std::string::npos);                   // identical: fine
+        assert(status(send("POST /x HTTP/1.1\r\nContent-Length: 99999999999999999999\r\n\r\n")) ==
+               "HTTP/1.1 400 Bad Request");
+
+        // No transfer codings.
+        assert(status(send("POST /x HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n0\r\n\r\n")) ==
+               "HTTP/1.1 501 Not Implemented");
+
+        // Malformed heads.
+        for (const char* bad : {
+                 "GET /x\r\n\r\n",                                   // no version
+                 "GET /x HTTP/2.0\r\n\r\n",                          // not HTTP/1.x
+                 "get /x HTTP/1.1\r\n\r\n",                          // method case
+                 "GET x HTTP/1.1\r\n\r\n",                           // target not absolute
+                 "GET  /x HTTP/1.1\r\n\r\n",                         // empty target
+                 "GET /x HTTP/1.1\r\nNoColon\r\n\r\n",
+                 "GET /x HTTP/1.1\r\nBad Name: v\r\n\r\n",         // space in name
+                 "GET /x HTTP/1.1\r\nName : v\r\n\r\n",            // space before colon
+                 "GET /x HTTP/1.1\r\nA: b\r\n  folded\r\n\r\n",  // obsolete folding
+                 "GET /x HTTP/1.1\r\n: v\r\n\r\n",                 // empty name
+             }) {
+            assert(status(send(bad)) == "HTTP/1.1 400 Bad Request");
+        }
+
+        // A header block past the 16 KiB cap: 431, not a silent close.
+        std::string big = "GET /x HTTP/1.1\r\nX-Big: " + std::string(20000, 'a') + "\r\n\r\n";
+        assert(status(send(big)) == "HTTP/1.1 431 Request Header Fields Too Large");
         s.stop();
     }
 
