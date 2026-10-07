@@ -178,8 +178,10 @@ configuration keys or the on-disk format.
   `apt-get update` until the job's `timeout-minutes` ran out, with
   apt's own `Acquire::http::Timeout` set or not. The Ubuntu jobs now
   install through `.github/scripts/apt-install.sh`, which runs
-  `apt-get update` (2 min) and `apt-get install` (5 min) under
-  `timeout(1)` with three attempts each.
+  `apt-get update` (2 min) and the package downloads (4 min) under
+  `timeout(1)` with three attempts each; a repeated download keeps the
+  packages already fetched. Unpacking is not timed, since stopping
+  dpkg half-way breaks every later apt call.
 - **One helper per unit test.** `tests/CMakeLists.txt` declares each
   test with `budyk_add_test(name LIBS ... [INCLUDES ...] [ARGS ...])`
   instead of four repeated commands; the set of tests and how they run
