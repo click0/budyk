@@ -81,10 +81,7 @@ jobs:
       - name: Install toolchain and dependencies
         run: |
           set -ex
-          echo 'Acquire::Retries "3"; Acquire::http::Timeout "30";' \
-            | sudo tee /etc/apt/apt.conf.d/80-ci-timeouts > /dev/null
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
+          .github/scripts/apt-install.sh \
             cmake g++ pkg-config \
             liblua5.4-dev libyaml-dev libargon2-dev libncurses-dev
 
