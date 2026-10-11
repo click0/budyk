@@ -95,6 +95,11 @@ struct Sample {
     ThermalStats thermal;
     FileWatchSample file_watch;
     double    uptime_seconds;
+    // True for a record folded from finer samples by TierAggregator (an
+    // L2 or L1 summary of an L3 or custom-level stretch). Not part of
+    // the sample payload: the ring record carries it in its header
+    // (storage/codec.h), like the timestamp and the level.
+    bool      folded;
 };
 
 } // namespace budyk

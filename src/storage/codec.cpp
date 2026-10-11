@@ -11,8 +11,29 @@ namespace budyk {
 namespace {
 
 // CRC-32C (Castagnoli), polynomial 0x1EDC6F41 reflected = 0x82F63B78.
-// Per-byte software impl — small, portable, no SSE4.2 dependency.
+// Table-driven, one byte per step: portable, no SSE4.2 dependency, and
+// about eight times faster than going bit by bit, which matters because
+// every record read (each probe of a query's binary search included)
+// checks one.
 constexpr uint32_t kCrc32cPolyReflected = 0x82F63B78U;
+
+struct Crc32cTable {
+    uint32_t v[256];
+};
+
+constexpr Crc32cTable make_crc32c_table() {
+    Crc32cTable t{};
+    for (uint32_t i = 0; i < 256; ++i) {
+        uint32_t c = i;
+        for (int k = 0; k < 8; ++k) {
+            c = (c >> 1) ^ (kCrc32cPolyReflected & (0U - (c & 1U)));
+        }
+        t.v[i] = c;
+    }
+    return t;
+}
+
+constexpr Crc32cTable kCrc32cTable = make_crc32c_table();
 
 } // namespace
 
@@ -20,10 +41,7 @@ uint32_t crc32c(const void* data, size_t len, uint32_t seed) {
     uint32_t c = ~seed;
     const uint8_t* p = static_cast<const uint8_t*>(data);
     for (size_t i = 0; i < len; ++i) {
-        c ^= p[i];
-        for (int k = 0; k < 8; ++k) {
-            c = (c >> 1) ^ (kCrc32cPolyReflected & -(c & 1));
-        }
+        c = (c >> 8) ^ kCrc32cTable.v[(c ^ p[i]) & 0xFFU];
     }
     return ~c;
 }
@@ -42,7 +60,7 @@ int record_encode(const Sample& s, void* buf, size_t cap, size_t* out_len) {
 
     le_put_u64(p, s.timestamp_nanos); p += 8;
     *p++ = static_cast<uint8_t>(s.level);
-    *p++ = 0;                                       // pad
+    *p++ = s.folded ? kRecordFolded : 0;            // flags
     uint8_t* crc_slot = p; p += 4;
     std::memset(crc_slot, 0, 4);
 
@@ -50,7 +68,7 @@ int record_encode(const Sample& s, void* buf, size_t cap, size_t* out_len) {
     if (sample_encode(&s, p, cap - kRecordHeaderSize, &enc_len) != 0) return -3;
     if (enc_len != sample_max_encoded_size())                          return -4;
 
-    uint32_t c = crc32c(base, 10);          // ts + level + pad
+    uint32_t c = crc32c(base, 10);          // ts + level + flags
     c          = crc32c(p,   enc_len, c);   // payload
     le_put_u32(crc_slot, c);
 
@@ -73,11 +91,12 @@ int record_decode(const void* buf, size_t len, Sample* out) {
     if (sample_decode(base + kRecordHeaderSize,
                       len - kRecordHeaderSize, out) != 0) return -4;
 
-    // Record framing is the source of truth for ts / level.
+    // Record framing is the source of truth for ts / level / flags.
     out->timestamp_nanos = le_get_u64(base);
     uint8_t lv = base[8];
     if (lv < 1 || lv > kMaxLevelId)                  return -5;
-    out->level = static_cast<Level>(lv);
+    out->level  = static_cast<Level>(lv);
+    out->folded = (base[9] & kRecordFolded) != 0;
     return 0;
 }
 

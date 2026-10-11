@@ -15,8 +15,11 @@ dependencies at runtime, no database. BSD-3-Clause license.
 - **Rule engine:** embedded Lua 5.4, sandboxed `watch()` API, per-call
   instruction and memory limits
 - **Storage:** one ring file per level (mmap'd header, `pwrite` records,
-  CRC32C, level markers). No aggregation on disk yet: `TierAggregator` exists
-  but is not wired in.
+  CRC32C, level markers). While L3 or a custom level collects,
+  `TierManager::store()` also folds its samples (`TierAggregator`) into one
+  L2 record per L2 interval and one L1 record per L1 interval, flagged
+  `folded` in the record header; `query_all()` (`/api/range?level=all`)
+  shows each stretch once, at the finest level still on disk.
 - **Web:** hand-written HTTP/1.1 + WebSocket (RFC 6455) server in `src/web`.
   No mongoose, no libwebsockets. The SPA is a string literal in
   `src/web/spa.cpp`.
@@ -60,7 +63,8 @@ src/collector/     — platform metric collection (plain C)
   linux/           — /proc, /sys parsers
 src/scheduler/     — L1↔L2↔L3 (+ custom levels) tick scheduler, anomaly detection
 src/hot_buffer/    — in-memory ring for WS catch-up (RAM-only)
-src/storage/       — ring files (mmap header, pwrite, CRC32C), TierManager
+src/storage/       — ring files (mmap header, pwrite, CRC32C), TierManager,
+                     TierAggregator (the L2/L1 folds)
 src/rules/         — Lua 5.4 engine, sandbox, bindings, alerts, exec, freeze, Worker
 src/security/      — file watcher (inotify / kqueue) feeding the `files` Lua global
 src/ai/            — rule suggestions (Tier A: local stats; Tier B: LLM via curl)
@@ -159,9 +163,13 @@ on every target; a new implicit sign or width change is a build error in CI
    (default 16). A runaway rule gets an error, not the daemon.
 3. The hot buffer is RAM-only and never touches disk; it is emptied once no
    client has been connected for `hot_buffer.warm_grace` (`WarmGrace`).
-4. Storage records carry an absolute timestamp, a level marker and a CRC32C;
-   each level has its own ring; `write_idx` is advanced only after the
-   `pwrite`, so a crash loses at most one record (`tests/smoke/crash.sh`).
+4. Storage records carry an absolute timestamp, a level marker, a flags
+   byte (bit 0: folded) and a CRC32C; each level has its own ring;
+   `write_idx` is advanced only after the `pwrite`, so a crash loses at most
+   one record (`tests/smoke/crash.sh`). The L2 and L1 rings get folded
+   records while a finer level runs (spec §3.4.1); a window ends after its
+   interval, when the level drops to the ring's own, or on shutdown — a
+   SIGKILL loses the open windows, not the raw samples.
 5. `exec()` is asynchronous: it returns `{ queued = true }` and the outcome
    is logged. `exec(cmd, { timeout = s, wait = true })` is the inline form,
    capped at 60 s.
@@ -192,8 +200,6 @@ on every target; a new implicit sign or width change is a build error in CI
 
 ## Known gaps against the spec (`docs/budyk-spec-en.md`)
 
-- No tier aggregation on disk; `TierAggregator` is unused. While a client
-  holds L3, the L1 ring receives nothing.
 - The metric set is roughly 40% of §2.1: no per-core CPU, per-device disk,
   per-interface network, TCP/socket counters, filesystem usage or process
   list.
@@ -208,10 +214,6 @@ on every target; a new implicit sign or width change is a build error in CI
 
 ### Kept on purpose for later milestones (do not remove as dead code)
 
-- `src/storage/tier_aggregator.*`: the L3 → L2/L1 fold (mean for
-  percentages and load, last value or max/min for counters), tested but not
-  wired into `TierManager`. 0.7.0 wires it in so the L1 ring keeps filling
-  while a client holds L3.
 - `src/core/metric_source.h`, `src/collector/collector.h`
   (`MetricSource`, `create_collector()`): the collector interface. `main.cpp`
   calls the C collectors directly today; the interface is for per-level
