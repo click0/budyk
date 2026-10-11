@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The L2 and L1 rings keep filling while a finer level collects**
+  (spec §3.4.1). While a client held L3, or a custom level ran, only
+  that level's ring got records: the L1 ring, the one that keeps weeks
+  of history, had a hole for every dashboard session, and once the raw
+  ring wrapped nothing was left of those hours. `TierAggregator`, which
+  existed but was not used, is now wired into `TierManager::store()`:
+  L3 and custom-level samples are also folded into one record per L2
+  interval in `tier2.ring`, and everything above L1 into one record
+  per L1 interval in `tier3.ring`. Rates, load, memory and swap are
+  averaged; process counts, temperature and RSS keep their maximum,
+  entropy its minimum, file events their sum; counts, totals and
+  cumulative fields their last value. A window ends after its
+  interval, when the level drops to the ring's own (the folded record
+  is written first, so every ring stays in time order), or on shutdown.
+- **`"folded":true` on summary records.** The flag lives in the
+  record header's spare byte (bit 0), so the ring format and record
+  size are unchanged: older rings read as unfolded, and an older budyk
+  reads folded records as ordinary ones. `/api/range?level=L1` (or
+  `L2`, `tier=2|3`) returns them flagged; `level=all` (the dashboard's
+  history chart) leaves a folded record out where a finer ring still
+  holds samples from its window, so a stretch is drawn once, at the
+  finest level still on disk, and the summary takes over once the raw
+  samples are overwritten.
+
+### Changed
+
+- **CRC32C by table.** Every record read checks a CRC32C, computed
+  bit by bit until now; a 256-entry table (same polynomial, identical
+  values, checked against the bitwise definition in the tests) makes it
+  about eight times faster. `/api/range?level=all` over a day of L3
+  went from 36 ms to 16 ms.
+
 ## [0.6.5] — 2026-10-07
 
 A maintenance release that finishes the code review. Security: the

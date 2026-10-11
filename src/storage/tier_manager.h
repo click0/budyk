@@ -2,6 +2,7 @@
 #pragma once
 #include "core/sample.h"
 #include "storage/ring_file.h"
+#include "storage/tier_aggregator.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -12,15 +13,16 @@
 namespace budyk {
 
 // Multi-tier coordinator: routes encoded samples to one of three on-disk
-// ring buffers based on Sample::level.
+// ring buffers based on Sample::level, plus one ring per custom level.
 //
 //   tier1_  ←  L3 samples (raw, highest cadence)
-//   tier2_  ←  L2 samples (1-minute aggregates produced by TierAggregator)
-//   tier3_  ←  L1 samples (5-minute aggregates produced by TierAggregator)
+//   tier2_  ←  L2 samples, and L2 records folded from L3 / custom samples
+//   tier3_  ←  L1 samples, and L1 records folded from everything finer
 //
-// TierManager itself does not aggregate — that's TierAggregator's job. The
-// daemon main loop drives the cadence, calling store() once per sample
-// regardless of tier.
+// The daemon main loop calls store() once per sample whatever its level;
+// with fold windows set (set_fold_windows), store() also feeds the two
+// TierAggregators, so the L2 and L1 rings keep their cadence while a
+// finer level collects (spec §3.4.1).
 // One user-defined level's ring (collection.levels). The file is named
 // after the level (level-<name>.ring), not its id, so reordering the
 // config doesn't point a level at another level's history.
@@ -46,11 +48,25 @@ public:
     // changed? move the file aside or restore the old size)".
     const std::string& last_error() const;
 
-    // Encodes `s` and appends it to the ring matching its level.
-    // Returns 0 on success, negative on encode/write failure or if
-    // the manager is not initialised. Unknown levels are rejected.
+    // Fold windows for the coarse rings. With l2_ns set, every L3 or
+    // custom-level sample is also folded into one L2 record per l2_ns in
+    // tier2; with l1_ns set, every sample above L1 into one L1 record per
+    // l1_ns in tier3 (folded == true, see TierAggregator for the fields).
+    // A window ends once it has lasted its length, when a sample of the
+    // ring's own level arrives (the folded record goes first, so each
+    // ring stays in time order), or on close(). 0 turns folding off for
+    // that ring, the default. The daemon passes the L2 and L1 intervals.
+    // Call before the manager is shared with another thread.
+    void set_fold_windows(uint64_t l2_ns, uint64_t l1_ns);
+
+    // Encodes `s` and appends it to the ring matching its level, then
+    // feeds the fold windows. Returns 0 on success, negative on
+    // encode/write failure (of the sample or a folded record) or if the
+    // manager is not initialised. Unknown levels are rejected.
     int  store(const Sample& s);
 
+    // Writes the open fold windows (a partial window is still a summary
+    // of what was collected) and closes the rings.
     void close();
 
     // Read decoded samples from one tier's ring whose timestamp_nanos
@@ -74,10 +90,13 @@ public:
 
     // Every ring, merged oldest-first: what was collected in the window
     // at whatever level. Each ring contributes at most max_records spread
-    // evenly over its part of the window. If the merge holds more than
-    // max_records, it's thinned by time — the window is cut into
-    // max_records equal slices and the newest sample of each slice is
-    // kept — so a long window stays covered end to end.
+    // evenly over its part of the window. A folded record is left out
+    // where a finer ring still holds samples from its fold window, so a
+    // stretch of L3 shows once, at L3; where the finer samples are gone
+    // (that ring has wrapped), the folded record stands in for them. If
+    // the merge holds more than max_records, it's thinned by time — the
+    // window is cut into max_records equal slices and the newest sample
+    // of each slice is kept — so a long window stays covered end to end.
     int query_all(uint64_t since_ns, uint64_t until_ns,
                   std::size_t max_records, std::vector<Sample>* out) const;
 
@@ -96,7 +115,17 @@ private:
     std::vector<CustomRing> custom_;
     bool     ready_ = false;
 
+    uint64_t       fold_l2_ns_ = 0;
+    uint64_t       fold_l1_ns_ = 0;
+    TierAggregator fold_l2_{Level::L2};
+    TierAggregator fold_l1_{Level::L1};
+
     const RingFile* ring_for(Level level) const;
+    int  append(RingFile* ring, const Sample& s);
+    // Adds `s` to a fold window, first writing the window to `ring` if
+    // `s` falls past its end (or before its start: a clock step back).
+    int  feed(TierAggregator* agg, RingFile* ring, uint64_t window_ns, const Sample& s);
+    int  flush(TierAggregator* agg, RingFile* ring);
     int query_ring(const RingFile* ring, int override_level,
                    uint64_t since_ns, uint64_t until_ns,
                    std::size_t max_records, std::vector<Sample>* out) const;

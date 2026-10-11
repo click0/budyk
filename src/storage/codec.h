@@ -13,10 +13,14 @@ namespace budyk {
 // Per-record on-disk layout:
 //   u64  timestamp_nanos (LE)
 //   u8   level
-//   u8   _pad
+//   u8   flags              bit 0: kRecordFolded; the other bits are 0
+//                           and ignored on read. Before 0.7.0 this byte
+//                           was padding, always 0, so old records read
+//                           as unflagged and old binaries ignore it.
 //   u32  crc32c (LE)        covers everything except the CRC bytes themselves
 //   u8[] payload            produced by sample_encode()
-constexpr size_t kRecordHeaderSize = 14;
+constexpr size_t  kRecordHeaderSize = 14;
+constexpr uint8_t kRecordFolded     = 0x01;   // Sample::folded
 
 size_t record_size_for_sample();
 

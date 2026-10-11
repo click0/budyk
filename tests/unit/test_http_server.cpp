@@ -184,6 +184,14 @@ int main() {
 
         itimerval off{};
         ::setitimer(ITIMER_REAL, &off, nullptr);
+        // A SIGALRM raised just before the timer stopped can still be
+        // pending (FreeBSD hands it to a thread later), and once the
+        // default action is back it would terminate the test. Setting
+        // SIG_IGN discards a pending signal (POSIX), so go through it.
+        struct sigaction ign{};
+        ign.sa_handler = SIG_IGN;
+        sigemptyset(&ign.sa_mask);
+        ::sigaction(SIGALRM, &ign, nullptr);
         ::sigaction(SIGALRM, &old_sa, nullptr);
         ::pthread_sigmask(SIG_SETMASK, &prev, nullptr);
 

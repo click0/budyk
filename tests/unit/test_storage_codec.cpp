@@ -133,7 +133,7 @@ int main() {
         size_t  len = 0;
         assert(record_encode(in, buf, sizeof(buf), &len) == 0);
 
-        // CRC slot is at offset 10 (u64 ts + u8 level + u8 pad).
+        // CRC slot is at offset 10 (u64 ts + u8 level + u8 flags).
         buf[10] ^= 0x01;
         Sample out{};
         assert(record_decode(buf, len, &out) != 0);
@@ -205,6 +205,57 @@ int main() {
         assert(record_decode(buf, len, &out) == 0);
         assert(out.timestamp_nanos == in.timestamp_nanos);
         assert(out.level           == in.level);
+    }
+
+    // 15. The flags byte (offset 9): folded records set bit 0 and read
+    //     back folded; others write 0 (as the padding byte always was,
+    //     so pre-0.7.0 records read as unflagged). Unknown bits are
+    //     ignored, and the byte is under the CRC.
+    {
+        Sample in = make_sample();
+        uint8_t buf[320] = {0};
+        size_t  len = 0;
+        Sample  out{};
+
+        assert(record_encode(in, buf, sizeof(buf), &len) == 0);
+        assert(buf[9] == 0);
+        out.folded = true;
+        assert(record_decode(buf, len, &out) == 0 && !out.folded);
+
+        in.folded = true;
+        assert(record_encode(in, buf, sizeof(buf), &len) == 0);
+        assert(buf[9] == kRecordFolded);
+        assert(record_decode(buf, len, &out) == 0 && out.folded);
+
+        buf[9] = 0x00;                                   // flipped, CRC not
+        assert(record_decode(buf, len, &out) != 0);
+
+        buf[9] = 0x02;                                   // an unknown bit, CRC fixed
+        uint32_t c = crc32c(buf, 10);
+        c = crc32c(buf + kRecordHeaderSize, len - kRecordHeaderSize, c);
+        buf[10] = uint8_t(c); buf[11] = uint8_t(c >> 8);
+        buf[12] = uint8_t(c >> 16); buf[13] = uint8_t(c >> 24);
+        assert(record_decode(buf, len, &out) == 0 && !out.folded);
+    }
+
+    // 16. The table-driven crc32c equals the bit-by-bit definition, on
+    //     every length up to 300 and with seeds (chained calls).
+    {
+        auto bitwise = [](const uint8_t* d, size_t n, uint32_t seed) {
+            uint32_t c = ~seed;
+            for (size_t i = 0; i < n; ++i) {
+                c ^= d[i];
+                for (int k = 0; k < 8; ++k) c = (c >> 1) ^ (0x82F63B78U & (0U - (c & 1U)));
+            }
+            return ~c;
+        };
+        uint8_t data[300];
+        uint32_t x = 12345;
+        for (auto& b : data) { x = x * 1103515245U + 12345U; b = uint8_t(x >> 16); }
+        for (size_t n = 0; n <= sizeof(data); ++n) {
+            assert(crc32c(data, n) == bitwise(data, n, 0));
+            assert(crc32c(data, n, 0xDEADBEEFU) == bitwise(data, n, 0xDEADBEEFU));
+        }
     }
 
     std::printf("test_storage_codec: PASS\n");

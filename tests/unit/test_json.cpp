@@ -182,6 +182,18 @@ int main() {
         assert(!json_get_string("{}", "password", nullptr));
     }
 
+    // 7. "folded":true marks a record folded from finer samples; a live
+    //    sample (and every unfolded record) has no such key.
+    {
+        Sample s{};
+        s.timestamp_nanos = 5;
+        s.level = Level::L1;
+        assert(sample_to_json(s).find("folded") == std::string::npos);
+        s.folded = true;
+        const std::string j = sample_to_json(s);
+        assert(j.find("\"level\":1,\"folded\":true,\"cpu\":{") != std::string::npos);
+    }
+
     std::printf("test_json: PASS\n");
     return 0;
 }

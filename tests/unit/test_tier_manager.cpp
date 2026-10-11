@@ -409,6 +409,139 @@ int main() {
         rmrf(d);
     }
 
+    // N+7. Fold windows (spec §3.4.1). With an L2 window of 10 and an L1
+    //      window of 100, a run of L3 samples also leaves one folded L2
+    //      record per 10 and one folded L1 record per 100, each stamped
+    //      with its window's last sample and holding the mean. An L1
+    //      sample writes the open windows first, so every ring stays in
+    //      time order; close() writes them too; an L2 sample ends the L2
+    //      window and feeds the L1 one; a clock step back starts a new
+    //      window.
+    {
+        const std::string d = mkdtmp();
+        TierManager tm;
+        assert(tm.init(d.c_str(), 1, 1, 1) == 0);
+        tm.set_fold_windows(10, 100);
+        for (uint64_t ts = 1001; ts <= 1250; ++ts) {
+            Sample x = mk(Level::L3, ts);
+            x.cpu.total_percent = double(ts - 1000);     // 1..250
+            assert(tm.store(x) == 0);
+        }
+        assert(tm.tier1_count() == 250);
+        assert(tm.tier2_count() == 24);    // 1001..1240; 1241..1250 still open
+        assert(tm.tier3_count() == 2);     // 1001..1200; 1201..1250 still open
+        assert(tm.store(mk(Level::L1, 1300)) == 0);
+        assert(tm.tier2_count() == 25 && tm.tier3_count() == 4);
+
+        std::vector<Sample> l2;
+        assert(tm.query(2, 0, 0, 100, &l2) == 25);
+        for (size_t i = 0; i < l2.size(); ++i) {
+            assert(l2[i].folded && l2[i].level == Level::L2);
+            assert(l2[i].timestamp_nanos == 1010 + 10 * i);
+            assert(l2[i].cpu.total_percent == 10.0 * double(i) + 5.5);
+        }
+        std::vector<Sample> l1;
+        assert(tm.query_level(Level::L1, 0, 0, 100, &l1) == 4);
+        assert(l1[0].folded && l1[0].timestamp_nanos == 1100 && l1[0].cpu.total_percent == 50.5);
+        assert(l1[1].folded && l1[1].timestamp_nanos == 1200);
+        assert(l1[2].folded && l1[2].timestamp_nanos == 1250 && l1[2].cpu.total_percent == 225.5);
+        assert(!l1[3].folded && l1[3].timestamp_nanos == 1300);
+
+        // An L2 sample: the L2 window it interrupts goes first; it feeds
+        // the L1 window itself.
+        for (uint64_t ts = 1401; ts <= 1405; ++ts) assert(tm.store(mk(Level::L3, ts)) == 0);
+        assert(tm.store(mk(Level::L2, 1406)) == 0);
+        l2.clear();
+        assert(tm.query(2, 1300, 0, 100, &l2) == 2);
+        assert(l2[0].folded && l2[0].timestamp_nanos == 1405);
+        assert(!l2[1].folded && l2[1].timestamp_nanos == 1406);
+
+        // The clock steps back: the open L2 window (1501..1503) is
+        // written and a new one starts at 1450.
+        for (uint64_t ts = 1501; ts <= 1503; ++ts) assert(tm.store(mk(Level::L3, ts)) == 0);
+        const uint64_t before = tm.tier2_count();
+        assert(tm.store(mk(Level::L3, 1450)) == 0);
+        assert(tm.tier2_count() == before + 1);
+
+        // close() writes what is open: L2 (1450) and L1 (1401..1450).
+        const uint64_t t2 = tm.tier2_count(), t3 = tm.tier3_count();
+        tm.close();
+        assert(tm.init(d.c_str(), 1, 1, 1) == 0);
+        assert(tm.tier2_count() == t2 + 1 && tm.tier3_count() == t3 + 1);
+        tm.close();
+        rmrf(d);
+    }
+
+    // N+8. query_all() shows a stretch once, at the finest level still on
+    //      disk: a folded record is dropped while a finer ring (L3, L2, a
+    //      custom level) holds samples from its window, and kept once
+    //      that ring has wrapped past them. query_level() and query()
+    //      still return folded records: there, they are the data.
+    {
+        const std::string d = mkdtmp();
+        TierManager tm;
+        std::vector<LevelRingSpec> custom = {{kFirstCustomLevel, "burst", 1}};
+        assert(tm.init(d.c_str(), 1, 1, 1, custom) == 0);
+        tm.set_fold_windows(10, 100);
+        for (uint64_t ts = 1001; ts <= 1250; ++ts) assert(tm.store(mk(Level::L3, ts)) == 0);
+        const Level burst = static_cast<Level>(kFirstCustomLevel);
+        for (uint64_t ts = 1251; ts <= 1290; ++ts) assert(tm.store(mk(burst, ts)) == 0);
+        assert(tm.store(mk(Level::L1, 1300)) == 0);
+        assert(tm.tier2_count() > 0 && tm.tier3_count() > 1);
+
+        std::vector<Sample> all;
+        assert(tm.query_all(0, 0, 10000, &all) == 291);   // 250 + 40 + the L1 sample
+        for (const auto& x : all) assert(!x.folded);
+        assert(all.back().level == Level::L1 && all.back().timestamp_nanos == 1300);
+        // With a small limit the finer rings come back spread thin, and
+        // most fold windows hold none of the samples read; the check
+        // goes to the ring for those.
+        for (size_t limit : {7u, 13u, 20u}) {
+            all.clear();
+            assert(tm.query_all(0, 0, limit, &all) > 0);
+            for (const auto& x : all) assert(!x.folded);
+        }
+        // Same for the custom ring, over windows of the burst stretch and
+        // small limits: the burst samples read are a few, fold windows
+        // fall between them, and only the ring itself can tell.
+        for (uint64_t since = 1251; since <= 1262; ++since) {
+            for (uint64_t until = 1265; until <= 1295; ++until) {
+                for (size_t limit = 2; limit <= 6; ++limit) {
+                    all.clear();
+                    assert(tm.query_all(since, until, limit, &all) > 0);
+                    for (const auto& x : all) assert(!x.folded);
+                }
+            }
+        }
+
+        // Run tier1 (1 MB) round so its oldest records are gone; tier2
+        // keeps every folded L2 record. Folded L2 records from before
+        // tier1's oldest are shown, later ones are not; every folded L1
+        // record is covered by tier2.
+        for (uint64_t ts = 2001; ts <= 9000; ++ts) assert(tm.store(mk(Level::L3, ts)) == 0);
+        all.clear();
+        assert(tm.query_all(0, 0, 1000000, &all) > 0);
+        uint64_t oldest_raw = UINT64_MAX;
+        size_t folded_l2 = 0;
+        for (const auto& x : all) {
+            if (!x.folded && x.level == Level::L3 && x.timestamp_nanos < oldest_raw) {
+                oldest_raw = x.timestamp_nanos;
+            }
+        }
+        assert(oldest_raw > 2001);                          // tier1 wrapped
+        for (const auto& x : all) {
+            if (!x.folded) continue;
+            assert(x.level == Level::L2);
+            assert(x.timestamp_nanos < oldest_raw);
+            ++folded_l2;
+        }
+        assert(folded_l2 > 0);
+        std::vector<Sample> l2;
+        assert(tm.query(2, 0, 0, 1000000, &l2) > static_cast<int>(folded_l2));
+        tm.close();
+        rmrf(d);
+    }
+
     std::printf("test_tier_manager: PASS\n");
     return 0;
 }

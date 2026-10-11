@@ -251,6 +251,13 @@ int cmd_serve(int argc, char* argv[], const char* version) {
 
     budyk::Scheduler sched(cfg.scheduler);
 
+    // While L3 or a custom level collects, the L2 and L1 rings still get
+    // one folded record per their interval (spec §3.4.1).
+    constexpr uint64_t kNsPerMs = 1000000;
+    tm.set_fold_windows(
+        static_cast<uint64_t>(sched.interval_ms(budyk::Level::L2)) * kNsPerMs,
+        static_cast<uint64_t>(sched.interval_ms(budyk::Level::L1)) * kNsPerMs);
+
     budyk::LuaEngine engine;
 
     // Both initial setup and SIGHUP reload do the same dance: init the

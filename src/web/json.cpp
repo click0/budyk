@@ -55,6 +55,9 @@ std::string sample_to_json(const Sample& s) {
 
     append_kv_uint(&out, "ts",    s.timestamp_nanos);                 out.push_back(',');
     append_kv_int (&out, "level", static_cast<int64_t>(s.level));     out.push_back(',');
+    // Only on a record folded from finer samples (/api/range); live
+    // samples never carry it.
+    if (s.folded) out.append("\"folded\":true,");
 
     out.append("\"cpu\":{");
     append_kv_double(&out, "total_percent", s.cpu.total_percent);     out.push_back(',');

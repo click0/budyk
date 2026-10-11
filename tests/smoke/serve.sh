@@ -125,6 +125,29 @@ junk.send(b"\x00\xff not http\r\n\r\n")
 junk.close()
 EOF
 
+# The burst level holds throughout, yet the L1 ring still gets a record
+# per L1 interval (2 s here), folded from the burst samples; level=all
+# shows those samples once, from the burst ring, without the folded copy.
+i=0
+until curl -s "http://127.0.0.1:$PORT/api/range?level=L1" | grep -q '"folded":true'; do
+    i=$((i + 1))
+    [ "$i" -lt 50 ] || break
+    sleep 0.1
+done
+if curl -s "http://127.0.0.1:$PORT/api/range?level=L1" | grep -q '"folded":true'; then
+    echo "ok   the L1 ring gets folded records while the burst level runs"
+else
+    echo "FAIL: no folded record in the L1 ring"; fail=1
+fi
+all=$(curl -s "http://127.0.0.1:$PORT/api/range?level=all")
+if echo "$all" | grep -q '"folded"'; then
+    echo "FAIL: level=all repeats folded records"; fail=1
+elif ! echo "$all" | grep -q "\"level\":4,"; then
+    echo "FAIL: level=all has no burst samples"; fail=1
+else
+    echo "ok   level=all shows the burst samples, not their folded copies"
+fi
+
 # Every descriptor the daemon holds must be close-on-exec (rule exec()
 # and the alert channels fork): the listening socket, the WS client
 # above, the ring files, the wake pipe. Linux only — FreeBSD has no

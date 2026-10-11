@@ -28,6 +28,27 @@ metrics using an adaptive 3-level model (heartbeat / watchful / active),
 stores them in tiered ring-buffer files, and serves them via a real-time
 web dashboard and terminal TUI.
 .PP
+Each level has its own ring file in the data directory:
+.I tier1.ring
+(L3),
+.I tier2.ring
+(L2),
+.I tier3.ring
+(L1) and
+.IR level- name .ring
+for each custom level. While L3 or a custom level collects, its samples
+are also folded into one record per L2 interval in
+.I tier2.ring
+and one per L1 interval in
+.IR tier3.ring :
+means for CPU, memory, swap, load, disk and network, maxima for process
+counts, temperature and RSS, the minimum for entropy. The coarse rings
+keep their cadence and keep a summary after the raw samples have been
+overwritten. The history API marks such records
+.B folded
+and, for the whole-history view, shows each stretch once, at the finest
+level still on disk.
+.PP
 Monitoring rules are written in Lua and evaluated on each collection tick.
 .SH FILES
 .TP
@@ -42,8 +63,8 @@ Ring-buffer data directory.
 .SH SIGNALS
 .TP
 .B SIGTERM, SIGINT
-Graceful shutdown — flushes rule state, closes the HTTP server and
-ring files.
+Graceful shutdown — flushes rule state, closes the HTTP server, writes
+the fold windows still open and closes the ring files.
 .TP
 .B SIGHUP
 Reload the rules file specified by
