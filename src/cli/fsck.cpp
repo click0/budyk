@@ -91,9 +91,15 @@ bool report(const std::string& name, const RingCheck& c, bool repair) {
                     name.c_str(), h.tier);
         return true;
     }
-    if (c.record_size_differs) {
-        std::printf("%s: records are %u bytes, this budyk writes %zu (another version wrote "
-                    "it): not checked\n", name.c_str(), h.record_size, record_size_for_sample());
+    if (c.older_format) {
+        std::printf("%s: %u-byte records, from an older budyk (this one writes %zu): "
+                    "budyk serve converts it on start; not checked\n",
+                    name.c_str(), h.record_size, record_size_for_sample());
+        return false;
+    }
+    if (c.newer_format) {
+        std::printf("%s: %u-byte records, from a newer budyk (this one writes %zu): "
+                    "not checked\n", name.c_str(), h.record_size, record_size_for_sample());
         return true;
     }
     if (c.open_rc != 0) {

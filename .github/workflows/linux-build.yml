@@ -155,6 +155,22 @@ jobs:
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
         run: tests/smoke/fsck.sh build/src/budyk
 
+      # Rings written by the v0.6.4 release (270-byte records) must be
+      # converted when this build starts on them. The release binary is
+      # pinned by its SHA-256.
+      - name: Rings of v0.6.4 converted on start
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -e
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/old.tar.gz" \
+            https://github.com/click0/budyk/releases/download/v0.6.4/budyk-0.6.4-linux-amd64.tar.gz
+          echo "19cf8453d2ab70678f202158e3d1718e3cb6ed44bd4e70521c06bcb92f6e25bd  $RUNNER_TEMP/old.tar.gz" \
+            | sha256sum -c -
+          tar xzf "$RUNNER_TEMP/old.tar.gz" -C "$RUNNER_TEMP"
+          tests/smoke/upgrade.sh build/src/budyk "$RUNNER_TEMP/budyk-0.6.4-linux-amd64/budyk"
+
   # ThreadSanitizer: the collector tick, the HTTP thread and the Workers
   # share the hot buffer, the rings, the hub and the session store. Every
   # unit test plus the serve smoke test; any report fails the job.

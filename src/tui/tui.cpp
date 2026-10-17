@@ -422,7 +422,20 @@ int tui_run(const char* host, int port, std::string (*ask_password)()) {
                        fmt_bytes(dr).c_str(), fmt_bytes(dw).c_str(), devs);
             ::mvprintw(9, 0, "Net    rx %s/s  tx %s/s   (%u ifaces)",
                        fmt_bytes(rx).c_str(), fmt_bytes(tx).c_str(), ifs);
-            ::mvprintw(10, 0, "Uptime %s", fmt_uptime(uptime).c_str());
+            const double iowait   = sample_number(b, "cpu", "iowait_percent");
+            const double zombies  = sample_number(b, "proc", "zombie");
+            const double blocked  = sample_number(b, "proc", "blocked");
+            const double procs    = sample_number(b, "proc", "total");
+            const double estab    = sample_number(b, "tcp", "established");
+            const double retr     = sample_number(b, "tcp", "retransmits_per_sec");
+            const double fs_used  = sample_number(b, "fs", "max_used_percent");
+            const double fs_count = sample_number(b, "fs", "count");
+            ::mvprintw(10, 0, "Procs  %.0f   %.0f blocked, %.0f zombie   iowait %.1f%%",
+                       procs, blocked, zombies, iowait);
+            ::mvprintw(11, 0, "TCP    %.0f established   %.1f retransmits/s", estab, retr);
+            ::mvprintw(12, 0, "FS     fullest %5.1f%% %s of %.0f",
+                       fs_used, bar(fs_used, barw).c_str(), fs_count);
+            ::mvprintw(13, 0, "Uptime %s", fmt_uptime(uptime).c_str());
         }
         ::refresh();
 

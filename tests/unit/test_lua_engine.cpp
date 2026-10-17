@@ -913,7 +913,7 @@ int main() {
             "watch('pairs', { when = function()\n"
             "  local n = 0\n"
             "  for k, v in pairs(cpu) do n = n + 1 end\n"
-            "  return n == 2\n"
+            "  return n == 8\n"
             "end })\n"
             "watch('meta', { when = function()\n"
             "  local ok = pcall(setmetatable, cpu, nil)\n"
@@ -957,6 +957,39 @@ int main() {
         // ...and are gone on the next one.
         assert(e.eval_tick(mk(70.0, 30.0, 0.1, 0.0)) == 1);
         assert(e.load_string("assert(seen_cpu == 70 and seen_mem == 30)") == 0);
+        e.shutdown();
+    }
+
+    // N. The v8 metrics reach rules: the CPU parts, process states, tcp,
+    //    udp, fs and clock, read-only like every sample group.
+    {
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        assert(e.load_string(
+            "watch('iowait', { when = function() return cpu.iowait_percent > 20 end })\n"
+            "watch('zombies', { when = function() return proc.zombie > 3 and proc.threads == 900 end })\n"
+            "watch('retrans', { when = function() return tcp.present and tcp.retransmits_per_sec > 10 end })\n"
+            "watch('udp', { when = function() return udp.no_port_per_sec > 1 end })\n"
+            "watch('disk_full', { when = function() return fs.max_used_percent >= 95 end })\n"
+            "watch('clock', { when = function() return clock.present and not clock.synced end })\n"
+            "watch('ro', { when = function() fs.max_used_percent = 0 return true end })\n") == 0);
+        Sample x = mk(10.0, 50.0, 0.1, 0.0);
+        x.cpu.iowait_percent       = 25.0;
+        x.proc.zombie              = 4;
+        x.proc.threads             = 900;
+        x.tcp.present              = true;
+        x.tcp.retransmits_per_sec  = 12.5;
+        x.udp.present              = true;
+        x.udp.no_port_per_sec      = 3.0;
+        x.fs.present               = true;
+        x.fs.max_used_percent      = 96.0;
+        x.clock.present            = true;
+        x.clock.synced             = false;
+        assert(e.eval_tick(x) == 6);
+        assert(e.rules()[6].last_error.find("fs.max_used_percent is read-only") != std::string::npos);
+        x.fs.max_used_percent = 50.0;
+        x.clock.synced        = true;
+        assert(e.eval_tick(x) == 4);
         e.shutdown();
     }
 

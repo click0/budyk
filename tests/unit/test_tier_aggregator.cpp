@@ -190,6 +190,66 @@ int main() {
         assert(!out.entropy.present && out.entropy.available_bits == 0);
     }
 
+    // 8. The v8 fields: the CPU parts and the TCP / UDP rates are means;
+    //    process states, TCP sockets, the fullest filesystem and the
+    //    clock's max error are maxima; the clock offset is the one
+    //    furthest from zero and synced only if every sample that read the
+    //    clock was; present flags are "any"; groups is what every sample
+    //    had; fs.count is the last.
+    {
+        TierAggregator agg(Level::L2);
+        for (int i = 0; i < 4; ++i) {
+            Sample x = mk(uint64_t(i + 1) * 1000, Level::L3, 10.0, 1.0, 1ULL << 30, 10.0);
+            x.cpu.user_percent    = 10.0 * (i + 1);        // 10..40 → 25
+            x.cpu.iowait_percent  = i == 2 ? 8.0 : 0.0;    // → 2
+            x.cpu.idle_percent    = 100.0 - x.cpu.user_percent - x.cpu.iowait_percent;
+            x.proc.zombie         = i == 1 ? 5 : 0;
+            x.proc.blocked        = uint32_t(i);
+            x.proc.threads        = 900 + uint32_t(i);
+            x.tcp.established     = i == 3 ? 7 : 40;
+            x.tcp.time_wait       = uint32_t(i * 10);
+            x.tcp.retransmits_per_sec = double(i);         // → 1.5
+            x.tcp.present         = i != 0;
+            x.udp.in_errors_per_sec = i == 0 ? 4.0 : 0.0;  // → 1
+            x.udp.present         = true;
+            x.fs.count            = uint32_t(3 + i);
+            x.fs.max_used_percent = i == 2 ? 97.0 : 50.0;
+            x.fs.max_inodes_used_percent = 20.0 + i;
+            x.fs.present          = true;
+            x.clock.present       = i != 3;                // the last did not read it
+            x.clock.offset_ms     = i == 1 ? -9.0 : 2.0;
+            x.clock.max_error_ms  = 5.0 + i;
+            x.clock.synced        = i != 3;                // unsynced but not present: ignored
+            x.groups              = i == 2 ? (kGroupsAll & ~kGroupUdp) : kGroupsAll;
+            agg.add(x);
+        }
+        Sample out{};
+        assert(agg.fold(&out));
+        assert(near(out.cpu.user_percent, 25.0) && near(out.cpu.iowait_percent, 2.0));
+        assert(near(out.cpu.idle_percent, 73.0));
+        assert(out.proc.zombie == 5 && out.proc.blocked == 3 && out.proc.threads == 903);
+        assert(out.tcp.established == 40 && out.tcp.time_wait == 30);
+        assert(near(out.tcp.retransmits_per_sec, 1.5) && out.tcp.present);
+        assert(near(out.udp.in_errors_per_sec, 1.0) && out.udp.present);
+        assert(out.fs.count == 6 && near(out.fs.max_used_percent, 97.0));
+        assert(near(out.fs.max_inodes_used_percent, 23.0) && out.fs.present);
+        assert(out.clock.present && out.clock.synced);
+        assert(near(out.clock.offset_ms, -9.0) && near(out.clock.max_error_ms, 7.0));
+        assert(out.groups == (kGroupsAll & ~kGroupUdp));
+
+        // One sample that read the clock unsynced makes the window
+        // unsynced; none that read it at all: not present, not synced.
+        Sample y = mk(9000, Level::L3, 1.0, 1.0, 1, 1.0);
+        y.clock.present = true;
+        y.clock.synced  = false;
+        agg.add(y);
+        y.clock.synced  = true;
+        agg.add(y);
+        assert(agg.fold(&out) && out.clock.present && !out.clock.synced);
+        agg.add(mk(9100, Level::L3, 1.0, 1.0, 1, 1.0));
+        assert(agg.fold(&out) && !out.clock.present && !out.clock.synced);
+    }
+
     std::printf("test_tier_aggregator: PASS\n");
     return 0;
 }

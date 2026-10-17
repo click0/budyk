@@ -52,46 +52,74 @@ int budyk_collect_load_freebsd(budyk_sample_c* s) {
     return 0;
 }
 
-/* Process counts via a single walk of kern.proc.all.
- *   total   — total length / sizeof(kinfo_proc)
- *   running — entries with ki_stat == SRUN
+/* Processes by state via a single walk of kern.proc.all (one
+ * kinfo_proc per process): SRUN running; SSLEEP, SWAIT (waiting for an
+ * interrupt) and SIDL (being created) sleeping; SLOCK blocked on a lock;
+ * SSTOP stopped; SZOMB zombie. ki_numthreads sums to the thread count.
  *
- * We size the buffer with NULL+&bytes first (the FreeBSD idiom) then
- * malloc and read in one go. A race where new procs spawn between the
- * two calls means we might be off by ±1 — fine for monitoring; the
- * tick repeats in seconds.
+ * We size the buffer with NULL+&bytes first (the FreeBSD idiom), with
+ * room for processes forked before the second call, then read in one
+ * go; ENOMEM (more than that appeared) retries once.
  */
-#include <sys/proc.h>     /* SRUN */
+#include <sys/proc.h>     /* SRUN, SSLEEP, ... */
 #include <sys/user.h>     /* struct kinfo_proc */
+#include <sys/timex.h>    /* ntp_adjtime */
 
 int budyk_collect_proc_freebsd(budyk_sample_c* s) {
     if (s == NULL) return -EINVAL;
+    memset(&s->proc, 0, sizeof(s->proc));
 
+    struct kinfo_proc* procs = NULL;
     size_t bytes = 0;
-    if (sysctlbyname("kern.proc.all", NULL, &bytes, NULL, 0) != 0) return -errno;
-    if (bytes == 0) {
-        s->proc.total   = 0;
-        s->proc.running = 0;
-        return 0;
-    }
-
-    struct kinfo_proc* procs = (struct kinfo_proc*)malloc(bytes);
-    if (procs == NULL) return -ENOMEM;
-    if (sysctlbyname("kern.proc.all", procs, &bytes, NULL, 0) != 0) {
-        const int e = -errno;
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        bytes = 0;
+        if (sysctlbyname("kern.proc.all", NULL, &bytes, NULL, 0) != 0) return -errno;
+        if (bytes == 0) return 0;
+        bytes += bytes / 8;
+        procs = (struct kinfo_proc*)malloc(bytes);
+        if (procs == NULL) return -ENOMEM;
+        if (sysctlbyname("kern.proc.all", procs, &bytes, NULL, 0) == 0) break;
+        const int e = errno;
         free(procs);
-        return e;
+        procs = NULL;
+        if (e != ENOMEM) return -e;
     }
+    if (procs == NULL) return -ENOMEM;
 
-    const uint32_t n = (uint32_t)(bytes / sizeof(struct kinfo_proc));
-    uint32_t running = 0;
-    for (uint32_t i = 0; i < n; ++i) {
-        if (procs[i].ki_stat == SRUN) ++running;
+    const size_t n = bytes / sizeof(struct kinfo_proc);
+    for (size_t i = 0; i < n; ++i) {
+        switch (procs[i].ki_stat) {
+            case SRUN:                         ++s->proc.running;  break;
+            case SSLEEP: case SWAIT: case SIDL: ++s->proc.sleeping; break;
+            case SLOCK:                        ++s->proc.blocked;  break;
+            case SSTOP:                        ++s->proc.stopped;  break;
+            case SZOMB:                        ++s->proc.zombie;   break;
+            default:                           break;
+        }
+        s->proc.threads += (uint32_t)procs[i].ki_numthreads;
     }
     free(procs);
+    s->proc.total = (uint32_t)n;
+    return 0;
+}
 
-    s->proc.total   = n;
-    s->proc.running = running;
+/* Clock sync: the kernel's NTP discipline from ntp_adjtime(2) with no
+ * mode bits (read only, no privilege needed). Synchronised unless the
+ * kernel says TIME_ERROR or STA_UNSYNC; offset in microseconds, or
+ * nanoseconds under STA_NANO; maxerror in microseconds.
+ */
+int budyk_collect_clock_freebsd(budyk_sample_c* s) {
+    if (s == NULL) return -EINVAL;
+    memset(&s->clock, 0, sizeof(s->clock));
+    struct timex tx;
+    memset(&tx, 0, sizeof(tx));
+    const int state = ntp_adjtime(&tx);
+    if (state < 0) return 0;          /* soft-fail: present stays 0 */
+    s->clock.present      = 1;
+    s->clock.synced       = (uint8_t)(state != TIME_ERROR && (tx.status & STA_UNSYNC) == 0);
+    s->clock.offset_ms    = (tx.status & STA_NANO) != 0 ? (double)tx.offset / 1.0e6
+                                                        : (double)tx.offset / 1.0e3;
+    s->clock.max_error_ms = (double)tx.maxerror / 1.0e3;
     return 0;
 }
 

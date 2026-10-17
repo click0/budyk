@@ -57,17 +57,17 @@ int main() {
         assert(one_shot == chained);
     }
 
-    // 4. record_size_for_sample — header (14) + sample max (256 for v7).
+    // 4. record_size_for_sample — header (14) + sample max (488 for v8).
     {
         const size_t sz = record_size_for_sample();
         assert(sz == kRecordHeaderSize + sample_max_encoded_size());
-        assert(sz == 14 + 256);
+        assert(sz == 14 + 488);
     }
 
     // 5. Round-trip — full sample encode → decode preserves every field.
     {
         const Sample in = make_sample();
-        uint8_t buf[320] = {0};
+        uint8_t buf[1024] = {0};
         size_t  len = 0;
         assert(record_encode(in, buf, sizeof(buf), &len) == 0);
         assert(len == record_size_for_sample());
@@ -85,7 +85,7 @@ int main() {
     // 6. Encode is deterministic — same input → identical bytes.
     {
         const Sample in = make_sample();
-        uint8_t a[320] = {0}, b[320] = {0};
+        uint8_t a[1024] = {0}, b[1024] = {0};
         size_t  la = 0, lb = 0;
         assert(record_encode(in, a, sizeof(a), &la) == 0);
         assert(record_encode(in, b, sizeof(b), &lb) == 0);
@@ -104,7 +104,7 @@ int main() {
     // 8. CRC mismatch — flip a payload byte, decode rejects.
     {
         const Sample in = make_sample();
-        uint8_t buf[320] = {0};
+        uint8_t buf[1024] = {0};
         size_t  len = 0;
         assert(record_encode(in, buf, sizeof(buf), &len) == 0);
 
@@ -117,7 +117,7 @@ int main() {
     // 9. CRC mismatch — flip a timestamp byte (header is also covered).
     {
         const Sample in = make_sample();
-        uint8_t buf[320] = {0};
+        uint8_t buf[1024] = {0};
         size_t  len = 0;
         assert(record_encode(in, buf, sizeof(buf), &len) == 0);
 
@@ -129,7 +129,7 @@ int main() {
     // 10. Tampered CRC field itself — decode rejects.
     {
         const Sample in = make_sample();
-        uint8_t buf[320] = {0};
+        uint8_t buf[1024] = {0};
         size_t  len = 0;
         assert(record_encode(in, buf, sizeof(buf), &len) == 0);
 
@@ -142,7 +142,7 @@ int main() {
     // 11. Decode short buffer — rejects.
     {
         const Sample in = make_sample();
-        uint8_t buf[320] = {0};
+        uint8_t buf[1024] = {0};
         size_t  len = 0;
         assert(record_encode(in, buf, sizeof(buf), &len) == 0);
         Sample out{};
@@ -156,7 +156,7 @@ int main() {
     //     stays valid and the level guard runs.
     {
         Sample in = make_sample();
-        uint8_t buf[320] = {0};
+        uint8_t buf[1024] = {0};
         size_t  len = 0;
         assert(record_encode(in, buf, sizeof(buf), &len) == 0);
 
@@ -182,7 +182,7 @@ int main() {
     // 13. Null-argument guards.
     {
         Sample in = make_sample();
-        uint8_t buf[320] = {0};
+        uint8_t buf[1024] = {0};
         size_t  len = 0;
         assert(record_encode(in, nullptr, sizeof(buf), &len) != 0);
         assert(record_encode(in, buf, sizeof(buf), nullptr)  != 0);
@@ -197,7 +197,7 @@ int main() {
     //     ring file's index can scan without fully decoding payloads.)
     {
         const Sample in = make_sample();
-        uint8_t buf[320] = {0};
+        uint8_t buf[1024] = {0};
         size_t  len = 0;
         assert(record_encode(in, buf, sizeof(buf), &len) == 0);
 
@@ -213,7 +213,7 @@ int main() {
     //     ignored, and the byte is under the CRC.
     {
         Sample in = make_sample();
-        uint8_t buf[320] = {0};
+        uint8_t buf[1024] = {0};
         size_t  len = 0;
         Sample  out{};
 

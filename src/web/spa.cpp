@@ -69,12 +69,17 @@ h1 .host { color: var(--muted); margin-left: .6rem; font-weight: 400; }
   <div class="panel">
     <div class="row"><span class="label">Level</span>    <span class="muted" id="level">--</span>       <span class="value">&nbsp;</span></div>
     <div class="row"><span class="label">CPU</span>      <div class="bar"><i id="cpuBar"></i></div>     <span class="value" id="cpu">--</span></div>
+    <div class="row"><span class="label">CPU time</span> <span class="muted" id="cpuParts">--</span>    <span class="value">&nbsp;</span></div>
     <div class="row"><span class="label">Memory</span>   <div class="bar"><i id="memBar"></i></div>     <span class="value" id="mem">--</span></div>
     <div class="row"><span class="label">Swap</span>     <div class="bar"><i id="swapBar"></i></div>    <span class="value" id="swap">--</span></div>
     <div class="row"><span class="label">Load 1m</span>  <div class="bar"><i id="loadBar"></i></div>    <span class="value" id="load">--</span></div>
     <div class="row"><span class="label">Disk</span>     <span class="muted" id="disk">--</span>        <span class="value">&nbsp;</span></div>
     <div class="row"><span class="label">Network</span>  <span class="muted" id="net">--</span>         <span class="value">&nbsp;</span></div>
     <div class="row"><span class="label">Processes</span><span class="muted" id="proc">--</span>        <span class="value">&nbsp;</span></div>
+    <div class="row" id="tcpRow"><span class="label">TCP</span><span class="muted" id="tcp">--</span> <span class="value">&nbsp;</span></div>
+    <div class="row" id="udpRow"><span class="label">UDP</span><span class="muted" id="udp">--</span> <span class="value">&nbsp;</span></div>
+    <div class="row" id="fsRow"><span class="label">Filesystems</span><div class="bar"><i id="fsBar"></i></div> <span class="value" id="fs">--</span></div>
+    <div class="row" id="clockRow"><span class="label">Clock</span><span class="muted" id="clock">--</span> <span class="value">&nbsp;</span></div>
     <div class="row" id="entropyRow"><span class="label">Entropy</span><span class="muted" id="entropy">--</span> <span class="value">&nbsp;</span></div>
     <div class="row" id="thermalRow"><span class="label">Thermal</span><span class="muted" id="thermal">--</span> <span class="value">&nbsp;</span></div>
     <div class="row" id="fileWatchRow"><span class="label">Files</span><span class="muted" id="fileWatch">--</span> <span class="value">&nbsp;</span></div>
@@ -181,7 +186,43 @@ function render(s) {
   $("net").textContent =
     `rx ${fmtBytes(s.net.rx_bytes_per_sec)}/s   tx ${fmtBytes(s.net.tx_bytes_per_sec)}/s   (${s.net.interface_count ?? 0} ifaces)`;
   $("proc").textContent =
-    `${s.proc?.running ?? 0} running / ${s.proc?.total ?? 0} total`;
+    `${s.proc?.running ?? 0} running / ${s.proc?.total ?? 0} total` +
+    `   ${s.proc?.blocked ?? 0} blocked, ${s.proc?.zombie ?? 0} zombie, ${s.proc?.threads ?? 0} threads`;
+
+  const pc = v => (v ?? 0).toFixed(1) + "%";
+  $("cpuParts").textContent =
+    `user ${pc(s.cpu.user_percent)}   sys ${pc(s.cpu.system_percent)}   ` +
+    `iowait ${pc(s.cpu.iowait_percent)}   irq ${pc(s.cpu.irq_percent)}   ` +
+    `steal ${pc(s.cpu.steal_percent)}`;
+
+  // The rows below are hidden when the kernel had nothing to report.
+  const show = (id, on) => $(id).classList.toggle("hidden", !on);
+  const rate = v => (v ?? 0).toFixed(1) + "/s";
+  show("tcpRow", s.tcp?.present);
+  if (s.tcp?.present) {
+    $("tcp").textContent =
+      `${s.tcp.established} established, ${s.tcp.time_wait} time-wait   ` +
+      `opens ${rate(s.tcp.active_opens_per_sec)} out / ${rate(s.tcp.passive_opens_per_sec)} in   ` +
+      `retransmits ${rate(s.tcp.retransmits_per_sec)}`;
+  }
+  show("udpRow", s.udp?.present);
+  if (s.udp?.present) {
+    $("udp").textContent =
+      `in ${rate(s.udp.in_datagrams_per_sec)}   out ${rate(s.udp.out_datagrams_per_sec)}   ` +
+      `no port ${rate(s.udp.no_port_per_sec)}   errors ${rate(s.udp.in_errors_per_sec)}`;
+  }
+  show("fsRow", s.fs?.present);
+  if (s.fs?.present) {
+    // The fullest of the local filesystems, by space and by inodes.
+    $("fs").textContent = `${pc(s.fs.max_used_percent)} · inodes ${pc(s.fs.max_inodes_used_percent)}`;
+    $("fs").title = `the fullest of ${s.fs.count} local filesystem(s)`;
+    setBar("fsBar", s.fs.max_used_percent ?? 0, 80, 90);
+  }
+  show("clockRow", s.clock?.present);
+  if (s.clock?.present) {
+    $("clock").textContent = (s.clock.synced ? "synchronised" : "NOT synchronised") +
+      `   offset ${(s.clock.offset_ms ?? 0).toFixed(3)} ms   max error ${(s.clock.max_error_ms ?? 0).toFixed(1)} ms`;
+  }
 
   // Entropy is Linux-only; hide the row on platforms (FreeBSD) that
   // report present=false.
@@ -249,6 +290,10 @@ const METRICS = {
   net:  { label: "Net B/s",  pick: s => (s.net?.rx_bytes_per_sec ?? 0) +
                                          (s.net?.tx_bytes_per_sec ?? 0),
           fmt: v => fmtBytes(v) + "/s" },
+  tcp:  { label: "TCP estab", pick: s => s.tcp?.established ?? 0,
+          fmt: v => v.toFixed(0) },
+  fs:   { label: "FS used %", pick: s => s.fs?.max_used_percent ?? 0,
+          fmt: v => v.toFixed(0) + "%" },
 };
 // Range presets → window in ms. loadHistory reads every level's ring for
 // the window (level=all), thinned server-side to fit the chart.

@@ -119,8 +119,14 @@ void push_group_data(lua_State* L, const char* group) {
 void budyk_lua_bind_sample(lua_State* L, const budyk::Sample& s) {
     // cpu
     push_group_data(L, "cpu");
-    set_number (L, "total_percent", s.cpu.total_percent);
-    set_integer(L, "count",         static_cast<lua_Integer>(s.cpu.count));
+    set_number (L, "total_percent",  s.cpu.total_percent);
+    set_integer(L, "count",          static_cast<lua_Integer>(s.cpu.count));
+    set_number (L, "user_percent",   s.cpu.user_percent);
+    set_number (L, "system_percent", s.cpu.system_percent);
+    set_number (L, "iowait_percent", s.cpu.iowait_percent);
+    set_number (L, "irq_percent",    s.cpu.irq_percent);
+    set_number (L, "steal_percent",  s.cpu.steal_percent);
+    set_number (L, "idle_percent",   s.cpu.idle_percent);
     lua_pop(L, 1);
 
     // mem
@@ -159,10 +165,15 @@ void budyk_lua_bind_sample(lua_State* L, const budyk::Sample& s) {
     set_integer(L, "interface_count",    static_cast<lua_Integer>(s.net.interface_count));
     lua_pop(L, 1);
 
-    // proc — running / total process counts.
+    // proc — processes by state, and threads.
     push_group_data(L, "proc");
-    set_integer(L, "total",   static_cast<lua_Integer>(s.proc.total));
-    set_integer(L, "running", static_cast<lua_Integer>(s.proc.running));
+    set_integer(L, "total",    static_cast<lua_Integer>(s.proc.total));
+    set_integer(L, "running",  static_cast<lua_Integer>(s.proc.running));
+    set_integer(L, "sleeping", static_cast<lua_Integer>(s.proc.sleeping));
+    set_integer(L, "blocked",  static_cast<lua_Integer>(s.proc.blocked));
+    set_integer(L, "stopped",  static_cast<lua_Integer>(s.proc.stopped));
+    set_integer(L, "zombie",   static_cast<lua_Integer>(s.proc.zombie));
+    set_integer(L, "threads",  static_cast<lua_Integer>(s.proc.threads));
     lua_pop(L, 1);
 
     // entropy — kernel CSPRNG pool depth in bits (Linux only).
@@ -184,6 +195,43 @@ void budyk_lua_bind_sample(lua_State* L, const budyk::Sample& s) {
     set_number (L, "max_celsius",  s.thermal.max_celsius);
     set_integer(L, "sensor_count", static_cast<lua_Integer>(s.thermal.sensor_count));
     set_boolean(L, "present",      s.thermal.present);
+    lua_pop(L, 1);
+
+    // tcp / udp — sockets by state and per-second rates.
+    push_group_data(L, "tcp");
+    set_integer(L, "established",           static_cast<lua_Integer>(s.tcp.established));
+    set_integer(L, "time_wait",             static_cast<lua_Integer>(s.tcp.time_wait));
+    set_number (L, "active_opens_per_sec",  s.tcp.active_opens_per_sec);
+    set_number (L, "passive_opens_per_sec", s.tcp.passive_opens_per_sec);
+    set_number (L, "retransmits_per_sec",   s.tcp.retransmits_per_sec);
+    set_number (L, "in_segments_per_sec",   s.tcp.in_segments_per_sec);
+    set_number (L, "out_segments_per_sec",  s.tcp.out_segments_per_sec);
+    set_number (L, "in_errors_per_sec",     s.tcp.in_errors_per_sec);
+    set_boolean(L, "present",               s.tcp.present);
+    lua_pop(L, 1);
+
+    push_group_data(L, "udp");
+    set_number (L, "in_datagrams_per_sec",  s.udp.in_datagrams_per_sec);
+    set_number (L, "out_datagrams_per_sec", s.udp.out_datagrams_per_sec);
+    set_number (L, "no_port_per_sec",       s.udp.no_port_per_sec);
+    set_number (L, "in_errors_per_sec",     s.udp.in_errors_per_sec);
+    set_boolean(L, "present",               s.udp.present);
+    lua_pop(L, 1);
+
+    // fs — local filesystems: how many, the fullest by space and inodes.
+    push_group_data(L, "fs");
+    set_integer(L, "count",                   static_cast<lua_Integer>(s.fs.count));
+    set_number (L, "max_used_percent",        s.fs.max_used_percent);
+    set_number (L, "max_inodes_used_percent", s.fs.max_inodes_used_percent);
+    set_boolean(L, "present",                 s.fs.present);
+    lua_pop(L, 1);
+
+    // clock — the kernel's NTP discipline.
+    push_group_data(L, "clock");
+    set_number (L, "offset_ms",    s.clock.offset_ms);
+    set_number (L, "max_error_ms", s.clock.max_error_ms);
+    set_boolean(L, "synced",       s.clock.synced);
+    set_boolean(L, "present",      s.clock.present);
     lua_pop(L, 1);
 
     lua_pushnumber(L, s.uptime_seconds);

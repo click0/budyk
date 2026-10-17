@@ -25,6 +25,10 @@ constexpr uint8_t kRecordFolded     = 0x01;   // Sample::folded
 size_t record_size_for_sample();
 
 int record_encode(const Sample& s, void* buf, size_t cap, size_t* out_len);
+// `len` is the size the record was written with: record_size_for_sample()
+// for this version, less for a ring an older budyk wrote (its payload is
+// an older codec version, which sample_decode() still reads; the CRC
+// covers what was written).
 int record_decode(const void* buf, size_t len, Sample* out);
 
 uint32_t crc32c(const void* data, size_t len, uint32_t seed = 0);

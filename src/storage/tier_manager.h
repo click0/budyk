@@ -57,6 +57,16 @@ public:
     };
     const std::vector<Recovered>& recovered() const;
 
+    // Rings init() found written by an older budyk (smaller records) and
+    // converted to this version's (convert_ring()), for the log.
+    struct Converted {
+        std::string ring;
+        uint32_t    from_record_size = 0;
+        uint64_t    kept    = 0;
+        uint64_t    dropped = 0;
+    };
+    const std::vector<Converted>& converted() const;
+
     // Fold windows for the coarse rings. With l2_ns set, every L3 or
     // custom-level sample is also folded into one L2 record per l2_ns in
     // tier2; with l1_ns set, every sample above L1 into one L1 record per
@@ -116,7 +126,12 @@ public:
 private:
     std::string last_error_;
     std::vector<Recovered> recovered_;
+    std::vector<Converted> converted_;
     void recover(const char* leaf, RingFile* ring);
+    // Converts the ring at `path` first if an older budyk wrote it;
+    // false (with last_error_ set) if that failed.
+    bool convert_if_older(const char* path, const char* leaf, uint8_t tier,
+                          uint32_t record_size, uint64_t capacity);
     struct CustomRing {
         uint8_t                   level_id;
         std::unique_ptr<RingFile> ring;

@@ -78,18 +78,17 @@ int record_encode(const Sample& s, void* buf, size_t cap, size_t* out_len) {
 
 int record_decode(const void* buf, size_t len, Sample* out) {
     if (buf == nullptr || out == nullptr) return -1;
-    const size_t total = record_size_for_sample();
-    if (len < total)                       return -2;
+    if (len <= kRecordHeaderSize)          return -2;
+    const size_t payload = len - kRecordHeaderSize;
 
     const auto* base   = static_cast<const uint8_t*>(buf);
     uint32_t    stored = le_get_u32(base + 10);
 
     uint32_t c = crc32c(base, 10);
-    c          = crc32c(base + kRecordHeaderSize, sample_max_encoded_size(), c);
+    c          = crc32c(base + kRecordHeaderSize, payload, c);
     if (c != stored)                       return -3;
 
-    if (sample_decode(base + kRecordHeaderSize,
-                      len - kRecordHeaderSize, out) != 0) return -4;
+    if (sample_decode(base + kRecordHeaderSize, payload, out) != 0) return -4;
 
     // Record framing is the source of truth for ts / level / flags.
     out->timestamp_nanos = le_get_u64(base);

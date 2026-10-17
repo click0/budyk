@@ -13,7 +13,19 @@ constexpr uint8_t kFirstCustomLevel = 4;
 constexpr uint8_t kMaxCustomLevels  = 16;
 constexpr uint8_t kMaxLevelId       = kFirstCustomLevel + kMaxCustomLevels - 1;
 
-struct CpuStats   { double total_percent; uint32_t count; };
+// total_percent is everything but idle (and iowait). The parts add up to
+// 100: user includes nice, irq softirq; iowait and steal stay 0 on
+// FreeBSD, which has neither.
+struct CpuStats {
+    double   total_percent;
+    uint32_t count;
+    double   user_percent;
+    double   system_percent;
+    double   iowait_percent;
+    double   irq_percent;
+    double   steal_percent;
+    double   idle_percent;
+};
 struct MemStats   { uint64_t total; uint64_t available; double available_percent; };
 struct SwapStats  { uint64_t total; uint64_t used; double used_percent; };
 struct LoadStats  { double avg_1m, avg_5m, avg_15m; };
@@ -32,11 +44,81 @@ struct NetStats {
     uint32_t interface_count;
 };
 
-// Process state — L2 / watchful tier (spec §3.3.2).
+// Processes by state — L2 / watchful tier (spec §3.3.2, §2.1). total
+// counts processes (not threads); blocked is an uninterruptible wait
+// (Linux D, FreeBSD SLOCK); threads are summed over every process.
 struct ProcessStats {
     uint32_t total;
     uint32_t running;
+    uint32_t sleeping;
+    uint32_t blocked;
+    uint32_t stopped;
+    uint32_t zombie;
+    uint32_t threads;
 };
+
+// TCP and UDP over all address families (spec §2.1): sockets in two
+// states that matter, and per-second rates of the cumulative counters.
+// present is false when the kernel counters could not be read.
+struct TcpStats {
+    uint32_t established;
+    uint32_t time_wait;
+    double   active_opens_per_sec;
+    double   passive_opens_per_sec;
+    double   retransmits_per_sec;
+    double   in_segments_per_sec;
+    double   out_segments_per_sec;
+    double   in_errors_per_sec;
+    bool     present;
+};
+struct UdpStats {
+    double   in_datagrams_per_sec;
+    double   out_datagrams_per_sec;
+    double   no_port_per_sec;
+    double   in_errors_per_sec;
+    bool     present;
+};
+
+// Local filesystems (spec §2.1; pseudo, read-only and network ones are
+// skipped): how many, and the fullest by space and by inodes.
+struct FsStats {
+    uint32_t count;
+    double   max_used_percent;
+    double   max_inodes_used_percent;
+    bool     present;
+};
+
+// Clock sync (spec §3.4.1 L3, §2.1): the kernel's NTP discipline state
+// from ntp_adjtime(2).
+struct ClockStats {
+    double   offset_ms;
+    double   max_error_ms;
+    bool     synced;
+    bool     present;
+};
+
+// Which metric groups a sample carries (Sample::groups). Every group is
+// collected today; a record from before codec v8 has the v7 groups.
+enum MetricGroup : uint32_t {
+    kGroupCpu       = 1u << 0,
+    kGroupMem       = 1u << 1,
+    kGroupSwap      = 1u << 2,
+    kGroupLoad      = 1u << 3,
+    kGroupDisk      = 1u << 4,
+    kGroupNet       = 1u << 5,
+    kGroupProc      = 1u << 6,
+    kGroupEntropy   = 1u << 7,
+    kGroupSelf      = 1u << 8,
+    kGroupThermal   = 1u << 9,
+    kGroupFileWatch = 1u << 10,
+    kGroupUptime    = 1u << 11,
+    kGroupTcp       = 1u << 12,
+    kGroupUdp       = 1u << 13,
+    kGroupFs        = 1u << 14,
+    kGroupClock     = 1u << 15,
+};
+constexpr uint32_t kGroupsV7  = (1u << 12) - 1;    // cpu .. uptime
+constexpr uint32_t kGroupsAll = (1u << 16) - 1;
 
 // Entropy pool state — L3 / active tier (spec §3.3.3).
 // On platforms without an entropy_avail surface (currently FreeBSD),
@@ -94,6 +176,11 @@ struct Sample {
     SelfStats    self_;
     ThermalStats thermal;
     FileWatchSample file_watch;
+    TcpStats   tcp;
+    UdpStats   udp;
+    FsStats    fs;
+    ClockStats clock;
+    uint32_t   groups;        // MetricGroup bits
     double    uptime_seconds;
     // True for a record folded from finer samples by TierAggregator (an
     // L2 or L1 summary of an L3 or custom-level stretch). Not part of

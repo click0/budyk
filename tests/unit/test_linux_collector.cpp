@@ -5,9 +5,46 @@
 #include "core/sample_c.h"
 
 #include <cassert>
+#include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <string>
+
+#include <sys/stat.h>
 #include <unistd.h>
+
+namespace {
+
+// A fixture tree that stands in for /proc (budyk_linux_set_proc_root).
+struct Fixture {
+    std::string root;
+    Fixture() {
+        char tmpl[] = "/tmp/budyk_procfx_XXXXXX";
+        const char* d = mkdtemp(tmpl);
+        assert(d != nullptr);
+        root = d;
+    }
+    ~Fixture() {
+        budyk_linux_set_proc_root(nullptr);
+        const std::string cmd = "rm -rf " + root;
+        if (std::system(cmd.c_str()) != 0) std::fprintf(stderr, "cleanup of %s failed\n", root.c_str());
+    }
+    void file(const std::string& rel, const std::string& body) const {
+        const std::string path = root + "/" + rel;
+        for (size_t i = root.size() + 1; i < path.size(); ++i) {
+            if (path[i] == '/') ::mkdir(path.substr(0, i).c_str(), 0700);
+        }
+        FILE* f = std::fopen(path.c_str(), "w");
+        assert(f != nullptr);
+        std::fputs(body.c_str(), f);
+        std::fclose(f);
+    }
+};
+
+bool near(double a, double b) { return std::fabs(a - b) < 1e-6; }
+
+} // namespace
 
 int main() {
     // 1. Memory: MemTotal / MemAvailable present and sane.
@@ -160,19 +197,153 @@ int main() {
         std::printf("test_linux_collector: skip net  (empty /proc/net/dev)\n");
     }
 
-    // 7b. Process count — /proc/loadavg field 4 ("running/total"). Proc
-    //     numbers are non-negative; running ≤ total. On stripped
-    //     containers loadavg may report "0/0", which is also acceptable
-    //     (running == total == 0).
+    // 7b. Processes by state on this host: the states add up to total,
+    //     this test process is one of them (running), and every process
+    //     has at least one thread.
     {
         budyk_sample_c s;
         std::memset(&s, 0, sizeof(s));
-        int rc = budyk_collect_proc_linux(&s);
-        if (rc == 0) {
-            assert(s.proc.running <= s.proc.total);
-        } else {
-            std::printf("test_linux_collector: skip proc (rc=%d)\n", rc);
+        assert(budyk_collect_proc_linux(&s) == 0);
+        assert(s.proc.total > 0 && s.proc.running >= 1);
+        assert(s.proc.running + s.proc.sleeping + s.proc.blocked + s.proc.stopped +
+               s.proc.zombie == s.proc.total);
+        assert(s.proc.threads >= s.proc.total);
+    }
+
+    // 7f. The /proc/<pid>/stat parser: comm may hold spaces and ')';
+    //     num_threads is field 20. A truncated line is refused.
+    {
+        char st = 0;
+        uint32_t th = 0;
+        assert(budyk_linux_parse_proc_stat(
+            "42 (my (odd) proc) S 1 42 42 0 -1 4194560 100 0 0 0 5 3 0 0 20 0 7 0 123 0\n",
+            &st, &th) == 0);
+        assert(st == 'S' && th == 7);
+        assert(budyk_linux_parse_proc_stat("1 (init) R 0 1 1 0 -1", &st, &th) != 0);
+        assert(budyk_linux_parse_proc_stat("no parens here", &st, &th) != 0);
+    }
+
+    // 7g. Processes against a fixture /proc: one of each state (I and P
+    //     count as sleeping, t as stopped), X not counted, a directory
+    //     that is not a pid skipped, threads summed.
+    {
+        Fixture fx;
+        const char* tail = " 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 %d 0 1 0\n";
+        const char states[] = {'R', 'S', 'I', 'D', 'T', 't', 'Z', 'P', 'X'};
+        for (int i = 0; i < 9; ++i) {
+            char line[256];
+            std::snprintf(line, sizeof(line), "%d (p%d) %c", 100 + i, i, states[i]);
+            char rest[128];
+            std::snprintf(rest, sizeof(rest), tail, i + 1);
+            fx.file(std::to_string(100 + i) + "/stat", std::string(line) + rest);
         }
+        fx.file("self/stat", "1 (self) R 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 1 0\n");
+        budyk_linux_set_proc_root(fx.root.c_str());
+        budyk_sample_c s;
+        std::memset(&s, 0, sizeof(s));
+        assert(budyk_collect_proc_linux(&s) == 0);
+        assert(s.proc.total == 8 && s.proc.running == 1 && s.proc.sleeping == 3);
+        assert(s.proc.blocked == 1 && s.proc.stopped == 2 && s.proc.zombie == 1);
+        assert(s.proc.threads == 1 + 2 + 3 + 4 + 5 + 6 + 7 + 8);
+    }
+
+    // 7h. TCP / UDP against a fixture: the snmp columns are looked up by
+    //     name (here in an order no kernel uses), the rates come from the
+    //     delta over the elapsed time, TIME_WAIT from sockstat.
+    {
+        Fixture fx;
+        auto snmp = [&](unsigned act, unsigned estab, unsigned retr, unsigned udp_in) {
+            char buf[1024];
+            std::snprintf(buf, sizeof(buf),
+                "Ip: Forwarding DefaultTTL\nIp: 1 64\n"
+                "Tcp: CurrEstab ActiveOpens PassiveOpens InSegs OutSegs RetransSegs InErrs\n"
+                "Tcp: %u %u 5 1000 900 %u 2\n"
+                "Udp: InDatagrams NoPorts InErrors OutDatagrams\n"
+                "Udp: %u 3 1 40\n", estab, act, retr, udp_in);
+            fx.file("net/snmp", buf);
+        };
+        fx.file("net/sockstat", "sockets: used 100\nTCP: inuse 5 orphan 0 tw 17 alloc 6 mem 1\n");
+        budyk_linux_set_proc_root(fx.root.c_str());
+        budyk_netstat_ctx_c ctx;
+        std::memset(&ctx, 0, sizeof(ctx));
+        budyk_sample_c s;
+        std::memset(&s, 0, sizeof(s));
+        snmp(10, 4, 50, 100);
+        s.timestamp_nanos = 1'000'000'000ULL;
+        assert(budyk_collect_netstat_linux(&ctx, &s) == 0);
+        assert(s.tcp.present && s.udp.present);
+        assert(s.tcp.established == 4 && s.tcp.time_wait == 17);
+        assert(s.tcp.active_opens_per_sec == 0.0);         // baseline
+        snmp(30, 6, 54, 300);
+        s.timestamp_nanos = 3'000'000'000ULL;              // 2 s later
+        assert(budyk_collect_netstat_linux(&ctx, &s) == 0);
+        assert(s.tcp.established == 6);
+        assert(near(s.tcp.active_opens_per_sec, 10.0));     // 20 in 2 s
+        assert(near(s.tcp.retransmits_per_sec, 2.0));
+        assert(near(s.udp.in_datagrams_per_sec, 100.0));
+        assert(near(s.tcp.passive_opens_per_sec, 0.0));
+        snmp(5, 6, 54, 300);                                // a counter went back
+        s.timestamp_nanos = 4'000'000'000ULL;
+        assert(budyk_collect_netstat_linux(&ctx, &s) == 0);
+        assert(s.tcp.active_opens_per_sec == 0.0);
+
+        fx.file("net/snmp", "Ip: Forwarding\nIp: 1\n");   // no Tcp/Udp lines
+        assert(budyk_collect_netstat_linux(&ctx, &s) != 0);
+        assert(!s.tcp.present && !s.udp.present);
+    }
+
+    // 7i. TCP / UDP and clock sync on this host.
+    {
+        budyk_netstat_ctx_c ctx;
+        std::memset(&ctx, 0, sizeof(ctx));
+        budyk_sample_c s;
+        std::memset(&s, 0, sizeof(s));
+        s.timestamp_nanos = 1;
+        assert(budyk_collect_netstat_linux(&ctx, &s) == 0);
+        assert(s.tcp.present && s.udp.present);
+        assert(budyk_collect_clock_linux(&s) == 0);
+        assert(s.clock.present && s.clock.max_error_ms >= 0.0);
+    }
+
+    // 7j. Filesystems: on this host at least the one holding /tmp is
+    //     counted. Against a fixture mounts file whose entries point at
+    //     real, distinct filesystems (the one under /tmp, /dev, /dev/shm),
+    //     so each rule alone decides the count: pseudo, network, FUSE and
+    //     read-only mounts are skipped, a second mount of the same
+    //     filesystem counts once, an escaped mount point (\040) is
+    //     unescaped, a mount point that is gone is skipped.
+    {
+        budyk_sample_c s;
+        std::memset(&s, 0, sizeof(s));
+        assert(budyk_collect_fs_linux(&s) == 0);
+        assert(s.fs.present && s.fs.count >= 1);
+        assert(s.fs.max_used_percent > 0.0 && s.fs.max_used_percent <= 100.0);
+
+        char m[] = "/a\\040b\\011c\\134d";
+        budyk_linux_unescape_mount(m);
+        assert(std::strcmp(m, "/a b\tc\\d") == 0);
+
+        Fixture fx;
+        const std::string spaced = fx.root + "/with space";
+        assert(::mkdir(spaced.c_str(), 0700) == 0);
+        const bool shm = ::access("/dev/shm", F_OK) == 0;
+        fx.file("self/mounts",
+            "proc /proc proc rw 0 0\n"
+            "sysfs /sys sysfs rw 0 0\n"
+            "/dev/sdz1 " + fx.root + "/with\\040space ext4 rw 0 0\n"   // counted
+            "/dev/sdz3 /dev ext4 ro 0 0\n"                    // read-only
+            "server:/x /dev nfs4 rw 0 0\n"                    // network
+            "sshfs#u@h: /dev fuse.sshfs rw 0 0\n"             // FUSE
+            "/dev/loop0 /dev squashfs rw 0 0\n"               // an image
+            "tmpfs /dev/shm tmpfs rw,nosuid 0 0\n"            // counted
+            "tmpfs /dev/shm tmpfs rw 0 0\n"                   // the same again
+            "/dev/sdz9 /nonexistent-mount ext4 rw 0 0\n");    // gone
+        budyk_linux_set_proc_root(fx.root.c_str());
+        std::memset(&s, 0, sizeof(s));
+        assert(budyk_collect_fs_linux(&s) == 0);
+        assert(s.fs.present);
+        assert(s.fs.count == (shm ? 2u : 1u));
+        budyk_linux_set_proc_root(nullptr);
     }
 
     // 7c. Entropy — /proc/sys/kernel/random/entropy_avail. On real
@@ -239,6 +410,59 @@ int main() {
         assert(budyk_collect_disk_linux(&ctx, &s2) == 0);
         assert(s2.disk.read_bytes_per_sec  == 0);
         assert(s2.disk.write_bytes_per_sec == 0);
+    }
+
+    // 8b. CPU against a fixture /proc/stat: the first read is the
+    //     baseline, the second gives each part's share of the delta
+    //     (nice in user, softirq in irq) and total = all but idle and
+    //     iowait; cpuN lines count the cores.
+    {
+        Fixture fx;
+        auto stat = [&](unsigned user, unsigned sys, unsigned idle, unsigned iowait,
+                        unsigned irq, unsigned softirq, unsigned steal) {
+            char buf[512];
+            std::snprintf(buf, sizeof(buf),
+                "cpu  %u 10 %u %u %u %u %u %u 0 0\n"
+                "cpu0 1 0 1 1 0 0 0 0 0 0\ncpu1 1 0 1 1 0 0 0 0 0 0\n"
+                "intr 12345\nctxt 1\n", user, sys, idle, iowait, irq, softirq, steal);
+            fx.file("stat", buf);
+        };
+        budyk_linux_set_proc_root(fx.root.c_str());
+        budyk_cpu_ctx_c ctx;
+        std::memset(&ctx, 0, sizeof(ctx));
+        budyk_sample_c s;
+        std::memset(&s, 0, sizeof(s));
+        stat(1000, 500, 3000, 100, 20, 30, 0);
+        assert(budyk_collect_cpu_linux(&ctx, &s) == 0);
+        assert(s.cpu.count == 2 && s.cpu.total_percent == 0.0);
+        // Deltas: user 100, sys 50, idle 300, iowait 40, irq 5 + softirq 5,
+        // steal 0 (nice 0): 500 in all.
+        stat(1100, 550, 3300, 140, 25, 35, 0);
+        assert(budyk_collect_cpu_linux(&ctx, &s) == 0);
+        assert(near(s.cpu.user_percent, 20.0) && near(s.cpu.system_percent, 10.0));
+        assert(near(s.cpu.iowait_percent, 8.0) && near(s.cpu.irq_percent, 2.0));
+        assert(near(s.cpu.steal_percent, 0.0) && near(s.cpu.idle_percent, 60.0));
+        assert(near(s.cpu.total_percent, 32.0));
+        budyk_linux_set_proc_root(nullptr);
+    }
+
+    // 9. CPU: the parts add up to 100 on the second call, and
+    //    total_percent agrees with them.
+    {
+        budyk_cpu_ctx_c ctx;
+        std::memset(&ctx, 0, sizeof(ctx));
+        budyk_sample_c s;
+        std::memset(&s, 0, sizeof(s));
+        assert(budyk_collect_cpu_linux(&ctx, &s) == 0);
+        volatile double spin = 0.0;
+        for (int i = 0; i < 20000000; ++i) spin = spin + 1.0;
+        ::usleep(20000);
+        assert(budyk_collect_cpu_linux(&ctx, &s) == 0);
+        const double sum = s.cpu.user_percent + s.cpu.system_percent + s.cpu.iowait_percent +
+                           s.cpu.irq_percent + s.cpu.steal_percent + s.cpu.idle_percent;
+        assert(sum > 99.0 && sum < 101.0);
+        // total_percent is everything but idle and iowait.
+        assert(near(s.cpu.total_percent, 100.0 - s.cpu.idle_percent - s.cpu.iowait_percent));
     }
 
     std::printf("test_linux_collector: PASS\n");

@@ -15,6 +15,16 @@ namespace budyk {
 // the run. TierManager::init() indexes them on start, fsck --repair too.
 uint64_t count_unindexed(const RingFile& ring);
 
+// Rewrites the ring at `path`, written by an older budyk with smaller
+// records (an older codec version), at `record_size` x `capacity`: the
+// newest records that fit, in order, each decoded with the version it
+// was written in and encoded with this one. Writes <path>.convert and
+// renames it over `path`, so a crash half-way leaves the old ring.
+// 0 or -errno; *kept / *dropped (oldest beyond the new capacity, or
+// damaged) say what happened to the records.
+int convert_ring(const char* path, uint8_t tier, uint32_t record_size,
+                 uint64_t capacity, uint64_t* kept, uint64_t* dropped);
+
 // True if a record of level `level` belongs in a ring with header tier
 // byte `tier`: 1 holds L3, 2 L2, 3 L1, kCustomRingTier a custom level.
 bool level_fits_ring(uint8_t tier, uint8_t level);
@@ -27,8 +37,9 @@ struct RingCheck {
     int      header_errno = 0;
     RingFile::Header header;
     bool     unknown_tier  = false;   // tier byte not 1, 2, 3 or custom
-    bool     record_size_differs = false;   // written by a budyk with
-                                            // another record format
+    bool     older_format  = false;   // smaller records: an older budyk
+                                      // wrote it; budyk serve converts it
+    bool     newer_format  = false;   // larger records: a newer budyk
     int      open_rc       = 0;       // RingFile open, after the header
 
     // The records write_idx counts.

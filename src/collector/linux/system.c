@@ -1,10 +1,12 @@
 /* SPDX-License-Identifier: BSD-3-Clause */
-/* collector/linux/system.c — uptime (/proc/uptime) and load (getloadavg). */
+/* collector/linux/system.c — uptime, load, entropy, processes, clock sync,
+ * self-metrics and thermal. */
 
 #include "core/sample_c.h"
 
 #include <sys/resource.h>
 #include <sys/time.h>
+#include <sys/timex.h>
 #include <unistd.h>
 
 #include <dirent.h>
@@ -68,26 +70,85 @@ int budyk_collect_entropy_linux(budyk_sample_c* s) {
     return 0;
 }
 
-/* /proc/loadavg layout (kernel ≥ 2.6):
- *   <load1> <load5> <load15> <running>/<total> <last_pid>
- *
- * Field 4 ("running/total") gives us both numbers cheaply, no /proc
- * directory walk required.
+/* Processes by state: one /proc/<pid>/stat per process.
+ *   <pid> (<comm>) <state> <ppid> ... <num_threads (field 20)> ...
+ * comm can hold spaces and parentheses, so the fields are counted from
+ * the last ')'. States: R running; S, I (idle kernel thread), W, P
+ * sleeping; D blocked (uninterruptible); T, t stopped; Z zombie; X (dead,
+ * being reaped) is not counted. A process that exits between readdir()
+ * and the read is skipped.
  */
+int budyk_linux_parse_proc_stat(const char* line, char* state, uint32_t* threads) {
+    const char* rp = strrchr(line, ')');
+    if (rp == NULL || rp[1] != ' ' || rp[2] == '\0') return -EINVAL;
+    *state = rp[2];
+    /* After the state come fields 4..19, then num_threads. */
+    const char* p = rp + 3;
+    for (int field = 4; field <= 19; ++field) {
+        while (*p == ' ') ++p;
+        while (*p != ' ' && *p != '\0') ++p;
+        if (*p == '\0') return -EINVAL;
+    }
+    char* end = NULL;
+    const unsigned long n = strtoul(p, &end, 10);
+    if (end == p) return -EINVAL;
+    *threads = (uint32_t)n;
+    return 0;
+}
+
 int budyk_collect_proc_linux(budyk_sample_c* s) {
     if (s == NULL) return -EINVAL;
+    memset(&s->proc, 0, sizeof(s->proc));
 
-    FILE* f = fopen("/proc/loadavg", "r");
-    if (f == NULL) return -errno;
+    const char* root = budyk_linux_proc_root();
+    DIR* d = opendir(root);
+    if (d == NULL) return -errno;
+    struct dirent* ent;
+    while ((ent = readdir(d)) != NULL) {
+        if (ent->d_name[0] < '1' || ent->d_name[0] > '9') continue;
+        char path[512];
+        const int n = snprintf(path, sizeof(path), "%s/%s/stat", root, ent->d_name);
+        if (n <= 0 || (size_t)n >= sizeof(path)) continue;
+        FILE* f = fopen(path, "r");
+        if (f == NULL) continue;
+        char line[1024];
+        const int got = fgets(line, sizeof(line), f) != NULL;
+        fclose(f);
+        char     state   = 0;
+        uint32_t threads = 0;
+        if (!got || budyk_linux_parse_proc_stat(line, &state, &threads) != 0) continue;
+        switch (state) {
+            case 'R':                               ++s->proc.running;  break;
+            case 'S': case 'I': case 'W': case 'P': ++s->proc.sleeping; break;
+            case 'D':                               ++s->proc.blocked;  break;
+            case 'T': case 't':                     ++s->proc.stopped;  break;
+            case 'Z':                               ++s->proc.zombie;   break;
+            default:                                continue;   /* X: being reaped */
+        }
+        ++s->proc.total;
+        s->proc.threads += threads;
+    }
+    closedir(d);
+    return 0;
+}
 
-    double a, b, c;
-    unsigned int running = 0, total = 0;
-    int n = fscanf(f, "%lf %lf %lf %u/%u", &a, &b, &c, &running, &total);
-    fclose(f);
-    if (n != 5) return -EIO;
-
-    s->proc.running = running;
-    s->proc.total   = total;
+/* Clock sync: the kernel's NTP discipline, read with adjtimex(2) and no
+ * mode bits (no privilege needed). Synchronised unless the kernel says
+ * TIME_ERROR or STA_UNSYNC; the offset is in microseconds, or in
+ * nanoseconds under STA_NANO; maxerror in microseconds.
+ */
+int budyk_collect_clock_linux(budyk_sample_c* s) {
+    if (s == NULL) return -EINVAL;
+    memset(&s->clock, 0, sizeof(s->clock));
+    struct timex tx;
+    memset(&tx, 0, sizeof(tx));
+    const int state = adjtimex(&tx);
+    if (state < 0) return 0;          /* soft-fail: present stays 0 */
+    s->clock.present      = 1;
+    s->clock.synced       = (uint8_t)(state != TIME_ERROR && (tx.status & STA_UNSYNC) == 0);
+    s->clock.offset_ms    = (tx.status & STA_NANO) != 0 ? (double)tx.offset / 1.0e6
+                                                        : (double)tx.offset / 1.0e3;
+    s->clock.max_error_ms = (double)tx.maxerror / 1.0e3;
     return 0;
 }
 

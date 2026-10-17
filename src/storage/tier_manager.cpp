@@ -128,6 +128,7 @@ int TierManager::init(const char* data_dir,
                       const std::vector<LevelRingSpec>& custom) {
     last_error_.clear();
     recovered_.clear();
+    converted_.clear();
     if (data_dir == nullptr) { last_error_ = "data_dir is null"; return -1; }
     if (ready_)              { last_error_ = "already initialised"; return -2; }
 
@@ -159,6 +160,7 @@ int TierManager::init(const char* data_dir,
 
     int rc = 0;
     if (!join_path(path, sizeof(path), data_dir, "tier1.ring")) { path_failed("tier1.ring"); return -3; }
+    if (!convert_if_older(path, "tier1.ring", 1, record_size, cap1)) return -4;
     if ((rc = tier1_.open(path, /*tier*/1, record_size, cap1)) != 0) {
         ring_failed("tier1.ring", tier1_, rc);
         return -4;
@@ -169,6 +171,10 @@ int TierManager::init(const char* data_dir,
         path_failed("tier2.ring");
         tier1_.close();
         return -5;
+    }
+    if (!convert_if_older(path, "tier2.ring", 2, record_size, cap2)) {
+        tier1_.close();
+        return -6;
     }
     if ((rc = tier2_.open(path, /*tier*/2, record_size, cap2)) != 0) {
         ring_failed("tier2.ring", tier2_, rc);
@@ -182,6 +188,11 @@ int TierManager::init(const char* data_dir,
         tier2_.close();
         tier1_.close();
         return -7;
+    }
+    if (!convert_if_older(path, "tier3.ring", 3, record_size, cap3)) {
+        tier2_.close();
+        tier1_.close();
+        return -8;
     }
     if ((rc = tier3_.open(path, /*tier*/3, record_size, cap3)) != 0) {
         ring_failed("tier3.ring", tier3_, rc);
@@ -198,6 +209,9 @@ int TierManager::init(const char* data_dir,
         auto ring = std::unique_ptr<RingFile>(new RingFile());
         if (!join_path(path, sizeof(path), data_dir, leaf.c_str())) {
             path_failed(leaf.c_str());
+            rc = -3;
+        } else if (!convert_if_older(path, leaf.c_str(), kCustomRingTier, record_size,
+                                     records_from_mb(spec.max_mb, record_size))) {
             rc = -3;
         } else {
             rc = ring->open(path, kCustomRingTier, record_size,
@@ -224,6 +238,41 @@ const std::string& TierManager::last_error() const { return last_error_; }
 
 const std::vector<TierManager::Recovered>& TierManager::recovered() const {
     return recovered_;
+}
+
+const std::vector<TierManager::Converted>& TierManager::converted() const {
+    return converted_;
+}
+
+bool TierManager::convert_if_older(const char* path, const char* leaf, uint8_t tier,
+                                   uint32_t record_size, uint64_t capacity) {
+    RingFile::Header h;
+    int err = 0;
+    if (RingFile::read_header(path, &h, &err) != 0 || h.tier != tier ||
+        h.record_size == record_size) {
+        return true;   // nothing to convert; open() reports anything else
+    }
+    if (h.record_size > record_size) {
+        last_error_  = leaf;
+        last_error_ += ": ";
+        last_error_ += std::to_string(h.record_size);
+        last_error_ += "-byte records, written by a newer budyk (this one writes ";
+        last_error_ += std::to_string(record_size);
+        last_error_ += "): move the file aside, or run the newer budyk";
+        return false;
+    }
+    uint64_t kept = 0, dropped = 0;
+    const int rc = convert_ring(path, tier, record_size, capacity, &kept, &dropped);
+    if (rc != 0) {
+        last_error_  = leaf;
+        last_error_ += ": converting it from ";
+        last_error_ += std::to_string(h.record_size);
+        last_error_ += "-byte records (an older budyk) failed: ";
+        last_error_ += std::strerror(-rc);
+        return false;
+    }
+    converted_.push_back(Converted{leaf, h.record_size, kept, dropped});
+    return true;
 }
 
 void TierManager::recover(const char* leaf, RingFile* ring) {
@@ -266,9 +315,10 @@ int TierManager::store(const Sample& s) {
 }
 
 int TierManager::append(RingFile* ring, const Sample& s) {
-    // Headroom over the current record size (14 + 256 = 270 for codec
-    // v7) so a future codec bump doesn't silently overflow here.
-    uint8_t buf[512];
+    // Headroom over the current record size (14 + 488 = 502 for codec
+    // v8); record_encode() refuses rather than overflow if it ever grows
+    // past this.
+    uint8_t buf[1024];
     size_t  len = 0;
     if (record_encode(s, buf, sizeof(buf), &len) != 0) return -3;
     if (ring->append(buf, len) != 0)                   return -4;

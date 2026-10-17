@@ -13,6 +13,7 @@
 #include "rules/yaml_compat.h"
 #include "scheduler/scheduler.h"
 #include "security/file_watcher.h"
+#include "storage/codec.h"
 #include "storage/tier_manager.h"
 #include "util/dir_lock.h"
 #include "web/json.h"
@@ -254,6 +255,13 @@ int cmd_serve(int argc, char* argv[], const char* version) {
             cfg.data_dir, tm.last_error().c_str());
         return 1;
     }
+    for (const auto& c : tm.converted()) {
+        std::fprintf(stderr,
+            "budyk serve: %s: converted from %u-byte records (an older budyk) to %zu: "
+            "%llu record(s) kept, %llu dropped\n",
+            c.ring.c_str(), c.from_record_size, budyk::record_size_for_sample(),
+            static_cast<unsigned long long>(c.kept), static_cast<unsigned long long>(c.dropped));
+    }
     for (const auto& r : tm.recovered()) {
         std::fprintf(stderr,
             "budyk serve: %s: %llu record(s) written before a crash and not yet "
@@ -474,9 +482,7 @@ int cmd_serve(int argc, char* argv[], const char* version) {
         config_path, cfg.data_dir, engine.rule_count(),
         cfg.listen_addr, http.bound_port());
 
-    budyk_cpu_ctx_c  cpu_ctx{};
-    budyk_disk_ctx_c disk_ctx{};
-    budyk_net_ctx_c  net_ctx{};
+    budyk::CollectContext collect_ctx;
 
     // File watcher — init once before the loop, add every configured
     // path. Init failures (kernel unable to allocate inotify/kqueue)
@@ -539,7 +545,7 @@ int cmd_serve(int argc, char* argv[], const char* version) {
         budyk::Sample s{};
         s.timestamp_nanos = now_realtime_ns();
 
-        collect_one(&s, &cpu_ctx, &disk_ctx, &net_ctx);
+        collect_one(&s, &collect_ctx);
 
         // File-watch drain — non-blocking poll so the tick cadence is
         // unchanged. apply() always clears the tampered set first, so
