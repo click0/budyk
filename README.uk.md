@@ -97,7 +97,8 @@ budyk serve (один процес на сервер)
   пам'ять, swap, середнє навантаження, дисковий I/O, мережа, процеси за
   станами, TCP і UDP, заповнення файлових систем (місце та inode),
   синхронізація годинника, ентропія, температура, аптайм, а також власні
-  CPU та RSS budyk.
+  CPU та RSS budyk; у реальному часі — кожне ядро, диск, інтерфейс і
+  файлова система.
 - **Сховище в кільцевих файлах:** окремий файл обмеженого розміру для
   кожного рівня, тож детальні дані 1 Гц із напружених періодів або тих,
   коли хтось дивився, лежать поруч із рідкими 5-хвилинними вибірками.
@@ -345,6 +346,29 @@ watch("swap_under_load", {
 | `self_` | `rss_bytes`, `peak_rss_bytes`, `cpu_user_seconds`, `cpu_system_seconds` |
 | `uptime_seconds` | число |
 | `files` | `files["/шлях"].modifies`, `.deletes`, `.tampered` (коли увімкнено `security.file_watch`) |
+
+Усередині деяких із них — деталізація найновішої вибірки у вигляді
+колекцій лише для читання: `cpu.cores` (масив: `#cpu.cores`,
+`cpu.cores[1].iowait_percent`), `disk.devices["sda"]`
+(`read_bytes_per_sec`, `write_bytes_per_sec`, `reads_per_sec`,
+`writes_per_sec`, `busy_percent`), `net.interfaces["eth0"]`
+(`rx/tx_bytes_per_sec`, `rx/tx_packets_per_sec`, `rx/tx_errors_per_sec`,
+`rx_drops_per_sec`, `up`) і `fs.mounts["/var"]` (`type`, `device`,
+`total_bytes`, `used_bytes`, `avail_bytes`, `used_percent`,
+`inodes_total`, `inodes_used`, `inodes_used_percent`). Пристрою, якого
+вже немає, відповідає `nil`; обходити — через `ipairs` / `pairs`:
+
+```lua
+watch("partition_full", {
+    when = function()
+        for mount, m in pairs(fs.mounts) do
+            if m.used_percent > 95 then return true end
+        end
+        return false
+    end,
+    severity = "critical",
+})
+```
 
 Правила виконуються в пісочниці, де є лише базова бібліотека, `math`,
 `string` і `table`. `io`, `os`, `require`, `load`, `loadfile` і `dofile`

@@ -3,40 +3,46 @@
 
 namespace budyk {
 
-void collect_one(Sample* s, CollectContext* ctx) {
+void collect_one(Sample* s, CollectContext* ctx, bool with_detail) {
     budyk_sample_c c{};
     c.timestamp_nanos = s->timestamp_nanos;
+    budyk_detail_c* d = with_detail ? ctx->detail.get() : nullptr;
+    if (d == nullptr) {
+        ctx->detail->ncores = ctx->detail->ndisks = 0;
+        ctx->detail->nifaces = ctx->detail->nmounts = 0;
+    }
 
 #if defined(BUDYK_LINUX)
-    budyk_collect_cpu_linux    (&ctx->cpu, &c);
+    budyk_collect_cpu_linux_ex (&ctx->cpu, &c, d);
     budyk_collect_memory_linux (&c);
     budyk_collect_uptime_linux (&c);
     budyk_collect_load_linux   (&c);
-    budyk_collect_disk_linux   (&ctx->disk, &c);
-    budyk_collect_network_linux(&ctx->net,  &c);
+    budyk_collect_disk_linux_ex   (&ctx->disk, &c, d);
+    budyk_collect_network_linux_ex(&ctx->net,  &c, d);
     budyk_collect_proc_linux   (&c);
     budyk_collect_entropy_linux(&c);
     budyk_collect_self_linux   (&c);
     budyk_collect_thermal_linux(&c);
     budyk_collect_netstat_linux(&ctx->netstat, &c);
-    budyk_collect_fs_linux     (&c);
+    budyk_collect_fs_linux_ex  (&c, d);
     budyk_collect_clock_linux  (&c);
 #elif defined(BUDYK_FREEBSD)
-    budyk_collect_cpu_freebsd    (&ctx->cpu, &c);
+    budyk_collect_cpu_freebsd_ex (&ctx->cpu, &c, d);
     budyk_collect_memory_freebsd (&c);
     budyk_collect_uptime_freebsd (&c);
     budyk_collect_load_freebsd   (&c);
-    budyk_collect_disk_freebsd   (&ctx->disk, &c);
-    budyk_collect_network_freebsd(&ctx->net,  &c);
+    budyk_collect_disk_freebsd_ex   (&ctx->disk, &c, d);
+    budyk_collect_network_freebsd_ex(&ctx->net,  &c, d);
     budyk_collect_proc_freebsd   (&c);
     budyk_collect_entropy_freebsd(&c);
     budyk_collect_self_freebsd   (&c);
     budyk_collect_thermal_freebsd(&c);
     budyk_collect_netstat_freebsd(&ctx->netstat, &c);
-    budyk_collect_fs_freebsd     (&c);
+    budyk_collect_fs_freebsd_ex  (&c, d);
     budyk_collect_clock_freebsd  (&c);
 #else
     (void)ctx;
+    (void)d;
 #endif
 
     // Copy the C-shim back into the C++ Sample (same field names, scalar

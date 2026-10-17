@@ -165,15 +165,17 @@ HttpHandler make_router(const RouterDeps& d) {
                 }
             }
             std::vector<budyk::Sample> snap;
+            std::string detail;
             {
                 std::lock_guard<std::mutex> g(hot_mtx);
                 snap.resize(hot.size());
                 if (!snap.empty()) hot.dump(snap.data(), snap.size());
+                if (d.latest_detail != nullptr) detail = *d.latest_detail;
             }
             budyk::HttpResponse r;
             r.status       = 200;
             r.content_type = "application/json";
-            r.body         = budyk::samples_to_json(snap.data(), snap.size());
+            r.body         = budyk::samples_to_json(snap.data(), snap.size(), &detail);
             return r;
         }
 

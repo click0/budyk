@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <string>
 
 #include <sys/stat.h>
@@ -444,6 +445,116 @@ int main() {
         assert(near(s.cpu.steal_percent, 0.0) && near(s.cpu.idle_percent, 60.0));
         assert(near(s.cpu.total_percent, 32.0));
         budyk_linux_set_proc_root(nullptr);
+    }
+
+    // 8c. Per-entity detail against fixtures: each core from its cpuN
+    //     line; each whole disk from /proc/diskstats (partitions and
+    //     loop devices left out) with byte and operation rates and the
+    //     busy share from io_ticks; each interface from /proc/net/dev.
+    //     A device that appears gets a baseline, not a rate; one that
+    //     disappears is gone from the list and from the previous
+    //     counters. Without a detail struct nothing is filled.
+    {
+        Fixture fx;
+        std::unique_ptr<budyk_detail_c> d(new budyk_detail_c());
+        budyk_linux_set_proc_root(fx.root.c_str());
+
+        fx.file("stat", "cpu  20 0 20 160 0 0 0 0 0 0\n"
+                        "cpu0 10 0 10 80 0 0 0 0 0 0\ncpu1 10 0 10 80 0 0 0 0 0 0\n");
+        budyk_cpu_ctx_c cctx;
+        std::memset(&cctx, 0, sizeof(cctx));
+        budyk_sample_c s;
+        std::memset(&s, 0, sizeof(s));
+        assert(budyk_collect_cpu_linux_ex(&cctx, &s, d.get()) == 0);
+        assert(d->ncores == 2 && d->cores[0].total_percent == 0.0);   // baseline
+        // cpu0: 90 user; cpu1: 60 idle, 30 iowait, 10 system.
+        fx.file("stat", "cpu  110 0 30 220 30 0 0 0 0 0\n"
+                        "cpu0 100 0 10 80 0 0 0 0 0 0\ncpu1 10 0 20 140 30 0 0 0 0 0\n");
+        assert(budyk_collect_cpu_linux_ex(&cctx, &s, d.get()) == 0);
+        assert(d->ncores == 2);
+        assert(near(d->cores[0].user_percent, 100.0) && near(d->cores[0].total_percent, 100.0));
+        assert(near(d->cores[1].idle_percent, 60.0) && near(d->cores[1].iowait_percent, 30.0));
+        assert(near(d->cores[1].total_percent, 10.0));            // not idle, not iowait
+
+        auto diskstats = [&](unsigned rs, unsigned ws, unsigned r, unsigned w, unsigned ticks,
+                             bool with_sdb) {
+            char buf[1024];
+            int n = std::snprintf(buf, sizeof(buf),
+                "   8       0 sda %u 0 %u 0 %u 0 %u 0 0 %u 0\n"
+                "   8       1 sda1 %u 0 %u 0 %u 0 %u 0 0 %u 0\n"
+                "   7       0 loop0 5 0 5 0 5 0 5 0 0 5 0\n", r, rs, w, ws, ticks, r, rs, w, ws, ticks);
+            if (with_sdb) {
+                std::snprintf(buf + n, sizeof(buf) - size_t(n), "   8      16 sdb 1 0 8 0 1 0 8 0 0 1 0\n");
+            }
+            fx.file("diskstats", buf);
+        };
+        budyk_disk_ctx_c dctx;
+        std::memset(&dctx, 0, sizeof(dctx));
+        s.timestamp_nanos = 10'000'000'000ULL;
+        diskstats(1000, 2000, 10, 20, 100, false);
+        assert(budyk_collect_disk_linux_ex(&dctx, &s, d.get()) == 0);
+        assert(d->ndisks == 1 && std::strcmp(d->disks[0].name, "sda") == 0);
+        s.timestamp_nanos = 12'000'000'000ULL;                         // 2 s later
+        diskstats(3000, 2000, 30, 20, 1100, true);
+        assert(budyk_collect_disk_linux_ex(&dctx, &s, d.get()) == 0);
+        assert(d->ndisks == 2);
+        assert(d->disks[0].read_bytes_per_sec == 2000 * 512 / 2);      // 1000 sectors/s
+        assert(d->disks[0].write_bytes_per_sec == 0);
+        assert(near(d->disks[0].reads_per_sec, 10.0));
+        assert(near(d->disks[0].busy_percent, 50.0));                  // 1000 ms of 2000
+        assert(std::strcmp(d->disks[1].name, "sdb") == 0 && d->disks[1].read_bytes_per_sec == 0);
+        // The totals sum every disk's counters, so a disk that appears
+        // adds all of its counters once (sdb's 8 sectors here); the
+        // per-device rates start it at a baseline instead.
+        assert(s.disk.read_bytes_per_sec == (2000 + 8) * 512 / 2);
+        s.timestamp_nanos = 13'000'000'000ULL;
+        diskstats(3000, 2000, 30, 20, 1100, false);                     // sdb gone
+        assert(budyk_collect_disk_linux_ex(&dctx, &s, d.get()) == 0);
+        assert(d->ndisks == 1 && d->ndisk_prev == 1);
+
+        auto netdev = [&](unsigned rx, unsigned tx, unsigned rxerr) {
+            char buf[1024];
+            std::snprintf(buf, sizeof(buf),
+                "Inter-|   Receive  |  Transmit\n face |bytes packets errs drop fifo frame compressed multicast|bytes packets errs drop fifo colls carrier compressed\n"
+                "    lo: 999 9 0 0 0 0 0 0 999 9 0 0 0 0 0 0\n"
+                "  eth0: %u 10 %u 1 0 0 0 0 %u 20 0 0 0 0 0 0\n", rx, rxerr, tx);
+            fx.file("net/dev", buf);
+        };
+        budyk_net_ctx_c nctx;
+        std::memset(&nctx, 0, sizeof(nctx));
+        s.timestamp_nanos = 20'000'000'000ULL;
+        netdev(1000, 500, 0);
+        assert(budyk_collect_network_linux_ex(&nctx, &s, d.get()) == 0);
+        assert(d->nifaces == 1 && std::strcmp(d->ifaces[0].name, "eth0") == 0);
+        s.timestamp_nanos = 21'000'000'000ULL;
+        netdev(5000, 700, 3);
+        assert(budyk_collect_network_linux_ex(&nctx, &s, d.get()) == 0);
+        assert(d->ifaces[0].rx_bytes_per_sec == 4000 && d->ifaces[0].tx_bytes_per_sec == 200);
+        assert(near(d->ifaces[0].rx_errors_per_sec, 3.0));
+        s.timestamp_nanos = 22'000'000'000ULL;
+        netdev(100, 900, 3);                    // the interface was reset: rx went back
+        assert(budyk_collect_network_linux_ex(&nctx, &s, d.get()) == 0);
+        assert(d->ifaces[0].rx_bytes_per_sec == 0 && d->ifaces[0].tx_bytes_per_sec == 200);
+
+        budyk_cpu_ctx_c c2;
+        std::memset(&c2, 0, sizeof(c2));
+        assert(budyk_collect_cpu_linux_ex(&c2, &s, nullptr) == 0);     // no detail: fine
+        budyk_linux_set_proc_root(nullptr);
+    }
+
+    // 8d. Filesystems with detail on this host: one entry per counted
+    //     filesystem, with sizes that add up.
+    {
+        std::unique_ptr<budyk_detail_c> d(new budyk_detail_c());
+        budyk_sample_c s;
+        std::memset(&s, 0, sizeof(s));
+        assert(budyk_collect_fs_linux_ex(&s, d.get()) == 0);
+        assert(d->nmounts == s.fs.count && d->nmounts >= 1);
+        for (uint32_t i = 0; i < d->nmounts; ++i) {
+            const budyk_mount_c& m = d->mounts[i];
+            assert(m.mount[0] == '/' && m.type[0] != '\0');
+            assert(m.used_bytes <= m.total_bytes && m.used_percent <= s.fs.max_used_percent + 1e-9);
+        }
     }
 
     // 9. CPU: the parts add up to 100 on the second call, and

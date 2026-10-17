@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #include "web/json.h"
 
+#include "core/json_text.h"
+
 #include <cmath>
 #include <cstdio>
 #include <cstdint>
@@ -44,6 +46,11 @@ void append_kv_uint(std::string* out, const char* key, uint64_t v) {
 void append_kv_int(std::string* out, const char* key, int64_t v) {
     out->push_back('"'); out->append(key); out->append("\":");
     append_int(out, v);
+}
+void append_kv_str(std::string* out, const char* key, const char* v) {
+    out->push_back('"'); out->append(key); out->append("\":\"");
+    out->append(json_escape(v));
+    out->push_back('"');
 }
 
 } // namespace
@@ -184,9 +191,76 @@ std::string sample_to_json(const Sample& s) {
     return out;
 }
 
-std::string samples_to_json(const Sample* samples, size_t n) {
+std::string detail_to_json(const budyk_detail_c& d) {
     std::string out;
-    out.reserve(n > 0 ? n * 1024 : 64);
+    out.reserve(256 + d.ncores * 160 + (d.ndisks + d.nifaces) * 200 + d.nmounts * 320);
+    out.append("{\"cores\":[");
+    for (uint32_t i = 0; i < d.ncores; ++i) {
+        const budyk_core_c& c = d.cores[i];
+        if (i > 0) out.push_back(',');
+        out.push_back('{');
+        append_kv_double(&out, "total_percent",  c.total_percent);  out.push_back(',');
+        append_kv_double(&out, "user_percent",   c.user_percent);   out.push_back(',');
+        append_kv_double(&out, "system_percent", c.system_percent); out.push_back(',');
+        append_kv_double(&out, "iowait_percent", c.iowait_percent); out.push_back(',');
+        append_kv_double(&out, "irq_percent",    c.irq_percent);    out.push_back(',');
+        append_kv_double(&out, "steal_percent",  c.steal_percent);  out.push_back(',');
+        append_kv_double(&out, "idle_percent",   c.idle_percent);
+        out.push_back('}');
+    }
+    out.append("],\"disks\":[");
+    for (uint32_t i = 0; i < d.ndisks; ++i) {
+        const budyk_disk_dev_c& x = d.disks[i];
+        if (i > 0) out.push_back(',');
+        out.push_back('{');
+        append_kv_str   (&out, "name",                x.name);                out.push_back(',');
+        append_kv_uint  (&out, "read_bytes_per_sec",  x.read_bytes_per_sec);  out.push_back(',');
+        append_kv_uint  (&out, "write_bytes_per_sec", x.write_bytes_per_sec); out.push_back(',');
+        append_kv_double(&out, "reads_per_sec",       x.reads_per_sec);       out.push_back(',');
+        append_kv_double(&out, "writes_per_sec",      x.writes_per_sec);      out.push_back(',');
+        append_kv_double(&out, "busy_percent",        x.busy_percent);
+        out.push_back('}');
+    }
+    out.append("],\"interfaces\":[");
+    for (uint32_t i = 0; i < d.nifaces; ++i) {
+        const budyk_iface_c& x = d.ifaces[i];
+        if (i > 0) out.push_back(',');
+        out.push_back('{');
+        append_kv_str   (&out, "name",               x.name);               out.push_back(',');
+        append_kv_uint  (&out, "rx_bytes_per_sec",   x.rx_bytes_per_sec);   out.push_back(',');
+        append_kv_uint  (&out, "tx_bytes_per_sec",   x.tx_bytes_per_sec);   out.push_back(',');
+        append_kv_double(&out, "rx_packets_per_sec", x.rx_packets_per_sec); out.push_back(',');
+        append_kv_double(&out, "tx_packets_per_sec", x.tx_packets_per_sec); out.push_back(',');
+        append_kv_double(&out, "rx_errors_per_sec",  x.rx_errors_per_sec);  out.push_back(',');
+        append_kv_double(&out, "tx_errors_per_sec",  x.tx_errors_per_sec);  out.push_back(',');
+        append_kv_double(&out, "rx_drops_per_sec",   x.rx_drops_per_sec);   out.push_back(',');
+        out.append(x.up != 0 ? "\"up\":true" : "\"up\":false");
+        out.push_back('}');
+    }
+    out.append("],\"filesystems\":[");
+    for (uint32_t i = 0; i < d.nmounts; ++i) {
+        const budyk_mount_c& x = d.mounts[i];
+        if (i > 0) out.push_back(',');
+        out.push_back('{');
+        append_kv_str   (&out, "mount",               x.mount);               out.push_back(',');
+        append_kv_str   (&out, "type",                x.type);                out.push_back(',');
+        append_kv_str   (&out, "device",              x.device);              out.push_back(',');
+        append_kv_uint  (&out, "total_bytes",         x.total_bytes);         out.push_back(',');
+        append_kv_uint  (&out, "used_bytes",          x.used_bytes);          out.push_back(',');
+        append_kv_uint  (&out, "avail_bytes",         x.avail_bytes);         out.push_back(',');
+        append_kv_double(&out, "used_percent",        x.used_percent);        out.push_back(',');
+        append_kv_uint  (&out, "inodes_total",        x.inodes_total);        out.push_back(',');
+        append_kv_uint  (&out, "inodes_used",         x.inodes_used);         out.push_back(',');
+        append_kv_double(&out, "inodes_used_percent", x.inodes_used_percent);
+        out.push_back('}');
+    }
+    out.append("]}");
+    return out;
+}
+
+std::string samples_to_json(const Sample* samples, size_t n, const std::string* detail_json) {
+    std::string out;
+    out.reserve((n > 0 ? n * 1024 : 64) + (detail_json != nullptr ? detail_json->size() + 16 : 0));
     out.append("{\"count\":");
     append_uint(&out, static_cast<uint64_t>(n));
     out.append(",\"samples\":[");
@@ -195,7 +269,12 @@ std::string samples_to_json(const Sample* samples, size_t n) {
         if (samples == nullptr) break;
         out.append(sample_to_json(samples[i]));
     }
-    out.append("]}\n");
+    out.push_back(']');
+    if (detail_json != nullptr && !detail_json->empty()) {
+        out.append(",\"detail\":");
+        out.append(*detail_json);
+    }
+    out.append("}\n");
     return out;
 }
 

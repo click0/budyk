@@ -243,10 +243,10 @@ int LuaEngine::load_state(const char* path) {
     return 0;
 }
 
-int LuaEngine::eval_tick(const Sample& s) {
+int LuaEngine::eval_tick(const Sample& s, const budyk_detail_c* detail) {
     if (L_ == nullptr) return -1;
 
-    budyk_lua_bind_sample(L_, s);
+    budyk_lua_bind_sample(L_, s, detail);
     if (has_file_state_) {
         budyk_lua_bind_files(L_, file_state_);
     }
@@ -366,12 +366,13 @@ int LuaEngine::add_level_condition(uint8_t level_id, const std::string& expr) {
     return 0;
 }
 
-void LuaEngine::eval_level_conditions(const Sample& s, std::vector<uint8_t>* active) {
+void LuaEngine::eval_level_conditions(const Sample& s, std::vector<uint8_t>* active,
+                                      const budyk_detail_c* detail) {
     if (active == nullptr) return;
     active->clear();
     if (L_ == nullptr || level_conditions_.empty()) return;
 
-    budyk_lua_bind_sample(L_, s);
+    budyk_lua_bind_sample(L_, s, detail);
     if (has_file_state_) {
         budyk_lua_bind_files(L_, file_state_);
     }

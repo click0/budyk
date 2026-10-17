@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Each core, disk, interface and filesystem, live** (spec §2.1). The
+  dashboard gets per-core bars and tables of disks (read / write rates,
+  operations, busy %), interfaces (rates, packets, errors, drops, down
+  ones in red) and filesystems (used, size, inodes); rules get them as
+  read-only collections `cpu.cores`, `disk.devices`, `net.interfaces`
+  and `fs.mounts`. Linux reads them from the same `/proc/stat`,
+  `/proc/diskstats` (busy from `io_ticks`), `/proc/net/dev` and mounts
+  as the totals; FreeBSD from `kern.cp_times`, devstat (busy from
+  `busy_time`), `getifaddrs` and `getmntinfo`. A device that appears
+  starts from a baseline; one that goes away is dropped. The detail is
+  not stored in the rings: the WebSocket frame and `/api/samples` carry
+  the newest sample's as `"detail"`.
+
 - **More metrics** (spec §2.1), on Linux and FreeBSD, in the rings, the
   API, the rules, the dashboard (new rows and two history charts) and
   the TUI:

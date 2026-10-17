@@ -172,7 +172,94 @@ typedef struct {
     int      has_prev;
 } budyk_netstat_ctx_c;
 
+// Per-entity detail (spec §2.1): each core, disk, interface and local
+// filesystem. Not stored in the rings; the daemon serves the latest to
+// the dashboard and the rules. One instance lives across ticks: besides
+// the lists it keeps each entity's previous counters for the rates, so
+// zero it once and pass the same one every time.
+#define BUDYK_MAX_CORES    1024
+#define BUDYK_MAX_ENTITIES 64     /* disks, interfaces, filesystems each */
+
+typedef struct {
+    double total_percent;
+    double user_percent, system_percent, iowait_percent;
+    double irq_percent, steal_percent, idle_percent;
+} budyk_core_c;
+
+typedef struct {
+    char     name[32];             /* sda, nvme0n1, ada0 */
+    uint64_t read_bytes_per_sec;
+    uint64_t write_bytes_per_sec;
+    double   reads_per_sec;
+    double   writes_per_sec;
+    double   busy_percent;         /* time the device had I/O in flight */
+} budyk_disk_dev_c;
+
+typedef struct {
+    char     name[32];             /* eth0, em0 */
+    uint64_t rx_bytes_per_sec;
+    uint64_t tx_bytes_per_sec;
+    double   rx_packets_per_sec;
+    double   tx_packets_per_sec;
+    double   rx_errors_per_sec;
+    double   tx_errors_per_sec;
+    double   rx_drops_per_sec;
+    uint8_t  up;
+} budyk_iface_c;
+
+typedef struct {
+    char     mount[256];
+    char     type[32];
+    char     device[128];
+    uint64_t total_bytes;
+    uint64_t used_bytes;
+    uint64_t avail_bytes;          /* to unprivileged users, as df */
+    double   used_percent;
+    uint64_t inodes_total;
+    uint64_t inodes_used;
+    double   inodes_used_percent;
+} budyk_mount_c;
+
+/* An entity's cumulative counters at the previous tick, by name. */
+typedef struct {
+    char     name[32];
+    uint64_t c[8];
+} budyk_entity_prev_c;
+
+typedef struct {
+    uint32_t         ncores;
+    budyk_core_c     cores[BUDYK_MAX_CORES];
+    uint32_t         ndisks;
+    budyk_disk_dev_c disks[BUDYK_MAX_ENTITIES];
+    uint32_t         nifaces;
+    budyk_iface_c    ifaces[BUDYK_MAX_ENTITIES];
+    uint32_t         nmounts;
+    budyk_mount_c    mounts[BUDYK_MAX_ENTITIES];
+
+    /* Across ticks, for the rates. */
+    uint64_t            core_prev[BUDYK_MAX_CORES][7];   /* 6 parts, total */
+    uint8_t             core_has_prev[BUDYK_MAX_CORES];
+    budyk_entity_prev_c disk_prev[BUDYK_MAX_ENTITIES];
+    uint32_t            ndisk_prev;
+    uint64_t            disk_prev_ns;
+    budyk_entity_prev_c iface_prev[BUDYK_MAX_ENTITIES];
+    uint32_t            niface_prev;
+    uint64_t            iface_prev_ns;
+} budyk_detail_c;
+
+/* The previous counters of entity `name` in `prev` (n entries), or NULL
+ * if it had none: a device that just appeared gets a baseline, not a
+ * rate. src/collector/detail.c. */
+const budyk_entity_prev_c* budyk_find_prev(const budyk_entity_prev_c* prev, uint32_t n,
+                                           const char* name);
+/* Per-second rate of a cumulative counter between two reads `dns` apart;
+ * 0 when there is no previous read or the counter went backwards. */
+double budyk_rate(uint64_t now, const uint64_t* prev, uint64_t dns);
+
 int budyk_collect_cpu_linux(budyk_cpu_ctx_c* ctx, budyk_sample_c* s);
+// The same, filling d->cores too when d is not NULL (the _ex collectors
+// below likewise fill their part of the detail).
+int budyk_collect_cpu_linux_ex(budyk_cpu_ctx_c* ctx, budyk_sample_c* s, budyk_detail_c* d);
 
 // Disk / network collection also needs across-tick state — both accumulate
 // monotonic byte counters and compute per-second rates from the delta.
@@ -195,6 +282,8 @@ typedef struct {
 
 int budyk_collect_disk_linux   (budyk_disk_ctx_c* ctx, budyk_sample_c* s);
 int budyk_collect_network_linux(budyk_net_ctx_c*  ctx, budyk_sample_c* s);
+int budyk_collect_disk_linux_ex   (budyk_disk_ctx_c* ctx, budyk_sample_c* s, budyk_detail_c* d);
+int budyk_collect_network_linux_ex(budyk_net_ctx_c*  ctx, budyk_sample_c* s, budyk_detail_c* d);
 int budyk_collect_proc_linux   (budyk_sample_c* s);
 // Parsers behind the collectors, exported for the fixture tests.
 // One /proc/<pid>/stat line: its state letter and num_threads.
@@ -205,11 +294,13 @@ int budyk_collect_entropy_linux(budyk_sample_c* s);
 int budyk_collect_self_linux   (budyk_sample_c* s);
 int budyk_collect_thermal_linux(budyk_sample_c* s);
 int budyk_collect_netstat_linux(budyk_netstat_ctx_c* ctx, budyk_sample_c* s);
-// Where the CPU, netstat, process and filesystem collectors read /proc
+// Where the CPU, disk, network, netstat, process
+// and filesystem collectors read /proc
 // from: tests point them at a fixture tree; NULL restores "/proc".
 void        budyk_linux_set_proc_root(const char* root);
 const char* budyk_linux_proc_root(void);
 int budyk_collect_fs_linux     (budyk_sample_c* s);
+int budyk_collect_fs_linux_ex  (budyk_sample_c* s, budyk_detail_c* d);
 int budyk_collect_clock_linux  (budyk_sample_c* s);
 
 // FreeBSD collectors. Same shape as Linux ones; built only when
@@ -220,12 +311,16 @@ int budyk_collect_uptime_freebsd (budyk_sample_c* s);
 int budyk_collect_cpu_freebsd    (budyk_cpu_ctx_c*  ctx, budyk_sample_c* s);
 int budyk_collect_disk_freebsd   (budyk_disk_ctx_c* ctx, budyk_sample_c* s);
 int budyk_collect_network_freebsd(budyk_net_ctx_c*  ctx, budyk_sample_c* s);
+int budyk_collect_cpu_freebsd_ex    (budyk_cpu_ctx_c*  ctx, budyk_sample_c* s, budyk_detail_c* d);
+int budyk_collect_disk_freebsd_ex   (budyk_disk_ctx_c* ctx, budyk_sample_c* s, budyk_detail_c* d);
+int budyk_collect_network_freebsd_ex(budyk_net_ctx_c*  ctx, budyk_sample_c* s, budyk_detail_c* d);
 int budyk_collect_proc_freebsd   (budyk_sample_c* s);
 int budyk_collect_entropy_freebsd(budyk_sample_c* s);
 int budyk_collect_self_freebsd   (budyk_sample_c* s);
 int budyk_collect_thermal_freebsd(budyk_sample_c* s);
 int budyk_collect_netstat_freebsd(budyk_netstat_ctx_c* ctx, budyk_sample_c* s);
 int budyk_collect_fs_freebsd     (budyk_sample_c* s);
+int budyk_collect_fs_freebsd_ex  (budyk_sample_c* s, budyk_detail_c* d);
 int budyk_collect_clock_freebsd  (budyk_sample_c* s);
 
 #ifdef __cplusplus

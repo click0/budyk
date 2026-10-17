@@ -282,6 +282,9 @@ int cmd_serve(int argc, char* argv[], const char* version) {
     // both sides in a mutex. Single-admin traffic + one push per tick
     // means contention is essentially zero.
     std::mutex hot_mtx;
+    // The newest sample's per-entity detail as JSON, for the WebSocket
+    // frame and /api/samples. Written by this thread under hot_mtx.
+    std::string latest_detail;
 
     budyk::Scheduler sched(cfg.scheduler);
 
@@ -459,6 +462,7 @@ int cmd_serve(int argc, char* argv[], const char* version) {
     deps.cfg              = &cfg;
     deps.hot              = &hot;
     deps.hot_mtx          = &hot_mtx;
+    deps.latest_detail    = &latest_detail;
     deps.tm               = &tm;
     deps.sessions         = &sessions;
     deps.limiter          = &login_limiter;
@@ -589,7 +593,7 @@ int cmd_serve(int argc, char* argv[], const char* version) {
         }
         // Custom levels whose `when` holds on this sample stay requested
         // for their hold time (0 = this tick only).
-        engine.eval_level_conditions(s, &level_hits);
+        engine.eval_level_conditions(s, &level_hits, collect_ctx.detail.get());
         for (uint8_t id : level_hits) {
             sched.request(static_cast<budyk::Level>(id),
                           s.timestamp_nanos + level_hold_ns[id]);
@@ -611,11 +615,13 @@ int cmd_serve(int argc, char* argv[], const char* version) {
         }
         tm.store(s);
         {
+            std::string detail = budyk::detail_to_json(*collect_ctx.detail);
             std::lock_guard<std::mutex> g(hot_mtx);
             hot.push(s);
+            latest_detail.swap(detail);
         }
 
-        engine.eval_tick(s);
+        engine.eval_tick(s, collect_ctx.detail.get());
         for (const auto& e : engine.take_escalations()) {
             sched.request_by_name(e.level, now_realtime_ns() +
                 static_cast<uint64_t>(e.seconds) * kNsPerSec);
@@ -636,7 +642,7 @@ int cmd_serve(int argc, char* argv[], const char* version) {
         // Push the freshly-collected sample to every connected WS client.
         // Failed sends are evicted by the hub itself. Nothing to build
         // when nobody is connected, which is the usual state at L1.
-        if (ws.size() > 0) ws.broadcast(budyk::samples_to_json(&s, 1));
+        if (ws.size() > 0) ws.broadcast(budyk::samples_to_json(&s, 1, &latest_detail));
 
         // Re-select after the rules ran, so an escalate() takes effect for
         // this sleep, not only from the next tick. The sample's own level

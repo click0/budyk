@@ -2,6 +2,7 @@
 #pragma once
 #include "core/json_text.h"
 #include "core/sample.h"
+#include "core/sample_c.h"
 
 #include <cstddef>
 #include <string>
@@ -23,9 +24,15 @@ namespace budyk {
 // finer samples (TierAggregator). No trailing newline.
 std::string sample_to_json(const Sample& s);
 
+// The per-entity detail of the newest sample: {"cores":[...],
+// "disks":[...],"interfaces":[...],"filesystems":[...]}, names escaped.
+std::string detail_to_json(const budyk_detail_c& d);
+
 // Serialise a span of samples as the body of /api/samples:
-// {"count":N,"samples":[<obj>,<obj>,...]}.
-std::string samples_to_json(const Sample* samples, size_t n);
+// {"count":N,"samples":[<obj>,<obj>,...]}, plus "detail":<detail_json>
+// when that is given and not empty (the newest sample's detail).
+std::string samples_to_json(const Sample* samples, size_t n,
+                            const std::string* detail_json = nullptr);
 
 // Pull the value of a top-level string field out of a small JSON
 // object: `"<key>" : "<value>"`, with the value's escapes decoded.

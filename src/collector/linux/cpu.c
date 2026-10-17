@@ -11,8 +11,36 @@
  *   cpu  user nice system idle iowait irq softirq steal guest guest_nice
  * Per-core lines follow as "cpu0", "cpu1", ...  Counts are in USER_HZ.
  */
+/* One core's share of each part since its previous read, and its busy
+ * total; parts in budyk_cpu_ctx_c.part order, total in [6]. */
+static void core_percent(const uint64_t now[7], const uint64_t prev[7], int has_prev,
+                         budyk_core_c* out) {
+    memset(out, 0, sizeof(*out));
+    if (!has_prev) return;
+    const uint64_t dt = now[6] >= prev[6] ? now[6] - prev[6] : 0;
+    if (dt == 0) return;
+    double pct[6];
+    for (int i = 0; i < 6; ++i) {
+        const uint64_t d = now[i] >= prev[i] ? now[i] - prev[i] : 0;
+        pct[i] = (double)d * 100.0 / (double)dt;
+    }
+    out->user_percent   = pct[0];
+    out->system_percent = pct[1];
+    out->iowait_percent = pct[2];
+    out->irq_percent    = pct[3];
+    out->steal_percent  = pct[4];
+    out->idle_percent   = pct[5];
+    out->total_percent  = 100.0 - pct[5] - pct[2];
+    if (out->total_percent < 0.0) out->total_percent = 0.0;
+}
+
 int budyk_collect_cpu_linux(budyk_cpu_ctx_c* ctx, budyk_sample_c* s) {
+    return budyk_collect_cpu_linux_ex(ctx, s, NULL);
+}
+
+int budyk_collect_cpu_linux_ex(budyk_cpu_ctx_c* ctx, budyk_sample_c* s, budyk_detail_c* d) {
     if (ctx == NULL || s == NULL) return -EINVAL;
+    if (d != NULL) d->ncores = 0;
 
     char path[512];
     snprintf(path, sizeof(path), "%s/stat", budyk_linux_proc_root());
@@ -38,6 +66,22 @@ int budyk_collect_cpu_linux(budyk_cpu_ctx_c* ctx, budyk_sample_c* s) {
         } else if (strncmp(line, "cpu", 3) == 0 &&
                    line[3] >= '0' && line[3] <= '9') {
             ++ncpu;
+            /* cpuN, in order; an offline core has no line. Its prev
+             * slot is its number, so a core coming back gets a baseline
+             * only if it was gone for a whole tick. */
+            unsigned id = 0;
+            unsigned long long u = 0, n = 0, sy = 0, id_ = 0, io = 0, iq = 0, sq = 0, st = 0;
+            if (d != NULL &&
+                sscanf(line + 3, "%u %llu %llu %llu %llu %llu %llu %llu %llu",
+                       &id, &u, &n, &sy, &id_, &io, &iq, &sq, &st) == 9 &&
+                id < BUDYK_MAX_CORES && d->ncores < BUDYK_MAX_CORES) {
+                const uint64_t now[7] = { u + n, sy, io, iq + sq, st, id_,
+                                          u + n + sy + io + iq + sq + st + id_ };
+                core_percent(now, d->core_prev[id], d->core_has_prev[id],
+                             &d->cores[d->ncores++]);
+                memcpy(d->core_prev[id], now, sizeof(now));
+                d->core_has_prev[id] = 1;
+            }
         } else if (strncmp(line, "intr", 4) == 0) {
             break;  /* no more cpuN lines after this */
         }
@@ -62,8 +106,8 @@ int budyk_collect_cpu_linux(budyk_cpu_ctx_c* ctx, budyk_sample_c* s) {
             ? (double)db * 100.0 / (double)dt
             : 0.0;
         for (int i = 0; i < 6; ++i) {
-            const uint64_t d = part[i] >= ctx->part[i] ? part[i] - ctx->part[i] : 0;
-            pct[i] = dt > 0 ? (double)d * 100.0 / (double)dt : 0.0;
+            const uint64_t dp = part[i] >= ctx->part[i] ? part[i] - ctx->part[i] : 0;
+            pct[i] = dt > 0 ? (double)dp * 100.0 / (double)dt : 0.0;
         }
     }
     s->cpu.user_percent   = pct[0];

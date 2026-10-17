@@ -125,6 +125,23 @@ junk.send(b"\x00\xff not http\r\n\r\n")
 junk.close()
 EOF
 
+# The per-entity detail (cores, disks, interfaces, filesystems) rides
+# along with /api/samples: one core at least, the filesystems the totals
+# counted.
+if curl -s "http://127.0.0.1:$PORT/api/samples" | python3 -c '
+import json, sys
+doc = json.load(sys.stdin)
+d, s = doc["detail"], doc["samples"][-1]
+assert len(d["cores"]) >= 1 and len(d["cores"]) == s["cpu"]["count"], d["cores"]
+assert len(d["filesystems"]) == s["fs"]["count"], (d["filesystems"], s["fs"])
+assert all(m["mount"].startswith("/") for m in d["filesystems"])
+assert isinstance(d["disks"], list) and isinstance(d["interfaces"], list)
+'; then
+    echo "ok   /api/samples carries the per-entity detail"
+else
+    echo "FAIL: no or inconsistent detail in /api/samples"; fail=1
+fi
+
 # The burst level holds throughout, yet the L1 ring still gets a record
 # per L1 interval (2 s here), folded from the burst samples; level=all
 # shows those samples once, from the burst ring, without the folded copy.

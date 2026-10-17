@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #pragma once
 #include "core/sample.h"
+#include "core/sample_c.h"
 #include "rules/alert.h"
 #include "rules/worker.h"
 #include "security/file_watcher.h"
@@ -75,7 +76,9 @@ public:
 
     // Binds `s` as read-only Lua globals and calls every rule's `when()`.
     // Returns the number of rules that fired, or -1 if not initialised.
-    int  eval_tick(const Sample& s);
+    // `detail` (optional): the per-entity detail of `s`, for the rules'
+    // cpu.cores, disk.devices, net.interfaces and fs.mounts.
+    int  eval_tick(const Sample& s, const budyk_detail_c* detail = nullptr);
 
     // Custom-level entry conditions (collection.levels[].when). The
     // expression is compiled as `return (<expr>)` in the rules sandbox.
@@ -85,7 +88,8 @@ public:
     // Binds `s` and evaluates every condition. *active is cleared, then
     // gets the id of each level whose expression is true. A condition
     // that raises counts as false and is logged once per distinct error.
-    void eval_level_conditions(const Sample& s, std::vector<uint8_t>* active);
+    void eval_level_conditions(const Sample& s, std::vector<uint8_t>* active,
+                               const budyk_detail_c* detail = nullptr);
 
     // Level names escalate() accepts ("L1".."L3" and the custom names).
     void set_level_names(std::vector<std::string> names);

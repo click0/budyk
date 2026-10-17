@@ -10,7 +10,14 @@
 // the first bind and updated in place afterwards (no allocation per
 // tick); every bind re-points the globals and clears anything a rule
 // rawset() onto a proxy, so neither outlives the tick.
+//
+// With `d`, the per-entity detail goes in as read-only collections inside
+// the groups: cpu.cores (an array), disk.devices, net.interfaces and
+// fs.mounts (keyed by name / mount point); without, they are empty. Item
+// tables are reused while the item is there and dropped when it goes.
+#include "core/sample_c.h"
 struct lua_State;
 namespace budyk { struct Sample; struct FileWatchState; }
-void budyk_lua_bind_sample    (lua_State* L, const budyk::Sample& s);
+void budyk_lua_bind_sample    (lua_State* L, const budyk::Sample& s,
+                               const budyk_detail_c* d = nullptr);
 void budyk_lua_bind_files     (lua_State* L, const budyk::FileWatchState& s);

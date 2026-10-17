@@ -74,9 +74,23 @@ static int is_partition_name(const char* name) {
 }
 
 int budyk_collect_disk_linux(budyk_disk_ctx_c* ctx, budyk_sample_c* s) {
-    if (ctx == NULL || s == NULL) return -EINVAL;
+    return budyk_collect_disk_linux_ex(ctx, s, NULL);
+}
 
-    FILE* f = fopen("/proc/diskstats", "r");
+/* Per device: counters c[] = bytes read, bytes written, reads, writes,
+ * ms with I/O in flight (io_ticks, field 13). busy_percent is that
+ * time's share of the interval. */
+int budyk_collect_disk_linux_ex(budyk_disk_ctx_c* ctx, budyk_sample_c* s, budyk_detail_c* d) {
+    if (ctx == NULL || s == NULL) return -EINVAL;
+    budyk_entity_prev_c next[BUDYK_MAX_ENTITIES];
+    uint32_t nnext = 0;
+    const uint64_t ddns = d != NULL && d->disk_prev_ns != 0 && s->timestamp_nanos > d->disk_prev_ns
+                       ? s->timestamp_nanos - d->disk_prev_ns : 0;
+    if (d != NULL) d->ndisks = 0;
+
+    char path[512];
+    snprintf(path, sizeof(path), "%s/diskstats", budyk_linux_proc_root());
+    FILE* f = fopen(path, "r");
     if (f == NULL) return -errno;
 
     uint64_t read_sectors  = 0;
@@ -87,9 +101,10 @@ int budyk_collect_disk_linux(budyk_disk_ctx_c* ctx, budyk_sample_c* s) {
     while (fgets(line, sizeof(line), f) != NULL) {
         unsigned int maj, min_;
         char name[64];
-        unsigned long long r, rm, rs, rms, w, wm, ws, wms;
-        int parsed = sscanf(line, " %u %u %63s %llu %llu %llu %llu %llu %llu %llu %llu",
-                            &maj, &min_, name, &r, &rm, &rs, &rms, &w, &wm, &ws, &wms);
+        unsigned long long r, rm, rs, rms, w, wm, ws, wms, inflight = 0, ticks = 0;
+        int parsed = sscanf(line, " %u %u %63s %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu",
+                            &maj, &min_, name, &r, &rm, &rs, &rms, &w, &wm, &ws, &wms,
+                            &inflight, &ticks);
         if (parsed < 11) continue;
         if (is_noise_name(name))     continue;
         if (is_partition_name(name)) continue;
@@ -97,6 +112,27 @@ int budyk_collect_disk_linux(budyk_disk_ctx_c* ctx, budyk_sample_c* s) {
         read_sectors  += rs;
         write_sectors += ws;
         ++device_count;
+
+        if (d != NULL && d->ndisks < BUDYK_MAX_ENTITIES) {
+            const uint64_t now[5] = { rs * 512ULL, ws * 512ULL, r, w, ticks };
+            const budyk_entity_prev_c* p = budyk_find_prev(d->disk_prev, d->ndisk_prev, name);
+            budyk_disk_dev_c* dev = &d->disks[d->ndisks++];
+            memset(dev, 0, sizeof(*dev));
+            snprintf(dev->name, sizeof(dev->name), "%.31s", name);
+            if (p != NULL && ddns > 0) {
+                dev->read_bytes_per_sec  = (uint64_t)budyk_rate(now[0], &p->c[0], ddns);
+                dev->write_bytes_per_sec = (uint64_t)budyk_rate(now[1], &p->c[1], ddns);
+                dev->reads_per_sec       = budyk_rate(now[2], &p->c[2], ddns);
+                dev->writes_per_sec      = budyk_rate(now[3], &p->c[3], ddns);
+                /* io_ticks is in ms: ms per s / 10 = percent */
+                dev->busy_percent        = budyk_rate(now[4], &p->c[4], ddns) / 10.0;
+                if (dev->busy_percent > 100.0) dev->busy_percent = 100.0;
+            }
+            budyk_entity_prev_c* n = &next[nnext++];
+            memset(n, 0, sizeof(*n));
+            snprintf(n->name, sizeof(n->name), "%.31s", name);
+            memcpy(n->c, now, sizeof(now));
+        }
     }
     fclose(f);
 
@@ -119,6 +155,11 @@ int budyk_collect_disk_linux(budyk_disk_ctx_c* ctx, budyk_sample_c* s) {
         s->disk.write_bytes_per_sec = (dw_sec * 512ULL * 1000000000ULL) / dns;
     }
 
+    if (d != NULL) {
+        memcpy(d->disk_prev, next, sizeof(next[0]) * nnext);
+        d->ndisk_prev   = nnext;
+        d->disk_prev_ns = s->timestamp_nanos;
+    }
     ctx->prev_read_sectors  = read_sectors;
     ctx->prev_write_sectors = write_sectors;
     ctx->prev_ns            = s->timestamp_nanos;

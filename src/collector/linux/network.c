@@ -17,10 +17,35 @@
  * drowns out anomaly signals for real NICs.
  */
 
-int budyk_collect_network_linux(budyk_net_ctx_c* ctx, budyk_sample_c* s) {
-    if (ctx == NULL || s == NULL) return -EINVAL;
+/* IFF_UP from /sys/class/net/<if>/flags (hex); 1 when it cannot be read. */
+static uint8_t iface_up(const char* name) {
+    char path[128];
+    snprintf(path, sizeof(path), "/sys/class/net/%.64s/flags", name);
+    FILE* f = fopen(path, "r");
+    if (f == NULL) return 1;
+    unsigned int flags = 1;
+    if (fscanf(f, "%x", &flags) != 1) flags = 1;
+    fclose(f);
+    return (uint8_t)((flags & 0x1u) != 0);
+}
 
-    FILE* f = fopen("/proc/net/dev", "r");
+int budyk_collect_network_linux(budyk_net_ctx_c* ctx, budyk_sample_c* s) {
+    return budyk_collect_network_linux_ex(ctx, s, NULL);
+}
+
+/* Per interface: counters c[] = rx bytes, tx bytes, rx packets, tx
+ * packets, rx errors, tx errors, rx drops. */
+int budyk_collect_network_linux_ex(budyk_net_ctx_c* ctx, budyk_sample_c* s, budyk_detail_c* d) {
+    if (ctx == NULL || s == NULL) return -EINVAL;
+    budyk_entity_prev_c next[BUDYK_MAX_ENTITIES];
+    uint32_t nnext = 0;
+    const uint64_t ddns = d != NULL && d->iface_prev_ns != 0 && s->timestamp_nanos > d->iface_prev_ns
+                       ? s->timestamp_nanos - d->iface_prev_ns : 0;
+    if (d != NULL) d->nifaces = 0;
+
+    char path[512];
+    snprintf(path, sizeof(path), "%s/net/dev", budyk_linux_proc_root());
+    FILE* f = fopen(path, "r");
     if (f == NULL) return -errno;
 
     uint64_t rx_bytes = 0;
@@ -55,6 +80,28 @@ int budyk_collect_network_linux(budyk_net_ctx_c* ctx, budyk_sample_c* s) {
         rx_bytes += rxb;
         tx_bytes += txb;
         ++iface_count;
+
+        if (d != NULL && d->nifaces < BUDYK_MAX_ENTITIES) {
+            const uint64_t now[7] = { rxb, txb, rxp, txp, rxe, txe, rxd };
+            const budyk_entity_prev_c* p = budyk_find_prev(d->iface_prev, d->niface_prev, name);
+            budyk_iface_c* ifc = &d->ifaces[d->nifaces++];
+            memset(ifc, 0, sizeof(*ifc));
+            snprintf(ifc->name, sizeof(ifc->name), "%.31s", name);
+            ifc->up = iface_up(name);
+            if (p != NULL && ddns > 0) {
+                ifc->rx_bytes_per_sec   = (uint64_t)budyk_rate(now[0], &p->c[0], ddns);
+                ifc->tx_bytes_per_sec   = (uint64_t)budyk_rate(now[1], &p->c[1], ddns);
+                ifc->rx_packets_per_sec = budyk_rate(now[2], &p->c[2], ddns);
+                ifc->tx_packets_per_sec = budyk_rate(now[3], &p->c[3], ddns);
+                ifc->rx_errors_per_sec  = budyk_rate(now[4], &p->c[4], ddns);
+                ifc->tx_errors_per_sec  = budyk_rate(now[5], &p->c[5], ddns);
+                ifc->rx_drops_per_sec   = budyk_rate(now[6], &p->c[6], ddns);
+            }
+            budyk_entity_prev_c* n = &next[nnext++];
+            memset(n, 0, sizeof(*n));
+            snprintf(n->name, sizeof(n->name), "%.31s", name);
+            memcpy(n->c, now, sizeof(now));
+        }
     }
     fclose(f);
 
@@ -73,6 +120,11 @@ int budyk_collect_network_linux(budyk_net_ctx_c* ctx, budyk_sample_c* s) {
         s->net.tx_bytes_per_sec = (dtx * 1000000000ULL) / dns;
     }
 
+    if (d != NULL) {
+        memcpy(d->iface_prev, next, sizeof(next[0]) * nnext);
+        d->niface_prev   = nnext;
+        d->iface_prev_ns = s->timestamp_nanos;
+    }
     ctx->prev_rx_bytes = rx_bytes;
     ctx->prev_tx_bytes = tx_bytes;
     ctx->prev_ns       = s->timestamp_nanos;
