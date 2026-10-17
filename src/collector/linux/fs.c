@@ -53,8 +53,13 @@ void budyk_linux_unescape_mount(char* s) {
 }
 
 int budyk_collect_fs_linux(budyk_sample_c* s) {
+    return budyk_collect_fs_linux_ex(s, NULL);
+}
+
+int budyk_collect_fs_linux_ex(budyk_sample_c* s, budyk_detail_c* d) {
     if (s == NULL) return -EINVAL;
     memset(&s->fs, 0, sizeof(s->fs));
+    if (d != NULL) d->nmounts = 0;
 
     char path[512];
     snprintf(path, sizeof(path), "%s/self/mounts", budyk_linux_proc_root());
@@ -89,6 +94,22 @@ int budyk_collect_fs_linux(budyk_sample_c* s) {
         ++s->fs.count;
         if (pct  > s->fs.max_used_percent)        s->fs.max_used_percent        = pct;
         if (ipct > s->fs.max_inodes_used_percent) s->fs.max_inodes_used_percent = ipct;
+
+        if (d != NULL && d->nmounts < BUDYK_MAX_ENTITIES) {
+            budyk_mount_c* m = &d->mounts[d->nmounts++];
+            memset(m, 0, sizeof(*m));
+            snprintf(m->mount,  sizeof(m->mount),  "%.255s", mnt);
+            snprintf(m->type,   sizeof(m->type),   "%.31s",  type);
+            snprintf(m->device, sizeof(m->device), "%.127s", dev);
+            const uint64_t frsize = v.f_frsize > 0 ? (uint64_t)v.f_frsize : (uint64_t)v.f_bsize;
+            m->total_bytes         = (uint64_t)v.f_blocks * frsize;
+            m->used_bytes          = (uint64_t)(v.f_blocks - v.f_bfree) * frsize;
+            m->avail_bytes         = (uint64_t)v.f_bavail * frsize;
+            m->used_percent        = pct;
+            m->inodes_total        = (uint64_t)v.f_files;
+            m->inodes_used         = (uint64_t)(v.f_files - v.f_ffree);
+            m->inodes_used_percent = ipct;
+        }
     }
     fclose(f);
     s->fs.present = 1;

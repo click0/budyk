@@ -18,11 +18,25 @@
 #include <devstat.h>
 
 #include <errno.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 int budyk_collect_disk_freebsd(budyk_disk_ctx_c* ctx, budyk_sample_c* s) {
+    return budyk_collect_disk_freebsd_ex(ctx, s, NULL);
+}
+
+/* Per device (name = device_name + unit_number, as iostat): counters
+ * c[] = bytes read, bytes written, reads, writes, microseconds busy
+ * (busy_time, a bintime). */
+int budyk_collect_disk_freebsd_ex(budyk_disk_ctx_c* ctx, budyk_sample_c* s, budyk_detail_c* detail) {
     if (ctx == NULL || s == NULL) return -EINVAL;
+    budyk_entity_prev_c next[BUDYK_MAX_ENTITIES];
+    uint32_t nnext = 0;
+    const uint64_t ddns = detail != NULL && detail->disk_prev_ns != 0 &&
+                          s->timestamp_nanos > detail->disk_prev_ns
+                        ? s->timestamp_nanos - detail->disk_prev_ns : 0;
+    if (detail != NULL) detail->ndisks = 0;
 
     /* libdevstat keeps an internal version; bail if it disagrees with
      * the kernel running underneath us (running a binary built against
@@ -50,6 +64,41 @@ int budyk_collect_disk_freebsd(budyk_disk_ctx_c* ctx, budyk_sample_c* s) {
         total_read  += d->bytes[DEVSTAT_READ];
         total_write += d->bytes[DEVSTAT_WRITE];
         ++devs;
+
+        if (detail != NULL && detail->ndisks < BUDYK_MAX_ENTITIES) {
+            char name[32];
+            snprintf(name, sizeof(name), "%.20s%d", d->device_name, d->unit_number);
+            const uint64_t busy_us = (uint64_t)d->busy_time.sec * 1000000ULL +
+                                     (((uint64_t)(d->busy_time.frac >> 32) * 1000000ULL) >> 32);
+            const uint64_t now[5] = {
+                (uint64_t)d->bytes[DEVSTAT_READ], (uint64_t)d->bytes[DEVSTAT_WRITE],
+                (uint64_t)d->operations[DEVSTAT_READ], (uint64_t)d->operations[DEVSTAT_WRITE],
+                busy_us,
+            };
+            const budyk_entity_prev_c* p =
+                budyk_find_prev(detail->disk_prev, detail->ndisk_prev, name);
+            budyk_disk_dev_c* dev = &detail->disks[detail->ndisks++];
+            memset(dev, 0, sizeof(*dev));
+            snprintf(dev->name, sizeof(dev->name), "%s", name);
+            if (p != NULL && ddns > 0) {
+                dev->read_bytes_per_sec  = (uint64_t)budyk_rate(now[0], &p->c[0], ddns);
+                dev->write_bytes_per_sec = (uint64_t)budyk_rate(now[1], &p->c[1], ddns);
+                dev->reads_per_sec       = budyk_rate(now[2], &p->c[2], ddns);
+                dev->writes_per_sec      = budyk_rate(now[3], &p->c[3], ddns);
+                /* microseconds busy per second / 10^4 = percent */
+                dev->busy_percent        = budyk_rate(now[4], &p->c[4], ddns) / 1.0e4;
+                if (dev->busy_percent > 100.0) dev->busy_percent = 100.0;
+            }
+            budyk_entity_prev_c* n = &next[nnext++];
+            memset(n, 0, sizeof(*n));
+            snprintf(n->name, sizeof(n->name), "%s", name);
+            memcpy(n->c, now, sizeof(now));
+        }
+    }
+    if (detail != NULL) {
+        memcpy(detail->disk_prev, next, sizeof(next[0]) * nnext);
+        detail->ndisk_prev   = nnext;
+        detail->disk_prev_ns = s->timestamp_nanos;
     }
 
     /* dinfo->mem_ptr is owned by devstat — free it before our calloc. */

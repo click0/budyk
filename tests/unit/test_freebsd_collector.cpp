@@ -14,6 +14,8 @@
 #include <cstdio>
 #include <cstring>
 
+#include <memory>
+
 #include <unistd.h>
 
 int main() {
@@ -292,6 +294,43 @@ int main() {
         assert(budyk_collect_clock_freebsd(&s) == 0);
         assert(s.clock.present && s.clock.max_error_ms >= 0.0);
         assert(budyk_collect_clock_freebsd(nullptr) != 0);
+    }
+
+    // 16. Per-entity detail: one entry per CPU (the count the totals
+    //     report), rates after the second read; the interfaces and the
+    //     local filesystems the totals counted; disks named as iostat.
+    {
+        std::unique_ptr<budyk_detail_c> d(new budyk_detail_c());
+        budyk_cpu_ctx_c cctx;
+        std::memset(&cctx, 0, sizeof(cctx));
+        budyk_sample_c s;
+        std::memset(&s, 0, sizeof(s));
+        assert(budyk_collect_cpu_freebsd_ex(&cctx, &s, d.get()) == 0);
+        assert(d->ncores == s.cpu.count);
+        ::usleep(50000);
+        assert(budyk_collect_cpu_freebsd_ex(&cctx, &s, d.get()) == 0);
+        for (uint32_t i = 0; i < d->ncores; ++i) {
+            const double sum = d->cores[i].user_percent + d->cores[i].system_percent +
+                               d->cores[i].irq_percent + d->cores[i].idle_percent;
+            assert(sum == 0.0 || (sum > 99.0 && sum < 101.0));    // 0: no ticks in 50 ms
+        }
+
+        budyk_net_ctx_c nctx;
+        std::memset(&nctx, 0, sizeof(nctx));
+        s.timestamp_nanos = 1'000'000'000ULL;
+        assert(budyk_collect_network_freebsd_ex(&nctx, &s, d.get()) == 0);
+        assert(d->nifaces == s.net.interface_count && d->nifaces >= 1);
+        assert(d->ifaces[0].name[0] != '\0');
+
+        budyk_disk_ctx_c dctx;
+        std::memset(&dctx, 0, sizeof(dctx));
+        assert(budyk_collect_disk_freebsd_ex(&dctx, &s, d.get()) == 0);
+        assert(d->ndisks == s.disk.device_count);
+        for (uint32_t i = 0; i < d->ndisks; ++i) assert(d->disks[i].name[0] != '\0');
+
+        assert(budyk_collect_fs_freebsd_ex(&s, d.get()) == 0);
+        assert(d->nmounts == s.fs.count && d->nmounts >= 1);
+        assert(d->mounts[0].mount[0] == '/' && d->mounts[0].total_bytes > 0);
     }
 
     std::printf("test_freebsd_collector: PASS\n");

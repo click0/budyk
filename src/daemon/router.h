@@ -26,6 +26,9 @@ struct RouterDeps {
     const Config*          cfg          = nullptr;
     HotBuffer*             hot          = nullptr;
     std::mutex*            hot_mtx      = nullptr;
+    // The newest sample's detail JSON (detail_to_json), under hot_mtx;
+    // /api/samples adds it. Optional.
+    const std::string*     latest_detail = nullptr;
     TierManager*           tm           = nullptr;
     SessionStore*          sessions     = nullptr;
     LoginLimiter*          limiter      = nullptr;

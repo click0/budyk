@@ -10,6 +10,7 @@
 #include <sys/mount.h>
 
 #include <errno.h>
+#include <stdio.h>
 #include <string.h>
 
 /* Not worth watching: pseudo filesystems, nullfs (another view of a
@@ -30,8 +31,13 @@ static int skipped_type(const char* t) {
 }
 
 int budyk_collect_fs_freebsd(budyk_sample_c* s) {
+    return budyk_collect_fs_freebsd_ex(s, NULL);
+}
+
+int budyk_collect_fs_freebsd_ex(budyk_sample_c* s, budyk_detail_c* d) {
     if (s == NULL) return -EINVAL;
     memset(&s->fs, 0, sizeof(s->fs));
+    if (d != NULL) d->nmounts = 0;
 
     struct statfs* mounts = NULL;
     const int n = getmntinfo(&mounts, MNT_NOWAIT);
@@ -51,6 +57,23 @@ int budyk_collect_fs_freebsd(budyk_sample_c* s) {
         ++s->fs.count;
         if (pct  > s->fs.max_used_percent)        s->fs.max_used_percent        = pct;
         if (ipct > s->fs.max_inodes_used_percent) s->fs.max_inodes_used_percent = ipct;
+
+        if (d != NULL && d->nmounts < BUDYK_MAX_ENTITIES) {
+            budyk_mount_c* m = &d->mounts[d->nmounts++];
+            memset(m, 0, sizeof(*m));
+            snprintf(m->mount,  sizeof(m->mount),  "%.255s", v.f_mntonname);
+            snprintf(m->type,   sizeof(m->type),   "%.31s",  v.f_fstypename);
+            snprintf(m->device, sizeof(m->device), "%.127s", v.f_mntfromname);
+            const uint64_t bsize = (uint64_t)v.f_bsize;
+            m->total_bytes         = (uint64_t)v.f_blocks * bsize;
+            m->used_bytes          = (uint64_t)(v.f_blocks - v.f_bfree) * bsize;
+            m->avail_bytes         = v.f_bavail > 0 ? (uint64_t)v.f_bavail * bsize : 0;
+            m->used_percent        = pct;
+            m->inodes_total        = (uint64_t)v.f_files;
+            m->inodes_used         = v.f_ffree >= 0 && (uint64_t)v.f_ffree <= v.f_files
+                                   ? v.f_files - (uint64_t)v.f_ffree : 0;
+            m->inodes_used_percent = ipct;
+        }
     }
     s->fs.present = 1;
     return 0;

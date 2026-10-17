@@ -57,6 +57,34 @@ int sample_ro_pairs(lua_State* L) {
     return 3;
 }
 
+// __len of a proxy: #cpu.cores is the length of the data behind it.
+int sample_ro_len(lua_State* L) {
+    lua_pushinteger(L, static_cast<lua_Integer>(lua_rawlen(L, lua_upvalueindex(1))));
+    return 1;
+}
+
+// Push a read-only proxy over the table at `data_idx`; `name` goes into
+// the error an assignment raises ("<name>.<key> is read-only").
+void push_ro_proxy(lua_State* L, int data_idx, const char* name) {
+    data_idx = lua_absindex(L, data_idx);
+    lua_newtable(L);                                      // proxy
+    lua_createtable(L, 0, 5);                             // proxy, mt
+    lua_pushvalue(L, data_idx);
+    lua_setfield(L, -2, "__index");
+    lua_pushstring(L, name);
+    lua_pushcclosure(L, sample_ro_newindex, 1);
+    lua_setfield(L, -2, "__newindex");
+    lua_pushvalue(L, data_idx);
+    lua_pushcclosure(L, sample_ro_pairs, 1);
+    lua_setfield(L, -2, "__pairs");
+    lua_pushvalue(L, data_idx);
+    lua_pushcclosure(L, sample_ro_len, 1);
+    lua_setfield(L, -2, "__len");
+    lua_pushliteral(L, "read-only");
+    lua_setfield(L, -2, "__metatable");                   // getmetatable() sees this
+    lua_setmetatable(L, -2);                              // proxy
+}
+
 // Remove every raw key from the table at `idx`. A proxy is empty by
 // construction; a rule can still rawset() a field onto it, which would
 // shadow the data from then on. Clearing on every bind bounds such a
@@ -88,19 +116,7 @@ void push_group_data(lua_State* L, const char* group) {
         lua_pop(L, 1);
         lua_createtable(L, 2, 0);                         // reg, entry
         lua_createtable(L, 0, 4);                         // reg, entry, data
-        lua_newtable(L);                                  // reg, entry, data, proxy
-        lua_createtable(L, 0, 4);                         // reg, entry, data, proxy, mt
-        lua_pushvalue(L, -3);
-        lua_setfield(L, -2, "__index");
-        lua_pushstring(L, group);
-        lua_pushcclosure(L, sample_ro_newindex, 1);
-        lua_setfield(L, -2, "__newindex");
-        lua_pushvalue(L, -3);
-        lua_pushcclosure(L, sample_ro_pairs, 1);
-        lua_setfield(L, -2, "__pairs");
-        lua_pushliteral(L, "read-only");
-        lua_setfield(L, -2, "__metatable");               // getmetatable() sees this
-        lua_setmetatable(L, -2);                          // reg, entry, data, proxy
+        push_ro_proxy(L, -1, group);                      // reg, entry, data, proxy
         lua_rawseti(L, -3, 1);                            // reg, entry, data
         lua_rawseti(L, -2, 2);                            // reg, entry
         lua_pushvalue(L, -1);
@@ -114,9 +130,180 @@ void push_group_data(lua_State* L, const char* group) {
     lua_pop(L, 1);                                        // data
 }
 
+// registry["budyk.detail"][path] = { [1] = proxy, [2] = data, [3] = items }
+// for the collections (cpu.cores, disk.devices, ...); items[key] =
+// { [1] = proxy, [2] = data } for every item seen and still present.
+constexpr const char* kDetailRegKey = "budyk.detail";
+
+// Leave on the stack `items, data` of collection `path`, the data emptied
+// for this tick, creating them and the collection's read-only proxy on
+// first use; the group data table at `group_idx` gets [key] = proxy.
+void push_collection(lua_State* L, int group_idx, const char* path, const char* key) {
+    group_idx = lua_absindex(L, group_idx);
+    if (lua_getfield(L, LUA_REGISTRYINDEX, kDetailRegKey) != LUA_TTABLE) {
+        lua_pop(L, 1);
+        lua_newtable(L);
+        lua_pushvalue(L, -1);
+        lua_setfield(L, LUA_REGISTRYINDEX, kDetailRegKey);
+    }                                                     // reg
+    if (lua_getfield(L, -1, path) != LUA_TTABLE) {        // reg, nil
+        lua_pop(L, 1);
+        lua_createtable(L, 3, 0);                         // reg, entry
+        lua_newtable(L);                                  // reg, entry, data
+        push_ro_proxy(L, -1, path);                       // reg, entry, data, proxy
+        lua_rawseti(L, -3, 1);                            // reg, entry, data
+        lua_rawseti(L, -2, 2);                            // reg, entry
+        lua_newtable(L);
+        lua_rawseti(L, -2, 3);                            // entry[3] = items
+        lua_pushvalue(L, -1);
+        lua_setfield(L, -3, path);                        // reg, entry
+    }
+    lua_rawgeti(L, -1, 1);                                // reg, entry, proxy
+    clear_raw_keys(L, -1);
+    lua_setfield(L, group_idx, key);                      // reg, entry
+    lua_rawgeti(L, -1, 3);                                // reg, entry, items
+    lua_rawgeti(L, -2, 2);                                // reg, entry, items, data
+    clear_raw_keys(L, -1);
+    lua_replace(L, -3);                                   // reg, data, items
+    lua_replace(L, -3);                                   // items, data
+}
+
+// With the item's key on top of the stack: pop it, set data[key] to the
+// item's read-only proxy and leave the item's data table on the stack,
+// both created on the item's first appearance.
+void push_item(lua_State* L, int items_idx, int data_idx, const char* path) {
+    lua_pushvalue(L, -1);                                 // key, key
+    if (lua_rawget(L, items_idx) != LUA_TTABLE) {         // key, nil
+        lua_pop(L, 1);                                    // key
+        lua_createtable(L, 2, 0);                         // key, entry
+        lua_newtable(L);                                  // key, entry, idata
+        if (lua_type(L, -3) == LUA_TNUMBER) {
+            lua_pushfstring(L, "%s[%d]", path, static_cast<int>(lua_tointeger(L, -3)));
+        } else {
+            lua_pushfstring(L, "%s[\"%s\"]", path, lua_tostring(L, -3));
+        }                                                 // key, entry, idata, name
+        push_ro_proxy(L, -2, lua_tostring(L, -1));        // key, entry, idata, name, iproxy
+        lua_remove(L, -2);                                // key, entry, idata, iproxy
+        lua_rawseti(L, -3, 1);                            // key, entry, idata
+        lua_rawseti(L, -2, 2);                            // key, entry
+        lua_pushvalue(L, -2);
+        lua_pushvalue(L, -2);
+        lua_rawset(L, items_idx);                         // items[key] = entry
+    }                                                     // key, entry
+    lua_rawgeti(L, -1, 1);                                // key, entry, iproxy
+    clear_raw_keys(L, -1);
+    lua_pushvalue(L, -3);                                 // key, entry, iproxy, key
+    lua_insert(L, -2);                                    // key, entry, key, iproxy
+    lua_rawset(L, data_idx);                              // key, entry
+    lua_rawgeti(L, -1, 2);                                // key, entry, idata
+    lua_replace(L, -3);                                   // idata, entry
+    lua_pop(L, 1);                                        // idata
+}
+
+// Forget the items that are no longer in the collection (a disk that
+// went away, a veth that came and went), so the cache does not grow.
+void drop_stale_items(lua_State* L, int items_idx, int data_idx) {
+    lua_pushnil(L);
+    while (lua_next(L, items_idx) != 0) {                 // key, entry
+        lua_pop(L, 1);                                    // key
+        lua_pushvalue(L, -1);
+        if (lua_rawget(L, data_idx) == LUA_TNIL) {        // key, nil
+            lua_pop(L, 1);
+            lua_pushvalue(L, -1);
+            lua_pushnil(L);
+            lua_rawset(L, items_idx);                     // clearing during traversal is allowed
+        } else {
+            lua_pop(L, 1);
+        }
+    }
+}
+
+void bind_cores(lua_State* L, int cpu_idx, const budyk_detail_c* d) {
+    push_collection(L, cpu_idx, "cpu.cores", "cores");
+    const int items = lua_absindex(L, -2), data = lua_absindex(L, -1);
+    for (uint32_t i = 0; d != nullptr && i < d->ncores; ++i) {
+        const budyk_core_c& c = d->cores[i];
+        lua_pushinteger(L, static_cast<lua_Integer>(i) + 1);
+        push_item(L, items, data, "cpu.cores");
+        set_number(L, "total_percent",  c.total_percent);
+        set_number(L, "user_percent",   c.user_percent);
+        set_number(L, "system_percent", c.system_percent);
+        set_number(L, "iowait_percent", c.iowait_percent);
+        set_number(L, "irq_percent",    c.irq_percent);
+        set_number(L, "steal_percent",  c.steal_percent);
+        set_number(L, "idle_percent",   c.idle_percent);
+        lua_pop(L, 1);
+    }
+    drop_stale_items(L, items, data);
+    lua_pop(L, 2);
+}
+
+void bind_disks(lua_State* L, int disk_idx, const budyk_detail_c* d) {
+    push_collection(L, disk_idx, "disk.devices", "devices");
+    const int items = lua_absindex(L, -2), data = lua_absindex(L, -1);
+    for (uint32_t i = 0; d != nullptr && i < d->ndisks; ++i) {
+        const budyk_disk_dev_c& x = d->disks[i];
+        lua_pushstring(L, x.name);
+        push_item(L, items, data, "disk.devices");
+        set_integer(L, "read_bytes_per_sec",  static_cast<lua_Integer>(x.read_bytes_per_sec));
+        set_integer(L, "write_bytes_per_sec", static_cast<lua_Integer>(x.write_bytes_per_sec));
+        set_number (L, "reads_per_sec",       x.reads_per_sec);
+        set_number (L, "writes_per_sec",      x.writes_per_sec);
+        set_number (L, "busy_percent",        x.busy_percent);
+        lua_pop(L, 1);
+    }
+    drop_stale_items(L, items, data);
+    lua_pop(L, 2);
+}
+
+void bind_interfaces(lua_State* L, int net_idx, const budyk_detail_c* d) {
+    push_collection(L, net_idx, "net.interfaces", "interfaces");
+    const int items = lua_absindex(L, -2), data = lua_absindex(L, -1);
+    for (uint32_t i = 0; d != nullptr && i < d->nifaces; ++i) {
+        const budyk_iface_c& x = d->ifaces[i];
+        lua_pushstring(L, x.name);
+        push_item(L, items, data, "net.interfaces");
+        set_integer(L, "rx_bytes_per_sec",   static_cast<lua_Integer>(x.rx_bytes_per_sec));
+        set_integer(L, "tx_bytes_per_sec",   static_cast<lua_Integer>(x.tx_bytes_per_sec));
+        set_number (L, "rx_packets_per_sec", x.rx_packets_per_sec);
+        set_number (L, "tx_packets_per_sec", x.tx_packets_per_sec);
+        set_number (L, "rx_errors_per_sec",  x.rx_errors_per_sec);
+        set_number (L, "tx_errors_per_sec",  x.tx_errors_per_sec);
+        set_number (L, "rx_drops_per_sec",   x.rx_drops_per_sec);
+        set_boolean(L, "up",                 x.up != 0);
+        lua_pop(L, 1);
+    }
+    drop_stale_items(L, items, data);
+    lua_pop(L, 2);
+}
+
+void bind_mounts(lua_State* L, int fs_idx, const budyk_detail_c* d) {
+    push_collection(L, fs_idx, "fs.mounts", "mounts");
+    const int items = lua_absindex(L, -2), data = lua_absindex(L, -1);
+    for (uint32_t i = 0; d != nullptr && i < d->nmounts; ++i) {
+        const budyk_mount_c& x = d->mounts[i];
+        lua_pushstring(L, x.mount);
+        push_item(L, items, data, "fs.mounts");
+        lua_pushstring(L, x.type);
+        lua_setfield(L, -2, "type");
+        lua_pushstring(L, x.device);
+        lua_setfield(L, -2, "device");
+        set_integer(L, "total_bytes",         static_cast<lua_Integer>(x.total_bytes));
+        set_integer(L, "used_bytes",          static_cast<lua_Integer>(x.used_bytes));
+        set_integer(L, "avail_bytes",         static_cast<lua_Integer>(x.avail_bytes));
+        set_number (L, "used_percent",        x.used_percent);
+        set_integer(L, "inodes_total",        static_cast<lua_Integer>(x.inodes_total));
+        set_integer(L, "inodes_used",         static_cast<lua_Integer>(x.inodes_used));
+        set_number (L, "inodes_used_percent", x.inodes_used_percent);
+        lua_pop(L, 1);
+    }
+    drop_stale_items(L, items, data);
+    lua_pop(L, 2);
+}
+
 } // namespace
 
-void budyk_lua_bind_sample(lua_State* L, const budyk::Sample& s) {
+void budyk_lua_bind_sample(lua_State* L, const budyk::Sample& s, const budyk_detail_c* d) {
     // cpu
     push_group_data(L, "cpu");
     set_number (L, "total_percent",  s.cpu.total_percent);
@@ -127,6 +314,7 @@ void budyk_lua_bind_sample(lua_State* L, const budyk::Sample& s) {
     set_number (L, "irq_percent",    s.cpu.irq_percent);
     set_number (L, "steal_percent",  s.cpu.steal_percent);
     set_number (L, "idle_percent",   s.cpu.idle_percent);
+    bind_cores(L, -1, d);
     lua_pop(L, 1);
 
     // mem
@@ -156,6 +344,7 @@ void budyk_lua_bind_sample(lua_State* L, const budyk::Sample& s) {
     set_integer(L, "read_bytes_per_sec",  static_cast<lua_Integer>(s.disk.read_bytes_per_sec));
     set_integer(L, "write_bytes_per_sec", static_cast<lua_Integer>(s.disk.write_bytes_per_sec));
     set_integer(L, "device_count",        static_cast<lua_Integer>(s.disk.device_count));
+    bind_disks(L, -1, d);
     lua_pop(L, 1);
 
     // net — aggregate throughput across non-loopback interfaces.
@@ -163,6 +352,7 @@ void budyk_lua_bind_sample(lua_State* L, const budyk::Sample& s) {
     set_integer(L, "rx_bytes_per_sec",   static_cast<lua_Integer>(s.net.rx_bytes_per_sec));
     set_integer(L, "tx_bytes_per_sec",   static_cast<lua_Integer>(s.net.tx_bytes_per_sec));
     set_integer(L, "interface_count",    static_cast<lua_Integer>(s.net.interface_count));
+    bind_interfaces(L, -1, d);
     lua_pop(L, 1);
 
     // proc — processes by state, and threads.
@@ -224,6 +414,7 @@ void budyk_lua_bind_sample(lua_State* L, const budyk::Sample& s) {
     set_number (L, "max_used_percent",        s.fs.max_used_percent);
     set_number (L, "max_inodes_used_percent", s.fs.max_inodes_used_percent);
     set_boolean(L, "present",                 s.fs.present);
+    bind_mounts(L, -1, d);
     lua_pop(L, 1);
 
     // clock — the kernel's NTP discipline.

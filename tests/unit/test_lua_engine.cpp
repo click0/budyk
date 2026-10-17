@@ -4,6 +4,7 @@
 #include "rules/alert.h"
 
 #include <cassert>
+#include <memory>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -913,7 +914,7 @@ int main() {
             "watch('pairs', { when = function()\n"
             "  local n = 0\n"
             "  for k, v in pairs(cpu) do n = n + 1 end\n"
-            "  return n == 8\n"
+            "  return n == 9\n"           // 8 numbers and cpu.cores
             "end })\n"
             "watch('meta', { when = function()\n"
             "  local ok = pcall(setmetatable, cpu, nil)\n"
@@ -990,6 +991,76 @@ int main() {
         x.fs.max_used_percent = 50.0;
         x.clock.synced        = true;
         assert(e.eval_tick(x) == 4);
+        e.shutdown();
+    }
+
+    // N+1. The per-entity detail reaches rules as read-only collections:
+    //      cpu.cores (an array: # and ipairs work), disk.devices,
+    //      net.interfaces and fs.mounts (by name). A device that is gone
+    //      is gone from its table; without detail they are empty. Item
+    //      tables are reused, and dropped with the item, so names that
+    //      come and go (veths) do not grow the state.
+    {
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        assert(e.load_string(
+            "watch('cores', { when = function()\n"
+            "  local n = 0\n"
+            "  for i, c in ipairs(cpu.cores) do n = n + 1 end\n"
+            "  return #cpu.cores == 2 and n == 2 and cpu.cores[2].iowait_percent == 30\n"
+            "end })\n"
+            "watch('disk', { when = function()\n"
+            "  return disk.devices.sda ~= nil and disk.devices.sda.busy_percent > 50\n"
+            "end })\n"
+            "watch('nic', { when = function()\n"
+            "  return net.interfaces.eth0 ~= nil and net.interfaces.eth0.up\n"
+            "end })\n"
+            "watch('full', { when = function()\n"
+            "  for mnt, m in pairs(fs.mounts) do\n"
+            "    if m.used_percent > 90 and m.type == 'ext4' then return true end\n"
+            "  end\n"
+            "  return false\n"
+            "end })\n"
+            "watch('ro_item', { when = function() cpu.cores[1].user_percent = 0 return true end })\n"
+            "watch('ro_coll', { when = function() fs.mounts['/x'] = 1 return true end })\n") == 0);
+
+        std::unique_ptr<budyk_detail_c> d(new budyk_detail_c());
+        d->ncores = 2;
+        d->cores[1].iowait_percent = 30.0;
+        d->ndisks = 1;
+        std::snprintf(d->disks[0].name, sizeof(d->disks[0].name), "sda");
+        d->disks[0].busy_percent = 75.0;
+        d->nifaces = 1;
+        std::snprintf(d->ifaces[0].name, sizeof(d->ifaces[0].name), "eth0");
+        d->ifaces[0].up = 1;
+        d->nmounts = 2;
+        std::snprintf(d->mounts[0].mount, sizeof(d->mounts[0].mount), "/");
+        std::snprintf(d->mounts[0].type,  sizeof(d->mounts[0].type),  "ext4");
+        d->mounts[0].used_percent = 95.0;
+        std::snprintf(d->mounts[1].mount, sizeof(d->mounts[1].mount), "/var");
+        std::snprintf(d->mounts[1].type,  sizeof(d->mounts[1].type),  "xfs");
+        const Sample x = mk(10.0, 50.0, 0.1, 0.0);
+        assert(e.eval_tick(x, d.get()) == 4);
+        assert(e.rules()[4].last_error.find("cpu.cores[1].user_percent is read-only") != std::string::npos);
+        assert(e.rules()[5].last_error.find("fs.mounts./x is read-only") != std::string::npos);
+
+        // sda went away, sdb came; the mount filled less.
+        std::snprintf(d->disks[0].name, sizeof(d->disks[0].name), "sdb");
+        d->mounts[0].used_percent = 50.0;
+        assert(e.eval_tick(x, d.get()) == 2);   // cores, nic
+        assert(e.eval_tick(x, nullptr) == 0);   // no detail: empty collections
+
+        // Interface names that change every tick: the state does not grow.
+        for (int i = 0; i < 200; ++i) {
+            std::snprintf(d->ifaces[0].name, sizeof(d->ifaces[0].name), "veth%d", i);
+            e.eval_tick(x, d.get());
+        }
+        const size_t after_200 = e.memory_used();
+        for (int i = 200; i < 2200; ++i) {
+            std::snprintf(d->ifaces[0].name, sizeof(d->ifaces[0].name), "veth%d", i);
+            e.eval_tick(x, d.get());
+        }
+        assert(e.memory_used() < after_200 + 64 * 1024);
         e.shutdown();
     }
 

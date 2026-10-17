@@ -26,6 +26,7 @@ if(BUDYK_PLATFORM STREQUAL "freebsd")
         collector/freebsd/system.c
         collector/freebsd/netstat.c
         collector/freebsd/fs.c
+        collector/detail.c
     )
     # libkvm + libdevstat both in base. kvm for swap accounting,
     # devstat for aggregate disk I/O in collector/freebsd/disk.c.
@@ -46,6 +47,7 @@ elseif(BUDYK_PLATFORM STREQUAL "linux")
         collector/linux/netstat.c
         collector/linux/fs.c
         collector/linux/proc_root.c
+        collector/detail.c
     )
 else()
     message(FATAL_ERROR "No collector for platform: ${BUDYK_PLATFORM}")

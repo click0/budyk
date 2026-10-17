@@ -14,6 +14,12 @@ dependencies at runtime, no database. BSD-3-Clause license.
   plus custom levels (name, interval, priority, Lua `when` condition, hold)
 - **Rule engine:** embedded Lua 5.4, sandboxed `watch()` API, per-call
   instruction and memory limits
+- **Metrics:** fixed totals in `Sample` (persisted); per-entity detail
+  (`budyk_detail_c`: each core, disk, interface, filesystem) collected by
+  the same C collectors through their `_ex` variants, served live (the
+  `"detail"` block of a WebSocket frame and of `/api/samples`, the rules'
+  `cpu.cores` / `disk.devices` / `net.interfaces` / `fs.mounts`), never
+  stored.
 - **Storage:** one ring file per level (mmap'd header, `pwrite` records,
   CRC32C, level markers). While L3 or a custom level collects,
   `TierManager::store()` also folds its samples (`TierAggregator`) into one
@@ -214,10 +220,9 @@ on every target; a new implicit sign or width change is a build error in CI
 
 ## Known gaps against the spec (`docs/budyk-spec-en.md`)
 
-- The metric set lacks the per-entity part of §2.1: no per-core CPU,
-  per-device disk, per-interface network, per-filesystem list or process
-  list. The totals are there: CPU breakdown, processes by state, TCP / UDP,
-  the fullest filesystem, clock sync.
+- No process list (top processes by CPU / RSS). The per-entity detail
+  (cores, disks, interfaces, filesystems) is live only: not in the rings,
+  so not in the history.
 - Every collector runs at every level; no per-level metric sets, no
   `collection.mode`.
 - Rule semantics that differ from §3.6: `cooldown` defaults to 0; a `nil`

@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: BSD-3-Clause */
-/* collector/linux/proc_root.c — where the CPU, netstat, process and
- * filesystem collectors find /proc. Tests point it at a fixture tree. */
+/* collector/linux/proc_root.c — where the CPU, disk, network,
+ * netstat, process and filesystem collectors find /proc. Tests point it at a fixture tree. */
 
 #include "core/sample_c.h"
 

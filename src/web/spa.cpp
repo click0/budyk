@@ -40,6 +40,16 @@ h1 .host { color: var(--muted); margin-left: .6rem; font-weight: 400; }
 .err { color: var(--crit); font-size: .85rem; }
 .hidden { display: none !important; }
 .status { color: var(--muted); margin-top: 1rem; font-size: .85rem; }
+.detail { max-width: 64rem; margin-top: 1.6rem; }
+.detail h2 { font-size: .95rem; font-weight: 600; margin: 1rem 0 .5rem 0; }
+.cores { display:grid; grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr)); gap:.35rem 1.2rem; }
+.cores .core { display:grid; grid-template-columns: 1.6rem 1fr 2.6rem; gap:.3rem; align-items:center; font-size:.8rem; }
+.detail table { width:100%; border-collapse: collapse; font-size:.85rem; font-variant-numeric: tabular-nums; }
+.detail th { color: var(--muted); font-weight: 400; text-align: right; padding:.2rem .5rem; }
+.detail td { text-align: right; padding:.2rem .5rem; border-top: 1px solid var(--bar); }
+.detail th:first-child, .detail td:first-child { text-align: left; }
+.detail td .bar { width: 8rem; display:inline-block; vertical-align: middle; }
+.down { color: var(--crit); }
 .hist { max-width: 64rem; margin-top: 1.6rem; }
 .hist h2 { font-size: .95rem; font-weight: 600; margin: 0 0 .6rem 0; }
 .hist .ctl { display:flex; flex-wrap:wrap; gap:.35rem; align-items:center; margin-bottom:.6rem; }
@@ -87,6 +97,20 @@ h1 .host { color: var(--muted); margin-left: .6rem; font-weight: 400; }
     <div class="row"><span class="label">Uptime</span>   <span class="muted" id="uptime">--</span>      <span class="value">&nbsp;</span></div>
   </div>
   <div class="status" id="status">connecting&hellip;</div>
+
+  <div class="detail hidden" id="detail">
+    <h2>Cores</h2>
+    <div class="cores" id="cores"></div>
+    <h2>Disks</h2>
+    <table><thead><tr><th>device</th><th>read</th><th>write</th><th>ops/s</th><th>busy</th></tr></thead>
+      <tbody id="disks"></tbody></table>
+    <h2>Interfaces</h2>
+    <table><thead><tr><th>interface</th><th>rx</th><th>tx</th><th>packets/s</th><th>errors/s</th><th>drops/s</th></tr></thead>
+      <tbody id="ifaces"></tbody></table>
+    <h2>Filesystems</h2>
+    <table><thead><tr><th>mount</th><th>type</th><th>used</th><th>size</th><th></th><th>inodes</th></tr></thead>
+      <tbody id="mounts"></tbody></table>
+  </div>
 
   <div class="hist">
     <h2>History</h2>
@@ -454,6 +478,80 @@ async function doLogin() {
   }
 }
 
+// Per-entity detail of the newest sample (doc.detail in a WebSocket
+// frame or /api/samples). Names come from the host (a mount point can
+// hold anything), so they go in as text, never as markup.
+function cell(tr, text, cls) {
+  const td = document.createElement("td");
+  if (text instanceof Node) td.appendChild(text); else td.textContent = text;
+  if (cls) td.className = cls;
+  tr.appendChild(td);
+}
+function miniBar(pct, warnAt, critAt) {
+  const bar = document.createElement("div");
+  bar.className = "bar";
+  const i = document.createElement("i");
+  bar.appendChild(i);
+  pct = Math.max(0, Math.min(100, pct ?? 0));
+  i.style.width = pct.toFixed(1) + "%";
+  bar.classList.toggle("warn", pct >= warnAt && pct < critAt);
+  bar.classList.toggle("crit", pct >= critAt);
+  return bar;
+}
+function fillRows(tbodyId, items, row) {
+  const tb = $(tbodyId);
+  tb.replaceChildren();
+  for (const it of items || []) {
+    const tr = document.createElement("tr");
+    row(tr, it);
+    tb.appendChild(tr);
+  }
+}
+function renderDetail(d) {
+  if (!d) return;
+  $("detail").classList.remove("hidden");
+  const cores = $("cores");
+  cores.replaceChildren();
+  (d.cores || []).forEach((c, i) => {
+    const div = document.createElement("div");
+    div.className = "core";
+    const n = document.createElement("span");
+    n.className = "muted";
+    n.textContent = String(i);
+    const v = document.createElement("span");
+    v.className = "right";
+    v.textContent = (c.total_percent ?? 0).toFixed(0) + "%";
+    div.append(n, miniBar(c.total_percent, 70, 90), v);
+    div.title = `user ${(c.user_percent ?? 0).toFixed(1)}%  sys ${(c.system_percent ?? 0).toFixed(1)}%  ` +
+                `iowait ${(c.iowait_percent ?? 0).toFixed(1)}%  irq ${(c.irq_percent ?? 0).toFixed(1)}%`;
+    cores.appendChild(div);
+  });
+  const rate = v => fmtBytes(v ?? 0) + "/s";
+  fillRows("disks", d.disks, (tr, x) => {
+    cell(tr, x.name);
+    cell(tr, rate(x.read_bytes_per_sec));
+    cell(tr, rate(x.write_bytes_per_sec));
+    cell(tr, ((x.reads_per_sec ?? 0) + (x.writes_per_sec ?? 0)).toFixed(1));
+    cell(tr, (x.busy_percent ?? 0).toFixed(0) + "%");
+  });
+  fillRows("ifaces", d.interfaces, (tr, x) => {
+    cell(tr, x.name + (x.up ? "" : " (down)"), x.up ? "" : "down");
+    cell(tr, rate(x.rx_bytes_per_sec));
+    cell(tr, rate(x.tx_bytes_per_sec));
+    cell(tr, ((x.rx_packets_per_sec ?? 0) + (x.tx_packets_per_sec ?? 0)).toFixed(1));
+    cell(tr, ((x.rx_errors_per_sec ?? 0) + (x.tx_errors_per_sec ?? 0)).toFixed(1));
+    cell(tr, (x.rx_drops_per_sec ?? 0).toFixed(1));
+  });
+  fillRows("mounts", d.filesystems, (tr, x) => {
+    cell(tr, x.mount);
+    cell(tr, x.type, "muted");
+    cell(tr, (x.used_percent ?? 0).toFixed(1) + "%");
+    cell(tr, fmtBytes(x.total_bytes ?? 0));
+    cell(tr, miniBar(x.used_percent, 80, 90));
+    cell(tr, (x.inodes_used_percent ?? 0).toFixed(1) + "%");
+  });
+}
+
 let ws = null;
 function openWs() {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
@@ -465,6 +563,7 @@ function openWs() {
       const doc = JSON.parse(e.data);
       const arr = doc.samples || [];
       if (arr.length) render(arr[arr.length - 1]);
+      renderDetail(doc.detail);
     } catch (_) { /* ignore parse errors */ }
   };
   ws.onclose   = () => { setStatus("disconnected, retrying in 2s…"); setTimeout(openWs, 2000); };
@@ -506,6 +605,7 @@ async function start() {
     // render() will push the latest sample's value again, so trim one.
     if (fileWatchHist.length > 0) fileWatchHist.pop();
     if (arr.length) render(arr[arr.length - 1]);
+    renderDetail(doc.detail);
   } catch (_) {}
   openWs();
 }

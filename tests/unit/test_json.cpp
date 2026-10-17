@@ -3,6 +3,7 @@
 #include "web/json.h"
 
 #include <cassert>
+#include <memory>
 #include <cmath>
 #include <cstdio>
 #include <string>
@@ -217,6 +218,44 @@ int main() {
         s.folded = true;
         const std::string j = sample_to_json(s);
         assert(j.find("\"level\":1,\"folded\":true,\"cpu\":{") != std::string::npos);
+    }
+
+    // 8. detail_to_json: cores, disks, interfaces, filesystems, names
+    //    escaped; samples_to_json adds it as "detail" only when given and
+    //    not empty.
+    {
+        std::unique_ptr<budyk_detail_c> d(new budyk_detail_c());
+        d->ncores = 1;
+        d->cores[0].user_percent = 12.5;
+        d->ndisks = 1;
+        std::snprintf(d->disks[0].name, sizeof(d->disks[0].name), "sda");
+        d->disks[0].busy_percent = 40.0;
+        d->nifaces = 1;
+        std::snprintf(d->ifaces[0].name, sizeof(d->ifaces[0].name), "eth0");
+        d->ifaces[0].up = 1;
+        d->nmounts = 1;
+        std::snprintf(d->mounts[0].mount, sizeof(d->mounts[0].mount), "/mnt/a \"b\"");
+        std::snprintf(d->mounts[0].type,  sizeof(d->mounts[0].type),  "ext4");
+        d->mounts[0].total_bytes = 1000;
+        const std::string j = detail_to_json(*d);
+        assert(j.front() == '{' && j.back() == '}');
+        assert(contains(j, "\"cores\":[{\"total_percent\":0,\"user_percent\":12.5,"));
+        assert(contains(j, "\"disks\":[{\"name\":\"sda\","));
+        assert(contains(j, "\"busy_percent\":40}"));
+        assert(contains(j, "\"interfaces\":[{\"name\":\"eth0\",") && contains(j, "\"up\":true}"));
+        assert(contains(j, "\"mount\":\"/mnt/a \\\"b\\\"\",\"type\":\"ext4\","));
+        assert(contains(j, "\"total_bytes\":1000,"));
+
+        d->ncores = d->ndisks = d->nifaces = d->nmounts = 0;
+        assert(detail_to_json(*d) == "{\"cores\":[],\"disks\":[],\"interfaces\":[],\"filesystems\":[]}");
+
+        Sample x{};
+        x.level = Level::L3;
+        const std::string with = samples_to_json(&x, 1, &j);
+        assert(contains(with, "}],\"detail\":{\"cores\":[") && with.back() == '\n');
+        const std::string empty;
+        assert(!contains(samples_to_json(&x, 1, &empty), "detail"));
+        assert(!contains(samples_to_json(&x, 1), "detail"));
     }
 
     std::printf("test_json: PASS\n");

@@ -96,7 +96,8 @@ single dashboard that combines servers isn't part of budyk yet.
 - **Metrics:** CPU (with user / system / iowait / irq / steal),
   memory, swap, load average, disk I/O, network, processes by state,
   TCP and UDP, filesystem usage (space and inodes), clock sync,
-  entropy, temperature, uptime, and budyk's own CPU/RSS.
+  entropy, temperature, uptime, and budyk's own CPU/RSS; live, each
+  core, disk, interface and filesystem.
 - **Ring-file storage:** one size-capped file per level, so 1 Hz detail
   from busy or watched periods sits next to sparse 5-minute heartbeats.
   No database.
@@ -337,6 +338,28 @@ Metrics are refreshed every tick as globals:
 | `self_` | `rss_bytes`, `peak_rss_bytes`, `cpu_user_seconds`, `cpu_system_seconds` |
 | `uptime_seconds` | number |
 | `files` | `files["/path"].modifies`, `.deletes`, `.tampered` (with `security.file_watch` on) |
+
+Inside some of them, the newest sample's per-entity detail as read-only
+collections: `cpu.cores` (an array: `#cpu.cores`, `cpu.cores[1].iowait_percent`),
+`disk.devices["sda"]` (`read_bytes_per_sec`, `write_bytes_per_sec`,
+`reads_per_sec`, `writes_per_sec`, `busy_percent`),
+`net.interfaces["eth0"]` (`rx/tx_bytes_per_sec`, `rx/tx_packets_per_sec`,
+`rx/tx_errors_per_sec`, `rx_drops_per_sec`, `up`) and `fs.mounts["/var"]`
+(`type`, `device`, `total_bytes`, `used_bytes`, `avail_bytes`,
+`used_percent`, `inodes_total`, `inodes_used`, `inodes_used_percent`).
+A device that is gone is `nil`; iterate with `ipairs` / `pairs`:
+
+```lua
+watch("partition_full", {
+    when = function()
+        for mount, m in pairs(fs.mounts) do
+            if m.used_percent > 95 then return true end
+        end
+        return false
+    end,
+    severity = "critical",
+})
+```
 
 Rules run in a sandbox that has only the base library, `math`, `string`
 and `table`. `io`, `os`, `require`, `load`, `loadfile` and `dofile` are
