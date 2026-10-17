@@ -368,6 +368,23 @@ budyk suggest-rules --config config.yaml --window 7d --output suggested.lua
 This reads the collected history and writes `watch()` rules with
 thresholds derived from it. Review them before use.
 
+### Checking the ring files
+
+```sh
+budyk fsck --config config.yaml        # or: budyk fsck /var/db/budyk
+budyk fsck --repair /var/db/budyk      # with the daemon stopped
+```
+
+`fsck` reads every ring file in the data directory and reports per ring
+the records, their time span and any problem: damaged records (skipped
+on read; nothing to repair), records of the wrong level, a clock that
+stepped back. The one thing it repairs is a record written but not yet
+counted, which a crash between the write and the index update leaves
+behind; `budyk serve` also does that on start. Exit status: 0 clean,
+1 repaired, 4 problems left, 8 the check could not run. A check can
+run next to the daemon; `--repair` needs it stopped, and so does a
+second daemon: `budyk serve` locks `budyk.lock` in the data directory.
+
 ## Alerts
 
 Configure channels under `alerts.channels`. `alert()` sends to every

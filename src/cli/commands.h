@@ -9,6 +9,7 @@ int cmd_hash_password();                         // budyk hash-password
 int cmd_suggest_rules(int argc, char* argv[]);   // budyk suggest-rules [...]
 int cmd_watch_files(int argc, char* argv[]);     // budyk watch-files [...]
 int cmd_tui(int argc, char* argv[]);             // budyk tui [--host H] [--port P]
+int cmd_fsck(int argc, char* argv[]);            // budyk fsck [--repair] [...] (cli/fsck.cpp)
 
 // Read a line from stdin without echoing it (a plain getline when stdin
 // is not a tty). Shared by hash-password and the TUI's login prompt.

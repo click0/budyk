@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: BSD-3-Clause
+#include "util/dir_lock.h"
 #include "util/tmpfile.h"
 #include "util/yaml_dom.h"
 
 #include <cassert>
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -89,6 +91,38 @@ int main() {
 
         yaml_document_delete(&doc);
         yaml_parser_delete(&parser);
+    }
+
+    // N. lock_data_dir / data_dir_locked: the first lock wins and writes
+    //    the pid into budyk.lock (0600); a second one (another open file
+    //    description, as another process would have) gets -EWOULDBLOCK
+    //    and that pid; closing the descriptor releases it. Without a lock
+    //    file, nothing is locked. A missing directory is -ENOENT.
+    {
+        char tmpl[] = "/tmp/budyk_lock_XXXXXX";
+        const char* dir = ::mkdtemp(tmpl);
+        assert(dir != nullptr);
+        std::string holder = "untouched";
+        assert(!data_dir_locked(dir, &holder) && holder == "untouched");
+
+        const int fd = lock_data_dir(dir, &holder);
+        assert(fd >= 0);
+        const std::string me = std::to_string(static_cast<long>(::getpid()));
+        assert(lock_data_dir(dir, &holder) == -EWOULDBLOCK && holder == me);
+        holder.clear();
+        assert(data_dir_locked(dir, &holder) && holder == me);
+        const std::string lock = std::string(dir) + "/budyk.lock";
+        struct stat st{};
+        assert(::stat(lock.c_str(), &st) == 0 && (st.st_mode & 0777) == 0600);
+
+        ::close(fd);
+        assert(!data_dir_locked(dir, &holder));
+        const int again = lock_data_dir(dir, &holder);
+        assert(again >= 0);
+        ::close(again);
+        ::unlink(lock.c_str());
+        ::rmdir(dir);
+        assert(lock_data_dir("/nonexistent/dir", &holder) == -ENOENT);
     }
 
     std::printf("test_util: PASS\n");

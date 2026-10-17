@@ -20,6 +20,19 @@ Generate an Argon2id password hash for web authentication.
 .B suggest\-rules
 Generate monitoring rule suggestions from collected history.
 .TP
+\fBfsck\fR [\fB\-\-repair\fR] [\fB\-\-config\fR \fIfile\fR] [\fIdata_dir\fR]
+Check every ring file in the data directory (the one in the config if
+none is given): the header, then each record (CRC, level, time order).
+Damaged records are reported (readers skip them; they cannot be
+repaired), and so are records of another level and a clock that stepped
+back.
+.B \-\-repair
+counts in the records written past the index and never counted, which
+a crash between a record's write and the index update leaves; it needs
+the daemon stopped. A check without it can run while the daemon does.
+Exit status: 0 clean, 1 problems found and repaired, 4 problems left,
+8 the check could not run (usage, config, data directory, lock held).
+.TP
 .B version
 Print version and exit.
 .SH DESCRIPTION
@@ -49,6 +62,11 @@ overwritten. The history API marks such records
 and, for the whole-history view, shows each stretch once, at the finest
 level still on disk.
 .PP
+A record that reached its slot before a crash but not the index is
+counted in when the daemon starts again (and by
+.BR "budyk fsck \-\-repair" ),
+so a crash of the daemon loses no stored record.
+.PP
 Monitoring rules are written in Lua and evaluated on each collection tick.
 .SH FILES
 .TP
@@ -60,6 +78,12 @@ Lua monitoring rules.
 .TP
 .I /var/db/budyk/
 Ring-buffer data directory.
+.TP
+.I /var/db/budyk/budyk.lock
+Held (flock) by the running daemon, with its pid inside, so a second
+daemon on the same directory, and
+.BR "budyk fsck \-\-repair" ,
+refuse to start. The kernel releases it however the daemon exits.
 .SH SIGNALS
 .TP
 .B SIGTERM, SIGINT

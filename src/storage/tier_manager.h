@@ -48,6 +48,15 @@ public:
     // changed? move the file aside or restore the old size)".
     const std::string& last_error() const;
 
+    // Records init() found written past a ring's write_idx and counted in
+    // (a crash between the record's pwrite and the index update; see
+    // count_unindexed()), per ring file, for the daemon's log.
+    struct Recovered {
+        std::string ring;      // "tier1.ring", "level-burst.ring"
+        uint64_t    records = 0;
+    };
+    const std::vector<Recovered>& recovered() const;
+
     // Fold windows for the coarse rings. With l2_ns set, every L3 or
     // custom-level sample is also folded into one L2 record per l2_ns in
     // tier2; with l1_ns set, every sample above L1 into one L1 record per
@@ -106,6 +115,8 @@ public:
 
 private:
     std::string last_error_;
+    std::vector<Recovered> recovered_;
+    void recover(const char* leaf, RingFile* ring);
     struct CustomRing {
         uint8_t                   level_id;
         std::unique_ptr<RingFile> ring;

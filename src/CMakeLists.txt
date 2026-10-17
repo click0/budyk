@@ -49,10 +49,12 @@ target_include_directories(budyk_collector PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 # Scheduler
 # Small shared helpers with I/O or a library behind them, which core/
-# (pure) must not carry: private temp files, libyaml DOM lookups.
+# (pure) must not carry: the data_dir lock, private temp files, libyaml
+# DOM lookups.
 find_library(YAML_LIB_UTIL yaml REQUIRED)
 find_path(YAML_INCLUDE_DIR_UTIL yaml.h REQUIRED)
 add_library(budyk_util STATIC
+    util/dir_lock.cpp
     util/tmpfile.cpp
     util/yaml_dom.cpp
 )
@@ -76,6 +78,7 @@ add_library(budyk_storage STATIC
     storage/ring_file.cpp
     storage/tier_manager.cpp
     storage/tier_aggregator.cpp
+    storage/ring_check.cpp
     storage/codec.cpp
 )
 target_link_libraries(budyk_storage PRIVATE budyk_core)
@@ -179,9 +182,11 @@ add_library(budyk_app STATIC
     daemon/router.cpp
     daemon/serve.cpp
     cli/commands.cpp
+    cli/fsck.cpp
 )
 target_link_libraries(budyk_app PUBLIC
     budyk_core
+    budyk_util
     budyk_collector
     budyk_scheduler
     budyk_hot_buffer

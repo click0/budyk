@@ -245,6 +245,66 @@ int main() {
         ::unlink(path);
     }
 
+    // 10. open_read_only: never creates a file; reads what open() wrote;
+    //     append() and advance_write_index() refuse; the checks of open()
+    //     apply. read_header(): the header without opening for writing,
+    //     and its codes for a short file, bad magic and a size mismatch.
+    //     advance_write_index() counts records in.
+    {
+        char path[256];
+        tmp_path(path, sizeof(path));
+        ::unlink(path);
+        RingFile ro;
+        assert(ro.open_read_only(path, 1, (uint32_t)rsize, 4) == -3);   // missing
+        assert(ro.last_errno() == ENOENT && ::access(path, F_OK) != 0);
+
+        RingFile rw;
+        assert(rw.open(path, 1, (uint32_t)rsize, 4) == 0);
+        assert(rw.tier() == 1);
+        uint8_t rec[512] = {0};
+        size_t len = 0;
+        assert(record_encode(make_sample(10, Level::L3, 1.0), rec, sizeof(rec), &len) == 0);
+        assert(rw.append(rec, len) == 0);
+
+        assert(ro.open_read_only(path, 2, (uint32_t)rsize, 4) == -10);   // wrong tier
+        assert(ro.open_read_only(path, 1, (uint32_t)rsize, 4) == 0);
+        assert(ro.write_index() == 1 && ro.tier() == 1);
+        uint8_t back[512] = {0};
+        assert(ro.read_at(0, back, rsize) == 0 && std::memcmp(back, rec, rsize) == 0);
+        assert(ro.append(rec, len) == -1);
+        assert(ro.advance_write_index(1) == -1);
+
+        RingFile::Header h;
+        int err = -1;
+        assert(RingFile::read_header(path, &h, &err) == 0 && err == 0);
+        assert(h.tier == 1 && h.record_size == rsize && h.capacity == 4 && h.write_idx == 1);
+
+        // A record written into the next slot, then counted in.
+        assert(rw.advance_write_index(2) == 0);
+        assert(rw.write_index() == 3 && ro.write_index() == 3);   // one header, mapped twice
+        rw.close();
+        ro.close();
+
+        FILE* f = std::fopen(path, "r+b");
+        assert(f != nullptr);
+        std::fputc('X', f);                                       // magic
+        std::fclose(f);
+        assert(RingFile::read_header(path, &h, &err) == -8);
+        assert(::truncate(path, 63) == 0);
+        assert(RingFile::read_header(path, &h, &err) == -13);
+        assert(std::string(RingFile::describe(-13)) == "file is shorter than a ring header");
+        ::unlink(path);
+
+        assert(rw.open(path, 1, (uint32_t)rsize, 4) == 0);
+        rw.close();
+        assert(::truncate(path, 64 + (off_t)rsize * 3) == 0);    // one slot short
+        assert(RingFile::read_header(path, &h, &err) == -6);
+        assert(::truncate(path, 64 + (off_t)rsize * 4 + 7) == 0); // 7 bytes over
+        assert(RingFile::read_header(path, &h, &err) == -6);
+        assert(RingFile::read_header("/nonexistent/x.ring", &h, &err) == -3 && err == ENOENT);
+        ::unlink(path);
+    }
+
     std::printf("test_ring_file: PASS (record=%zu bytes)\n", rsize);
     return 0;
 }

@@ -14,6 +14,7 @@
 #include "scheduler/scheduler.h"
 #include "security/file_watcher.h"
 #include "storage/tier_manager.h"
+#include "util/dir_lock.h"
 #include "web/json.h"
 #include "web/login_limiter.h"
 #include "web/server.h"
@@ -218,6 +219,25 @@ int cmd_serve(int argc, char* argv[], const char* version) {
         }
     }
 
+    // One daemon per data_dir (two would interleave records in the same
+    // rings). The descriptor stays open, and the lock held, until exit.
+    {
+        std::string holder;
+        const int lock_fd = budyk::lock_data_dir(cfg.data_dir, &holder);
+        if (lock_fd == -EWOULDBLOCK) {
+            std::fprintf(stderr,
+                "budyk serve: data_dir '%s' is in use by another budyk (pid %s, "
+                "see %s/budyk.lock)\n",
+                cfg.data_dir, holder.empty() ? "?" : holder.c_str(), cfg.data_dir);
+            return 1;
+        }
+        if (lock_fd < 0) {
+            std::fprintf(stderr, "budyk serve: cannot lock '%s/budyk.lock': %s\n",
+                         cfg.data_dir, std::strerror(-lock_fd));
+            return 1;
+        }
+    }
+
     budyk::TierManager tm;
     std::vector<budyk::LevelRingSpec> level_rings;
     level_rings.reserve(cfg.scheduler.custom_levels.size());
@@ -233,6 +253,12 @@ int cmd_serve(int argc, char* argv[], const char* version) {
             "budyk serve: TierManager.init('%s') failed: %s\n",
             cfg.data_dir, tm.last_error().c_str());
         return 1;
+    }
+    for (const auto& r : tm.recovered()) {
+        std::fprintf(stderr,
+            "budyk serve: %s: %llu record(s) written before a crash and not yet "
+            "indexed, now counted in\n",
+            r.ring.c_str(), static_cast<unsigned long long>(r.records));
     }
     for (const auto& lv : cfg.scheduler.custom_levels) {
         std::fprintf(stderr,

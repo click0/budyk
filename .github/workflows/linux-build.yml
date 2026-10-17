@@ -149,6 +149,12 @@ jobs:
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
         run: tests/smoke/escalate.sh build/src/budyk
 
+      - name: fsck, start-up recovery, the data_dir lock
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: tests/smoke/fsck.sh build/src/budyk
+
   # ThreadSanitizer: the collector tick, the HTTP thread and the Workers
   # share the hot buffer, the rings, the hub and the session store. Every
   # unit test plus the serve smoke test; any report fails the job.
@@ -264,6 +270,7 @@ jobs:
           tests/smoke/crash.sh build/src/budyk
           tests/smoke/warm_grace.sh build/src/budyk
           tests/smoke/escalate.sh build/src/budyk
+          tests/smoke/fsck.sh build/src/budyk
 
       - name: Coverage report (core/ and storage/ >= 85%)
         run: |

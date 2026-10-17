@@ -7,6 +7,7 @@
 //   budyk hash-password
 //   budyk suggest-rules [--config PATH] [--window 7d] [--output rules.lua] [--ai --api-key KEY]
 //   budyk watch-files [--timeout MS] <path> [<path>...]
+//   budyk fsck [--repair] [--config FILE] [DATA_DIR]
 //   budyk version
 //
 // This file only dispatches. The daemon is src/daemon/ (serve loop,
@@ -35,6 +36,7 @@ int main(int argc, char* argv[]) {
             "  budyk hash-password   Generate Argon2id password hash\n"
             "  budyk suggest-rules   Generate rule suggestions from history\n"
             "  budyk watch-files     Print file change events (diagnostic)\n"
+            "  budyk fsck            Check (--repair: fix) the ring files\n"
             "  budyk version         Show version\n"
         );
         return 1;
@@ -51,6 +53,7 @@ int main(int argc, char* argv[]) {
     if (std::strcmp(cmd, "hash-password") == 0) return budyk::cmd_hash_password();
     if (std::strcmp(cmd, "suggest-rules") == 0) return budyk::cmd_suggest_rules(argc, argv);
     if (std::strcmp(cmd, "watch-files") == 0)   return budyk::cmd_watch_files(argc, argv);
+    if (std::strcmp(cmd, "fsck") == 0)          return budyk::cmd_fsck(argc, argv);
 
     std::fprintf(stderr, "budyk: unknown command '%s'\n", cmd);
     return 1;
