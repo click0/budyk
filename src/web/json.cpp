@@ -50,7 +50,7 @@ void append_kv_int(std::string* out, const char* key, int64_t v) {
 
 std::string sample_to_json(const Sample& s) {
     std::string out;
-    out.reserve(512);
+    out.reserve(1024);
     out.push_back('{');
 
     append_kv_uint(&out, "ts",    s.timestamp_nanos);                 out.push_back(',');
@@ -60,8 +60,14 @@ std::string sample_to_json(const Sample& s) {
     if (s.folded) out.append("\"folded\":true,");
 
     out.append("\"cpu\":{");
-    append_kv_double(&out, "total_percent", s.cpu.total_percent);     out.push_back(',');
-    append_kv_uint  (&out, "count",         s.cpu.count);
+    append_kv_double(&out, "total_percent",  s.cpu.total_percent);    out.push_back(',');
+    append_kv_uint  (&out, "count",          s.cpu.count);            out.push_back(',');
+    append_kv_double(&out, "user_percent",   s.cpu.user_percent);     out.push_back(',');
+    append_kv_double(&out, "system_percent", s.cpu.system_percent);   out.push_back(',');
+    append_kv_double(&out, "iowait_percent", s.cpu.iowait_percent);   out.push_back(',');
+    append_kv_double(&out, "irq_percent",    s.cpu.irq_percent);      out.push_back(',');
+    append_kv_double(&out, "steal_percent",  s.cpu.steal_percent);    out.push_back(',');
+    append_kv_double(&out, "idle_percent",   s.cpu.idle_percent);
     out.append("},");
 
     out.append("\"mem\":{");
@@ -95,8 +101,13 @@ std::string sample_to_json(const Sample& s) {
     out.append("},");
 
     out.append("\"proc\":{");
-    append_kv_uint(&out, "total",   s.proc.total);   out.push_back(',');
-    append_kv_uint(&out, "running", s.proc.running);
+    append_kv_uint(&out, "total",    s.proc.total);    out.push_back(',');
+    append_kv_uint(&out, "running",  s.proc.running);  out.push_back(',');
+    append_kv_uint(&out, "sleeping", s.proc.sleeping); out.push_back(',');
+    append_kv_uint(&out, "blocked",  s.proc.blocked);  out.push_back(',');
+    append_kv_uint(&out, "stopped",  s.proc.stopped);  out.push_back(',');
+    append_kv_uint(&out, "zombie",   s.proc.zombie);   out.push_back(',');
+    append_kv_uint(&out, "threads",  s.proc.threads);
     out.append("},");
 
     out.append("\"entropy\":{");
@@ -129,6 +140,45 @@ std::string sample_to_json(const Sample& s) {
     out.append(s.file_watch.present ? "true" : "false");
     out.append("},");
 
+    out.append("\"tcp\":{");
+    append_kv_uint  (&out, "established",           s.tcp.established);           out.push_back(',');
+    append_kv_uint  (&out, "time_wait",             s.tcp.time_wait);             out.push_back(',');
+    append_kv_double(&out, "active_opens_per_sec",  s.tcp.active_opens_per_sec);  out.push_back(',');
+    append_kv_double(&out, "passive_opens_per_sec", s.tcp.passive_opens_per_sec); out.push_back(',');
+    append_kv_double(&out, "retransmits_per_sec",   s.tcp.retransmits_per_sec);   out.push_back(',');
+    append_kv_double(&out, "in_segments_per_sec",   s.tcp.in_segments_per_sec);   out.push_back(',');
+    append_kv_double(&out, "out_segments_per_sec",  s.tcp.out_segments_per_sec);  out.push_back(',');
+    append_kv_double(&out, "in_errors_per_sec",     s.tcp.in_errors_per_sec);     out.push_back(',');
+    out.append("\"present\":");
+    out.append(s.tcp.present ? "true" : "false");
+    out.append("},");
+
+    out.append("\"udp\":{");
+    append_kv_double(&out, "in_datagrams_per_sec",  s.udp.in_datagrams_per_sec);  out.push_back(',');
+    append_kv_double(&out, "out_datagrams_per_sec", s.udp.out_datagrams_per_sec); out.push_back(',');
+    append_kv_double(&out, "no_port_per_sec",       s.udp.no_port_per_sec);       out.push_back(',');
+    append_kv_double(&out, "in_errors_per_sec",     s.udp.in_errors_per_sec);     out.push_back(',');
+    out.append("\"present\":");
+    out.append(s.udp.present ? "true" : "false");
+    out.append("},");
+
+    out.append("\"fs\":{");
+    append_kv_uint  (&out, "count",                   s.fs.count);                   out.push_back(',');
+    append_kv_double(&out, "max_used_percent",        s.fs.max_used_percent);        out.push_back(',');
+    append_kv_double(&out, "max_inodes_used_percent", s.fs.max_inodes_used_percent); out.push_back(',');
+    out.append("\"present\":");
+    out.append(s.fs.present ? "true" : "false");
+    out.append("},");
+
+    out.append("\"clock\":{");
+    append_kv_double(&out, "offset_ms",    s.clock.offset_ms);    out.push_back(',');
+    append_kv_double(&out, "max_error_ms", s.clock.max_error_ms); out.push_back(',');
+    out.append("\"synced\":");
+    out.append(s.clock.synced ? "true" : "false");
+    out.append(",\"present\":");
+    out.append(s.clock.present ? "true" : "false");
+    out.append("},");
+
     append_kv_double(&out, "uptime_seconds", s.uptime_seconds);
     out.push_back('}');
     return out;
@@ -136,7 +186,7 @@ std::string sample_to_json(const Sample& s) {
 
 std::string samples_to_json(const Sample* samples, size_t n) {
     std::string out;
-    out.reserve(n > 0 ? n * 512 : 64);
+    out.reserve(n > 0 ? n * 1024 : 64);
     out.append("{\"count\":");
     append_uint(&out, static_cast<uint64_t>(n));
     out.append(",\"samples\":[");

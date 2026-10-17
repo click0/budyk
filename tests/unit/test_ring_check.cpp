@@ -3,6 +3,7 @@
 // recovery of records written past write_idx (a crash between the
 // pwrite and the index update).
 
+#include "core/codec.h"
 #include "core/sample.h"
 #include "storage/codec.h"
 #include "storage/ring_check.h"
@@ -80,6 +81,43 @@ void put_record(const std::string& path, uint64_t slot, const Sample& s) {
 void flip_byte(const std::string& path, uint64_t slot) {
     const uint8_t x = 0x5A;
     poke(path, static_cast<off_t>(64 + slot * kRec + 40), &x, 1);
+}
+
+// A record as budyk 0.6 wrote it: codec v7 (the first 256 bytes of a v8
+// payload, whose fields only append), version 7, its own CRC.
+constexpr size_t kV7Payload = 256;
+std::vector<uint8_t> v7_record(const Sample& s) {
+    uint8_t payload[1024];
+    size_t  len = 0;
+    assert(sample_encode(&s, payload, sizeof(payload), &len) == 0);
+    payload[8] = 7; payload[9] = payload[10] = payload[11] = 0;   // version
+    std::vector<uint8_t> rec(kRecordHeaderSize + kV7Payload, 0);
+    for (int i = 0; i < 8; ++i) rec[static_cast<size_t>(i)] = static_cast<uint8_t>(s.timestamp_nanos >> (8 * i));
+    rec[8] = static_cast<uint8_t>(s.level);
+    rec[9] = s.folded ? kRecordFolded : 0;
+    std::memcpy(rec.data() + kRecordHeaderSize, payload, kV7Payload);
+    uint32_t c = crc32c(rec.data(), 10);
+    c = crc32c(rec.data() + kRecordHeaderSize, kV7Payload, c);
+    for (int i = 0; i < 4; ++i) rec[10 + static_cast<size_t>(i)] = static_cast<uint8_t>(c >> (8 * i));
+    return rec;
+}
+
+// A ring of v7 records (270 bytes), `n` of them at ts0, ts0 + 1, ...
+void make_v7_ring(const std::string& path, uint8_t tier, uint64_t cap, Level level,
+                  uint64_t ts0, uint64_t n) {
+    RingFile r;
+    assert(r.open(path.c_str(), tier, static_cast<uint32_t>(kRecordHeaderSize + kV7Payload), cap) == 0);
+    for (uint64_t i = 0; i < n; ++i) {
+        Sample s{};
+        s.timestamp_nanos = ts0 + i;
+        s.level = level;
+        s.cpu.total_percent = static_cast<double>(i);
+        s.proc.total = 100 + static_cast<uint32_t>(i);
+        s.folded = (i % 2) == 1;
+        const auto rec = v7_record(s);
+        assert(r.append(rec.data(), rec.size()) == 0);
+    }
+    r.close();
 }
 
 RingCheck check(const std::string& path, bool repair) {
@@ -217,7 +255,7 @@ int main() {
         assert(r.open((d + "/old.ring").c_str(), 1, static_cast<uint32_t>(kRec - 14), 4) == 0);
         r.close();
         c = check(d + "/old.ring", false);
-        assert(c.record_size_differs && c.errors());
+        assert(c.older_format && !c.errors());
 
         RingCheck missing;
         assert(check_ring((d + "/none.ring").c_str(), false, 0, &missing) == 0);
@@ -247,6 +285,79 @@ int main() {
         assert(tm.init(d.c_str(), 1, 1, 1) == 0);
         assert(tm.recovered().empty());
         tm.close();
+        rmrf(d);
+    }
+
+    // 8. convert_ring(): a v7 ring (budyk 0.6, 270-byte records) becomes
+    //    a ring of this version's records, the fields v7 had intact, the
+    //    newer ones zero, the v8 groups set to what v7 carried, the folded
+    //    flag kept. With a smaller capacity the newest records stay. A
+    //    damaged record is dropped; a .convert left by an interrupted run
+    //    is replaced; fsck calls such a ring an older format, no error.
+    {
+        const std::string d = tmp_dir(), p = d + "/tier1.ring";
+        make_v7_ring(p, 1, 32, Level::L3, 1000, 20);
+        const uint8_t flip = 0x5A;                // damage slot 3 (dropped anyway)
+        poke(p, static_cast<off_t>(64 + 3 * (kRecordHeaderSize + kV7Payload) + 40), &flip, 1);
+        RingCheck c = check(p, false);
+        assert(c.older_format && !c.errors());
+        FILE* stale = std::fopen((p + ".convert").c_str(), "w");   // a leftover
+        assert(stale != nullptr);
+        std::fputs("stale", stale);
+        std::fclose(stale);
+        uint64_t kept = 0, dropped = 0;
+        assert(convert_ring(p.c_str(), 1, static_cast<uint32_t>(kRec), 10, &kept, &dropped) == 0);
+        assert(kept == 10 && dropped == 10);     // 20 - 10 oldest; slot 3 was among them
+        assert(::access((p + ".convert").c_str(), F_OK) != 0);
+        c = check(p, false);
+        assert(!c.older_format && !c.errors() && c.valid == 10);
+        assert(c.first_ts == 1010 && c.last_ts == 1019);
+
+        RingFile r;
+        assert(r.open_read_only(p.c_str(), 1, static_cast<uint32_t>(kRec), 10) == 0);
+        std::vector<uint8_t> buf(kRec);
+        Sample s{};
+        assert(r.read_at(0, buf.data(), buf.size()) == 0 && record_decode(buf.data(), buf.size(), &s) == 0);
+        assert(s.timestamp_nanos == 1010 && s.cpu.total_percent == 10.0 && s.proc.total == 110);
+        assert(!s.folded && s.groups == kGroupsV7 && !s.tcp.present && s.proc.zombie == 0);
+        assert(r.read_at(1, buf.data(), buf.size()) == 0 && record_decode(buf.data(), buf.size(), &s) == 0);
+        assert(s.folded);
+        r.close();
+
+        // All of them fit: none dropped; a damaged one is.
+        make_v7_ring(d + "/tier3.ring", 3, 32, Level::L1, 5000, 6);
+        const uint8_t x = 0x5A;
+        poke(d + "/tier3.ring", static_cast<off_t>(64 + 2 * (kRecordHeaderSize + kV7Payload) + 40), &x, 1);
+        assert(convert_ring((d + "/tier3.ring").c_str(), 3, static_cast<uint32_t>(kRec), 64,
+                            &kept, &dropped) == 0);
+        assert(kept == 5 && dropped == 1);
+        rmrf(d);
+    }
+
+    // 9. TierManager::init() converts the rings an older budyk left and
+    //    says so; the next init has nothing to convert. A ring with
+    //    larger records (a newer budyk) is not touched: init fails and
+    //    says why.
+    {
+        const std::string d = tmp_dir();
+        make_v7_ring(d + "/tier1.ring", 1, 64, Level::L3, 1000, 30);
+        make_v7_ring(d + "/tier2.ring", 2, 64, Level::L2, 1000, 3);
+        TierManager tm;
+        assert(tm.init(d.c_str(), 1, 1, 1) == 0);
+        assert(tm.converted().size() == 2);
+        assert(tm.converted()[0].ring == "tier1.ring" && tm.converted()[0].from_record_size == 270);
+        assert(tm.converted()[0].kept == 30 && tm.converted()[0].dropped == 0);
+        assert(tm.tier1_count() == 30 && tm.tier2_count() == 3);
+        tm.close();
+        assert(tm.init(d.c_str(), 1, 1, 1) == 0 && tm.converted().empty());
+        tm.close();
+
+        RingFile big;
+        assert(big.open((d + "/tier3.ring.big").c_str(), 3, static_cast<uint32_t>(kRec + 8), 4) == 0);
+        big.close();
+        assert(::rename((d + "/tier3.ring.big").c_str(), (d + "/tier3.ring").c_str()) == 0);
+        assert(tm.init(d.c_str(), 1, 1, 1) != 0);
+        assert(tm.last_error().find("written by a newer budyk") != std::string::npos);
         rmrf(d);
     }
 

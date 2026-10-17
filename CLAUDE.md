@@ -84,7 +84,8 @@ tests/unit/        — one assert()-based executable per module (ctest)
 tests/smoke/       — serve.sh (HTTP, WS, SIGHUP, fd check), crash.sh (SIGKILL +
                      restart), warm_grace.sh (hot buffer emptied after warm_grace),
                      escalate.sh (a sustained anomaly escalates L2 to L3),
-                     fsck.sh (fsck, recovery after a crash, the data_dir lock)
+                     fsck.sh (fsck, recovery after a crash, the data_dir lock),
+                     upgrade.sh (rings of an older release converted on start)
 addons/            — FreeBSD port + rc.d, systemd unit, Docker
 docs/              — spec (en/uk), man page
 ```
@@ -102,6 +103,7 @@ tests/smoke/crash.sh build/src/budyk     # daemon: SIGKILL + restart, at most on
 tests/smoke/warm_grace.sh build/src/budyk  # daemon: hot buffer emptied after warm_grace
 tests/smoke/escalate.sh build/src/budyk  # daemon: a sustained anomaly escalates L2 to L3
 tests/smoke/fsck.sh build/src/budyk      # fsck, start-up recovery, the data_dir lock
+tests/smoke/upgrade.sh build/src/budyk OLD/budyk  # rings of an older release converted
 tests/check_whitespace.sh                # trailing blanks, tabs, CR, final newline
 ```
 
@@ -171,14 +173,17 @@ on every target; a new implicit sign or width change is a build error in CI
    client has been connected for `hot_buffer.warm_grace` (`WarmGrace`).
 4. Storage records carry an absolute timestamp, a level marker, a flags
    byte (bit 0: folded) and a CRC32C; each level has its own ring;
-   `write_idx` is advanced only after the `pwrite`, and on start
-   `TierManager::init()` counts in a record that reached its slot but not
-   the index (`count_unindexed()`), so a daemon crash loses no stored
+   `write_idx` is advanced only after the `pwrite`. A codec version only
+   appends fields; a ring of smaller (older) records is converted on start
+   (`convert_ring()`, tests/smoke/upgrade.sh against v0.6.4). On start
+   `TierManager::init()` also counts in a record that reached its slot but
+   not the index (`count_unindexed()`), so a daemon crash loses no stored
    record (`tests/smoke/crash.sh`, `fsck.sh`). `budyk serve` holds an
-   flock on `<data_dir>/budyk.lock`: one daemon per data_dir. The L2 and L1 rings get folded
-   records while a finer level runs (spec §3.4.1); a window ends after its
-   interval, when the level drops to the ring's own, or on shutdown — a
-   SIGKILL loses the open windows, not the raw samples.
+   flock on `<data_dir>/budyk.lock`: one daemon per data_dir. The L2 and
+   L1 rings get folded records while a finer level runs (spec §3.4.1); a
+   window ends after its interval, when the level drops to the ring's
+   own, or on shutdown — a SIGKILL loses the open windows, not the raw
+   samples.
 5. `exec()` is asynchronous: it returns `{ queued = true }` and the outcome
    is logged. `exec(cmd, { timeout = s, wait = true })` is the inline form,
    capped at 60 s.
@@ -209,9 +214,10 @@ on every target; a new implicit sign or width change is a build error in CI
 
 ## Known gaps against the spec (`docs/budyk-spec-en.md`)
 
-- The metric set is roughly 40% of §2.1: no per-core CPU, per-device disk,
-  per-interface network, TCP/socket counters, filesystem usage or process
-  list.
+- The metric set lacks the per-entity part of §2.1: no per-core CPU,
+  per-device disk, per-interface network, per-filesystem list or process
+  list. The totals are there: CPU breakdown, processes by state, TCP / UDP,
+  the fullest filesystem, clock sync.
 - Every collector runs at every level; no per-level metric sets, no
   `collection.mode`.
 - Rule semantics that differ from §3.6: `cooldown` defaults to 0; a `nil`

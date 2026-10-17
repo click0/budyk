@@ -93,9 +93,11 @@ budyk serve (один процес на сервер)
 
 ## Можливості
 
-- **Метрики:** CPU, пам'ять, swap, середнє навантаження, дисковий I/O,
-  мережа, процеси, ентропія, температура, аптайм, а також власні CPU та
-  RSS budyk.
+- **Метрики:** CPU (з розбивкою user / system / iowait / irq / steal),
+  пам'ять, swap, середнє навантаження, дисковий I/O, мережа, процеси за
+  станами, TCP і UDP, заповнення файлових систем (місце та inode),
+  синхронізація годинника, ентропія, температура, аптайм, а також власні
+  CPU та RSS budyk.
 - **Сховище в кільцевих файлах:** окремий файл обмеженого розміру для
   кожного рівня, тож детальні дані 1 Гц із напружених періодів або тих,
   коли хтось дивився, лежать поруч із рідкими 5-хвилинними вибірками.
@@ -327,15 +329,19 @@ watch("swap_under_load", {
 
 | Змінна | Поля |
 |--------|------|
-| `cpu` | `total_percent`, `count` |
+| `cpu` | `total_percent`, `count`, `user_percent`, `system_percent`, `iowait_percent`, `irq_percent`, `steal_percent`, `idle_percent` |
 | `mem` | `total`, `available`, `available_percent` |
 | `swap` | `total`, `used`, `used_percent` |
 | `load` | `avg_1m`, `avg_5m`, `avg_15m` |
 | `disk` | `read_bytes_per_sec`, `write_bytes_per_sec`, `device_count` |
 | `net` | `rx_bytes_per_sec`, `tx_bytes_per_sec`, `interface_count` |
-| `proc` | `total`, `running` |
+| `proc` | `total`, `running`, `sleeping`, `blocked`, `stopped`, `zombie`, `threads` |
 | `entropy` | `available_bits`, `present` |
 | `thermal` | `max_celsius`, `sensor_count`, `present` |
+| `tcp` | `established`, `time_wait`, `active_opens_per_sec`, `passive_opens_per_sec`, `retransmits_per_sec`, `in_segments_per_sec`, `out_segments_per_sec`, `in_errors_per_sec`, `present` |
+| `udp` | `in_datagrams_per_sec`, `out_datagrams_per_sec`, `no_port_per_sec`, `in_errors_per_sec`, `present` |
+| `fs` | `count`, `max_used_percent`, `max_inodes_used_percent`, `present` |
+| `clock` | `offset_ms`, `max_error_ms`, `synced`, `present` |
 | `self_` | `rss_bytes`, `peak_rss_bytes`, `cpu_user_seconds`, `cpu_system_seconds` |
 | `uptime_seconds` | число |
 | `files` | `files["/шлях"].modifies`, `.deletes`, `.tampered` (коли увімкнено `security.file_watch`) |

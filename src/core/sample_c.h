@@ -15,6 +15,15 @@ extern "C" {
 typedef struct {
     double   total_percent;
     uint32_t count;
+    /* Where the time went, in percent of all CPU time since the last
+     * tick (they add up to 100). user includes nice, irq softirq;
+     * iowait and steal are 0 on FreeBSD, which has neither. */
+    double   user_percent;
+    double   system_percent;
+    double   iowait_percent;
+    double   irq_percent;
+    double   steal_percent;
+    double   idle_percent;
 } budyk_cpu_c;
 
 typedef struct {
@@ -48,9 +57,54 @@ typedef struct {
 } budyk_net_c;
 
 typedef struct {
-    uint32_t total;
+    uint32_t total;      /* processes */
     uint32_t running;
+    uint32_t sleeping;
+    uint32_t blocked;    /* uninterruptible wait (Linux D, FreeBSD SLOCK) */
+    uint32_t stopped;
+    uint32_t zombie;
+    uint32_t threads;    /* across all processes */
 } budyk_proc_c;
+
+/* TCP and UDP, all address families. Rates are per second since the
+ * last tick; established and time_wait are the sockets in that state
+ * now. present = 0 when the kernel counters could not be read. */
+typedef struct {
+    uint32_t established;
+    uint32_t time_wait;
+    double   active_opens_per_sec;
+    double   passive_opens_per_sec;
+    double   retransmits_per_sec;
+    double   in_segments_per_sec;
+    double   out_segments_per_sec;
+    double   in_errors_per_sec;
+    uint8_t  present;
+} budyk_tcp_c;
+typedef struct {
+    double   in_datagrams_per_sec;
+    double   out_datagrams_per_sec;
+    double   no_port_per_sec;
+    double   in_errors_per_sec;
+    uint8_t  present;
+} budyk_udp_c;
+
+/* Local filesystems (pseudo, read-only and network ones are skipped):
+ * how many, and the fullest by space and by inodes. */
+typedef struct {
+    uint32_t count;
+    double   max_used_percent;
+    double   max_inodes_used_percent;
+    uint8_t  present;
+} budyk_fs_c;
+
+/* The kernel's clock discipline (ntp_adjtime(2)): whether it considers
+ * the clock synchronised, its offset and maximum error. */
+typedef struct {
+    double   offset_ms;
+    double   max_error_ms;
+    uint8_t  synced;
+    uint8_t  present;
+} budyk_clock_c;
 
 typedef struct {
     uint32_t available_bits;
@@ -83,6 +137,10 @@ typedef struct {
     budyk_entropy_c entropy;
     budyk_self_c    self_;
     budyk_thermal_c thermal;
+    budyk_tcp_c     tcp;
+    budyk_udp_c     udp;
+    budyk_fs_c      fs;
+    budyk_clock_c   clock;
     double          uptime_seconds;
 } budyk_sample_c;
 
@@ -98,8 +156,21 @@ int budyk_collect_uptime_linux(budyk_sample_c* s);
 typedef struct {
     uint64_t busy;      // user + nice + system + irq + softirq + steal
     uint64_t total;     // busy + idle + iowait
+    // The previous snapshot of each part: user (+ nice), system, iowait,
+    // irq (+ softirq), steal, idle.
+    uint64_t part[6];
     int      has_prev;
 } budyk_cpu_ctx_c;
+
+// TCP / UDP counters are cumulative; the rates come from the delta
+// since the previous call, like disk and network bytes.
+typedef struct {
+    uint64_t tcp_active_opens, tcp_passive_opens, tcp_retransmits;
+    uint64_t tcp_in_segments, tcp_out_segments, tcp_in_errors;
+    uint64_t udp_in, udp_out, udp_no_port, udp_in_errors;
+    uint64_t prev_ns;
+    int      has_prev;
+} budyk_netstat_ctx_c;
 
 int budyk_collect_cpu_linux(budyk_cpu_ctx_c* ctx, budyk_sample_c* s);
 
@@ -125,9 +196,21 @@ typedef struct {
 int budyk_collect_disk_linux   (budyk_disk_ctx_c* ctx, budyk_sample_c* s);
 int budyk_collect_network_linux(budyk_net_ctx_c*  ctx, budyk_sample_c* s);
 int budyk_collect_proc_linux   (budyk_sample_c* s);
+// Parsers behind the collectors, exported for the fixture tests.
+// One /proc/<pid>/stat line: its state letter and num_threads.
+int  budyk_linux_parse_proc_stat(const char* line, char* state, uint32_t* threads);
+// Undo the octal escapes (\040 ...) of a /proc/self/mounts field, in place.
+void budyk_linux_unescape_mount(char* s);
 int budyk_collect_entropy_linux(budyk_sample_c* s);
 int budyk_collect_self_linux   (budyk_sample_c* s);
 int budyk_collect_thermal_linux(budyk_sample_c* s);
+int budyk_collect_netstat_linux(budyk_netstat_ctx_c* ctx, budyk_sample_c* s);
+// Where the CPU, netstat, process and filesystem collectors read /proc
+// from: tests point them at a fixture tree; NULL restores "/proc".
+void        budyk_linux_set_proc_root(const char* root);
+const char* budyk_linux_proc_root(void);
+int budyk_collect_fs_linux     (budyk_sample_c* s);
+int budyk_collect_clock_linux  (budyk_sample_c* s);
 
 // FreeBSD collectors. Same shape as Linux ones; built only when
 // BUDYK_PLATFORM=freebsd. Returns 0 on success, negative errno on failure.
@@ -141,6 +224,9 @@ int budyk_collect_proc_freebsd   (budyk_sample_c* s);
 int budyk_collect_entropy_freebsd(budyk_sample_c* s);
 int budyk_collect_self_freebsd   (budyk_sample_c* s);
 int budyk_collect_thermal_freebsd(budyk_sample_c* s);
+int budyk_collect_netstat_freebsd(budyk_netstat_ctx_c* ctx, budyk_sample_c* s);
+int budyk_collect_fs_freebsd     (budyk_sample_c* s);
+int budyk_collect_clock_freebsd  (budyk_sample_c* s);
 
 #ifdef __cplusplus
 }

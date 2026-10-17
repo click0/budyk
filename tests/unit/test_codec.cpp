@@ -46,6 +46,40 @@ static Sample make_sample() {
     s.file_watch.events_this_tick = 2;
     s.file_watch.watched_count    = 5;
     s.file_watch.present          = true;
+    s.cpu.user_percent         = 50.5;
+    s.cpu.system_percent       = 12.25;
+    s.cpu.iowait_percent       = 3.0;
+    s.cpu.irq_percent          = 1.5;
+    s.cpu.steal_percent        = 0.125;
+    s.cpu.idle_percent         = 32.625;
+    s.proc.sleeping            = 400;
+    s.proc.blocked             = 3;
+    s.proc.stopped             = 1;
+    s.proc.zombie              = 2;
+    s.proc.threads             = 1500;
+    s.tcp.established          = 120;
+    s.tcp.time_wait            = 33;
+    s.tcp.active_opens_per_sec = 1.5;
+    s.tcp.passive_opens_per_sec = 2.5;
+    s.tcp.retransmits_per_sec  = 0.75;
+    s.tcp.in_segments_per_sec  = 1000.5;
+    s.tcp.out_segments_per_sec = 900.25;
+    s.tcp.in_errors_per_sec    = 0.0625;
+    s.tcp.present              = true;
+    s.udp.in_datagrams_per_sec  = 40.0;
+    s.udp.out_datagrams_per_sec = 41.0;
+    s.udp.no_port_per_sec       = 0.5;
+    s.udp.in_errors_per_sec     = 0.25;
+    s.udp.present               = true;
+    s.fs.count                  = 4;
+    s.fs.max_used_percent       = 88.5;
+    s.fs.max_inodes_used_percent = 12.0;
+    s.fs.present                = true;
+    s.clock.offset_ms           = -1.25;
+    s.clock.max_error_ms        = 16.5;
+    s.clock.synced              = true;
+    s.clock.present             = true;
+    s.groups                    = kGroupsAll & ~kGroupThermal;
     s.uptime_seconds         = 123456.789;
     return s;
 }
@@ -88,6 +122,35 @@ static void assert_samples_equal(const Sample& a, const Sample& b) {
     assert(a.file_watch.events_this_tick == b.file_watch.events_this_tick);
     assert(a.file_watch.watched_count    == b.file_watch.watched_count);
     assert(a.file_watch.present          == b.file_watch.present);
+    assert(bitwise_eq(a.cpu.user_percent,   b.cpu.user_percent));
+    assert(bitwise_eq(a.cpu.system_percent, b.cpu.system_percent));
+    assert(bitwise_eq(a.cpu.iowait_percent, b.cpu.iowait_percent));
+    assert(bitwise_eq(a.cpu.irq_percent,    b.cpu.irq_percent));
+    assert(bitwise_eq(a.cpu.steal_percent,  b.cpu.steal_percent));
+    assert(bitwise_eq(a.cpu.idle_percent,   b.cpu.idle_percent));
+    assert(a.proc.sleeping == b.proc.sleeping && a.proc.blocked == b.proc.blocked);
+    assert(a.proc.stopped  == b.proc.stopped  && a.proc.zombie  == b.proc.zombie);
+    assert(a.proc.threads  == b.proc.threads);
+    assert(a.tcp.established == b.tcp.established && a.tcp.time_wait == b.tcp.time_wait);
+    assert(bitwise_eq(a.tcp.active_opens_per_sec,  b.tcp.active_opens_per_sec));
+    assert(bitwise_eq(a.tcp.passive_opens_per_sec, b.tcp.passive_opens_per_sec));
+    assert(bitwise_eq(a.tcp.retransmits_per_sec,   b.tcp.retransmits_per_sec));
+    assert(bitwise_eq(a.tcp.in_segments_per_sec,   b.tcp.in_segments_per_sec));
+    assert(bitwise_eq(a.tcp.out_segments_per_sec,  b.tcp.out_segments_per_sec));
+    assert(bitwise_eq(a.tcp.in_errors_per_sec,     b.tcp.in_errors_per_sec));
+    assert(a.tcp.present == b.tcp.present);
+    assert(bitwise_eq(a.udp.in_datagrams_per_sec,  b.udp.in_datagrams_per_sec));
+    assert(bitwise_eq(a.udp.out_datagrams_per_sec, b.udp.out_datagrams_per_sec));
+    assert(bitwise_eq(a.udp.no_port_per_sec,       b.udp.no_port_per_sec));
+    assert(bitwise_eq(a.udp.in_errors_per_sec,     b.udp.in_errors_per_sec));
+    assert(a.udp.present == b.udp.present);
+    assert(a.fs.count == b.fs.count && a.fs.present == b.fs.present);
+    assert(bitwise_eq(a.fs.max_used_percent,        b.fs.max_used_percent));
+    assert(bitwise_eq(a.fs.max_inodes_used_percent, b.fs.max_inodes_used_percent));
+    assert(bitwise_eq(a.clock.offset_ms,    b.clock.offset_ms));
+    assert(bitwise_eq(a.clock.max_error_ms, b.clock.max_error_ms));
+    assert(a.clock.synced == b.clock.synced && a.clock.present == b.clock.present);
+    assert(a.groups == b.groups);
     assert(bitwise_eq(a.uptime_seconds, b.uptime_seconds));
 }
 
@@ -348,7 +411,7 @@ int main() {
         uint8_t buf[512] = {0};
         size_t  full = 0;
         assert(sample_encode(&in, buf, sizeof(buf), &full) == 0);
-        buf[8] = 6;                            // version 7 → 6
+        buf[8] = 6;                            // version 8 → 6
         constexpr size_t kV6Size = 240;
         Sample out{};
         assert(sample_decode(buf, kV6Size, &out) == 0);
@@ -357,6 +420,33 @@ int main() {
         assert(out.file_watch.events_this_tick == 0);
         assert(out.file_watch.watched_count    == 0);
         assert(out.file_watch.present          == false);
+    }
+
+    // 11g. v7 backward compat (budyk 0.6) — version=7, length 256. The
+    //      v7 fields parsed; what v8 adds is zero, with no present flag,
+    //      and groups says what a v7 record carried. One byte short of
+    //      v8 is rejected.
+    {
+        Sample in = make_sample();
+        uint8_t buf[512] = {0};
+        size_t  full = 0;
+        assert(sample_encode(&in, buf, sizeof(buf), &full) == 0);
+        assert(full == 488 && buf[8] == 8);
+        Sample out{};
+        assert(sample_decode(buf, full - 1, &out) != 0);
+        buf[8] = 7;                            // version 8 → 7
+        constexpr size_t kV7Size = 256;
+        out.tcp.present = true;
+        out.proc.zombie = 99;
+        assert(sample_decode(buf, kV7Size, &out) == 0);
+        assert(out.file_watch.watched_count == in.file_watch.watched_count);
+        assert(out.proc.total == in.proc.total && out.proc.zombie == 0 && out.proc.threads == 0);
+        assert(out.cpu.user_percent == 0.0 && out.cpu.idle_percent == 0.0);
+        assert(!out.tcp.present && !out.udp.present && !out.fs.present && !out.clock.present);
+        assert(out.tcp.established == 0 && out.fs.max_used_percent == 0.0);
+        assert(out.groups == kGroupsV7);
+        buf[8] = 9;                            // a version from the future
+        assert(sample_decode(buf, full, &out) != 0);
     }
 
     // 12. v3 with length that truncates the proc tail — rejected.

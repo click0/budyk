@@ -87,7 +87,11 @@ int main() {
         assert(r.cancelled       == true);
         assert(r.timed_out       == false);
         assert(r.signal          == 9);    // SIGKILL
-        assert(r.elapsed_seconds >= 0.2);
+        // The raiser's 200 ms start before exec_command() starts its
+        // clock, so a loaded VM can measure a little under 0.2 s (seen
+        // on FreeBSD 15.0: 0.199). What matters is the upper bound: the
+        // cancel, not the 10 s sleep, ended the child.
+        assert(r.elapsed_seconds >= 0.1);
         assert(r.elapsed_seconds <  2.0);
     }
 

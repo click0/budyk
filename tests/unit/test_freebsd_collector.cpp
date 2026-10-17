@@ -9,9 +9,12 @@
 #include "core/sample_c.h"
 
 #include <cassert>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+
+#include <unistd.h>
 
 int main() {
     // 1. CPU delta — first call baselines (0%), second call yields a
@@ -152,6 +155,11 @@ int main() {
         assert(rc == 0);
         assert(s.proc.total > 0);
         assert(s.proc.running <= s.proc.total);
+        // Every process is in one state; each has at least one thread.
+        assert(s.proc.running + s.proc.sleeping + s.proc.blocked + s.proc.stopped +
+               s.proc.zombie <= s.proc.total);
+        assert(s.proc.sleeping > 0);              // init sleeps
+        assert(s.proc.threads >= s.proc.total);
     }
 
     // 9. Entropy — FreeBSD has no /proc/sys/kernel/random/entropy_avail
@@ -228,6 +236,62 @@ int main() {
         }
 
         assert(budyk_collect_thermal_freebsd(nullptr) != 0);
+    }
+
+    // 12. CPU breakdown: the parts add up to 100 on the second call;
+    //     FreeBSD has no iowait or steal.
+    {
+        budyk_cpu_ctx_c ctx;
+        std::memset(&ctx, 0, sizeof(ctx));
+        budyk_sample_c s;
+        std::memset(&s, 0, sizeof(s));
+        assert(budyk_collect_cpu_freebsd(&ctx, &s) == 0);
+        volatile double spin = 0.0;
+        for (int i = 0; i < 20000000; ++i) spin = spin + 1.0;
+        ::usleep(50000);
+        assert(budyk_collect_cpu_freebsd(&ctx, &s) == 0);
+        const double sum = s.cpu.user_percent + s.cpu.system_percent + s.cpu.irq_percent +
+                           s.cpu.idle_percent;
+        assert(sum > 99.0 && sum < 101.0);
+        assert(s.cpu.iowait_percent == 0.0 && s.cpu.steal_percent == 0.0);
+        assert(std::fabs(s.cpu.total_percent - (100.0 - s.cpu.idle_percent)) < 1e-6);
+    }
+
+    // 13. TCP / UDP from the netstat sysctls: present, rates zero on the
+    //     baseline call and non-negative after.
+    {
+        budyk_netstat_ctx_c ctx;
+        std::memset(&ctx, 0, sizeof(ctx));
+        budyk_sample_c s;
+        std::memset(&s, 0, sizeof(s));
+        s.timestamp_nanos = 1'000'000'000ULL;
+        assert(budyk_collect_netstat_freebsd(&ctx, &s) == 0);
+        assert(s.tcp.present && s.udp.present);
+        assert(s.tcp.in_segments_per_sec == 0.0);
+        s.timestamp_nanos = 2'000'000'000ULL;
+        assert(budyk_collect_netstat_freebsd(&ctx, &s) == 0);
+        assert(s.tcp.in_segments_per_sec >= 0.0 && s.udp.in_datagrams_per_sec >= 0.0);
+        assert(budyk_collect_netstat_freebsd(nullptr, &s) != 0);
+    }
+
+    // 14. Filesystems: the root filesystem at least (CI VMs mount it
+    //     read-write), a usage in (0, 100].
+    {
+        budyk_sample_c s;
+        std::memset(&s, 0, sizeof(s));
+        assert(budyk_collect_fs_freebsd(&s) == 0);
+        assert(s.fs.present && s.fs.count >= 1);
+        assert(s.fs.max_used_percent > 0.0 && s.fs.max_used_percent <= 100.0);
+        assert(budyk_collect_fs_freebsd(nullptr) != 0);
+    }
+
+    // 15. Clock sync: ntp_adjtime() answers without privilege.
+    {
+        budyk_sample_c s;
+        std::memset(&s, 0, sizeof(s));
+        assert(budyk_collect_clock_freebsd(&s) == 0);
+        assert(s.clock.present && s.clock.max_error_ms >= 0.0);
+        assert(budyk_collect_clock_freebsd(nullptr) != 0);
     }
 
     std::printf("test_freebsd_collector: PASS\n");

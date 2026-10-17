@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **More metrics** (spec §2.1), on Linux and FreeBSD, in the rings, the
+  API, the rules, the dashboard (new rows and two history charts) and
+  the TUI:
+  - `cpu.user_percent`, `system_percent`, `iowait_percent`,
+    `irq_percent`, `steal_percent`, `idle_percent`: where the time
+    went (FreeBSD has no iowait or steal);
+  - `proc.sleeping`, `blocked`, `stopped`, `zombie`, `threads` next to
+    `total` and `running`;
+  - `tcp`: sockets established and in TIME_WAIT, and per-second
+    active and passive opens, retransmits, segments in and out, input
+    errors (Linux `/proc/net/snmp` and `sockstat`, FreeBSD
+    `net.inet.tcp.stats` and `.states`);
+  - `udp`: datagrams in and out, to no port, input errors per second;
+  - `fs`: how many local filesystems and the fullest by space and by
+    inodes (network, FUSE, pseudo and read-only mounts are left out: a
+    hung server must not block the collector tick);
+  - `clock`: whether the kernel considers the clock synchronised, its
+    offset and maximum error (`ntp_adjtime`).
+  Folded L2 / L1 records average the rates and keep the maxima of the
+  counts and the fullest filesystem.
+- **Rings from 0.6 are converted on start.** The new fields make a
+  record 502 bytes (was 270; codec v8). A ring written by an older
+  budyk is rewritten at the new size when the daemon starts, the newest
+  records first if the size budget now holds fewer, and the log says
+  so ("tier1.ring: converted from 270-byte records (an older budyk) to
+  502: 3883 record(s) kept, 0 dropped"). The rewrite goes through
+  `<ring>.convert` and a rename, so a crash half-way leaves the old
+  ring. A ring from a newer budyk is left alone, with an error that
+  says so. `budyk fsck` reports an older ring as a note.
+
 - **`budyk fsck [--repair] [--config FILE] [DATA_DIR]`** (spec M4).
   Checks every ring in the data directory: the header, then each record
   (CRC, level, time order), and reports per ring the records, their time
@@ -64,6 +94,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   samples are overwritten.
 
 ### Changed
+
+- **`proc.total` counts processes on Linux too.** It came from
+  `/proc/loadavg`, which counts threads; the collector now reads every
+  `/proc/<pid>/stat` (for the states), and `proc.threads` has the
+  thread count. FreeBSD always counted processes.
 
 - **`budyk suggest-rules` opens `tier1.ring` read-only.** It opened it
   for writing and created it when missing: run as root before the

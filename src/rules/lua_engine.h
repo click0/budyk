@@ -42,6 +42,13 @@ struct Escalation {
 // dofile / loadfile / load / require from globals.
 class LuaEngine {
 public:
+    LuaEngine() = default;
+    // Owns the lua_State: closed here if shutdown() was not called (an
+    // early return, a test that forgot), so it never leaks.
+    ~LuaEngine() { shutdown(); }
+    LuaEngine(const LuaEngine&) = delete;
+    LuaEngine& operator=(const LuaEngine&) = delete;
+
     int  init(bool enable_exec);
     void shutdown();
 

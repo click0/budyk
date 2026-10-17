@@ -17,9 +17,10 @@ namespace budyk {
 // don't apply to numeric metric fields. Strings we emit (data_dir,
 // version, status) come from trusted sources.
 
-// Serialise one Sample as a JSON object: cpu, mem, swap, load, disk,
-// net, ts, level, uptime_seconds, and "folded":true on a record folded
-// from finer samples (TierAggregator). No trailing newline.
+// Serialise one Sample as a JSON object: ts, level, cpu, mem, swap,
+// load, disk, net, proc, entropy, self, thermal, file_watch, tcp, udp,
+// fs, clock, uptime_seconds, and "folded":true on a record folded from
+// finer samples (TierAggregator). No trailing newline.
 std::string sample_to_json(const Sample& s);
 
 // Serialise a span of samples as the body of /api/samples:

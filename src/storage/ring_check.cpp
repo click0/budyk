@@ -4,6 +4,9 @@
 #include "storage/codec.h"
 
 #include <cerrno>
+#include <string>
+
+#include <unistd.h>
 
 namespace budyk {
 
@@ -52,8 +55,54 @@ uint64_t count_unindexed(const RingFile& ring) {
     return n;
 }
 
+int convert_ring(const char* path, uint8_t tier, uint32_t record_size,
+                 uint64_t capacity, uint64_t* kept, uint64_t* dropped) {
+    *kept = *dropped = 0;
+    RingFile::Header h;
+    int err = 0;
+    if (RingFile::read_header(path, &h, &err) != 0) return err != 0 ? -err : -EINVAL;
+    RingFile old;
+    if (old.open_read_only(path, h.tier, h.record_size, h.capacity) != 0) {
+        return old.last_errno() != 0 ? -old.last_errno() : -EINVAL;
+    }
+    const std::string tmp = std::string(path) + ".convert";
+    ::unlink(tmp.c_str());                    // left by a conversion cut short
+    RingFile out;
+    if (out.open(tmp.c_str(), tier, record_size, capacity) != 0) {
+        err = out.last_errno() != 0 ? out.last_errno() : EIO;
+        return -err;
+    }
+
+    const uint64_t widx   = old.write_index();
+    const uint64_t count  = widx < h.capacity ? widx : h.capacity;
+    const uint64_t skip   = count > capacity ? count - capacity : 0;
+    std::vector<uint8_t> in(h.record_size);
+    uint8_t enc[1024];
+    int rc = 0;
+    for (uint64_t logical = widx - count + skip; logical < widx; ++logical) {
+        Sample s{};
+        size_t len = 0;
+        if (old.read_at(logical % h.capacity, in.data(), in.size()) != 0 ||
+            record_decode(in.data(), in.size(), &s) != 0) {
+            ++*dropped;
+            continue;
+        }
+        if (record_encode(s, enc, sizeof(enc), &len) != 0 || out.append(enc, len) != 0) {
+            rc = -EIO;
+            break;
+        }
+        ++*kept;
+    }
+    *dropped += skip;
+    out.close();
+    old.close();
+    if (rc == 0 && ::rename(tmp.c_str(), path) != 0) rc = -errno;
+    if (rc != 0) ::unlink(tmp.c_str());
+    return rc;
+}
+
 bool RingCheck::errors() const {
-    if (header_rc != 0 || unknown_tier || record_size_differs || open_rc != 0) return true;
+    if (header_rc != 0 || unknown_tier || newer_format || open_rc != 0) return true;
     return damaged > 0 || wrong_level > 0 || read_errors > 0 || unindexed > recovered;
 }
 
@@ -67,7 +116,7 @@ int check_ring(const char* path, bool repair, uint64_t now_ns, RingCheck* out) {
         return 0;
     }
     if (h.record_size != record_size_for_sample()) {
-        out->record_size_differs = true;
+        (h.record_size < record_size_for_sample() ? out->older_format : out->newer_format) = true;
         return 0;
     }
 

@@ -13,18 +13,23 @@ namespace budyk {
 // TierManager drives it; see TierManager::set_fold_windows().
 //
 // Per field (spec §1 leaves the choice open):
-//   mean      cpu.total_percent, mem.available(+_percent),
+//   mean      cpu.*_percent, mem.available(+_percent),
 //             swap.used(+_percent), load.*, disk.*_bytes_per_sec,
-//             net.*_bytes_per_sec — what the window looked like on
-//             average; byte counts are rounded
-//   max       proc.total, proc.running, thermal.max_celsius,
-//             self_.rss_bytes — a spike inside the window stays visible
+//             net.*_bytes_per_sec, tcp.*_per_sec, udp.*_per_sec — what
+//             the window looked like on average; byte counts are rounded
+//   max       proc.* (every state, threads), tcp.established,
+//             tcp.time_wait, thermal.max_celsius, self_.rss_bytes,
+//             fs.max_used_percent, fs.max_inodes_used_percent,
+//             clock.max_error_ms — a spike inside the window stays
+//             visible; clock.offset_ms keeps the largest |offset|
 //   min       entropy.available_bits — so does a drained pool
 //   sum       file_watch.events_this_tick — events in the whole window
-//   any       entropy.present, thermal.present, file_watch.present
+//   any       the present flags
+//   all       clock.synced (of the samples that read the clock), groups
+//             (a group only if every sample had it)
 //   last      timestamp_nanos (the window's end), the counts and totals
 //             (cpu.count, mem.total, swap.total, disk.device_count,
-//             net.interface_count, thermal.sensor_count,
+//             net.interface_count, thermal.sensor_count, fs.count,
 //             file_watch.watched_count), uptime_seconds and the
 //             cumulative self_ fields (peak_rss_bytes, cpu_*_seconds)
 // The result has level `out_level` and folded = true.
@@ -63,6 +68,9 @@ private:
     double   disk_write_sum_;
     double   net_rx_sum_;
     double   net_tx_sum_;
+    double   cpu_part_sum_[6];      // user, system, iowait, irq, steal, idle
+    double   tcp_rate_sum_[6];      // active, passive, retransmits, in, out, errors
+    double   udp_rate_sum_[4];      // in, out, no port, errors
 
     // Extremes, sums, flags.
     uint32_t proc_total_max_;
@@ -74,6 +82,12 @@ private:
     bool     entropy_present_;
     bool     thermal_present_;
     bool     file_watch_present_;
+    ProcessStats proc_max_;
+    TcpStats     tcp_;        // established / time_wait max, present
+    bool         udp_present_;
+    FsStats      fs_max_;     // the two percentages max, present
+    ClockStats   clock_;      // offset (largest |x|), max error, synced, present
+    uint32_t     groups_;
 
     Sample   last_;
 };

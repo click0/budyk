@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #include "core/sample.h"
+#include "storage/codec.h"
 #include "storage/tier_manager.h"
 
 #include <cassert>
@@ -284,15 +285,17 @@ int main() {
     {
         const std::string d = mkdtmp();
         TierManager tm;
-        assert(tm.init(d.c_str(), 1, 1, 1) == 0);         // 1 MiB ≈ 3.8k records
-        const uint64_t n = 5000;
+        assert(tm.init(d.c_str(), 1, 1, 1) == 0);
+        const uint64_t cap = (1u << 20) / record_size_for_sample();   // ~2k records
+        const uint64_t n   = cap + cap / 2;
         for (uint64_t i = 0; i < n; ++i) {
             assert(tm.store(mk(Level::L3, 10000 + i)) == 0);
         }
+        const uint64_t w0 = 10000 + n - 500;   // a window inside what is left
         std::vector<Sample> win;
-        assert(tm.query_all(12000, 12100, 500, &win) == 101);
-        assert(win.front().timestamp_nanos == 12000);
-        assert(win.back().timestamp_nanos  == 12100);
+        assert(tm.query_all(w0, w0 + 100, 500, &win) == 101);
+        assert(win.front().timestamp_nanos == w0);
+        assert(win.back().timestamp_nanos  == w0 + 100);
 
         std::vector<Sample> all;
         const int k = tm.query_all(0, 0, 10, &all);
