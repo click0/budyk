@@ -39,6 +39,7 @@ h1 .host { color: var(--muted); margin-left: .6rem; font-weight: 400; }
 #login button { background: var(--accent); color: #0d1117; border: 0; border-radius:.25rem; padding:.5rem .7rem; font: inherit; cursor: pointer; }
 .err { color: var(--crit); font-size: .85rem; }
 .hidden { display: none !important; }
+.row.off { opacity: .45; }
 .status { color: var(--muted); margin-top: 1rem; font-size: .85rem; }
 .detail { max-width: 64rem; margin-top: 1.6rem; }
 .detail h2 { font-size: .95rem; font-weight: 600; margin: 1rem 0 .5rem 0; }
@@ -78,23 +79,23 @@ h1 .host { color: var(--muted); margin-left: .6rem; font-weight: 400; }
   <h1>budyk <span class="host" id="host"></span></h1>
   <div class="panel">
     <div class="row"><span class="label">Level</span>    <span class="muted" id="level">--</span>       <span class="value">&nbsp;</span></div>
-    <div class="row"><span class="label">CPU</span>      <div class="bar"><i id="cpuBar"></i></div>     <span class="value" id="cpu">--</span></div>
-    <div class="row"><span class="label">CPU time</span> <span class="muted" id="cpuParts">--</span>    <span class="value">&nbsp;</span></div>
-    <div class="row"><span class="label">Memory</span>   <div class="bar"><i id="memBar"></i></div>     <span class="value" id="mem">--</span></div>
-    <div class="row"><span class="label">Swap</span>     <div class="bar"><i id="swapBar"></i></div>    <span class="value" id="swap">--</span></div>
-    <div class="row"><span class="label">Load 1m</span>  <div class="bar"><i id="loadBar"></i></div>    <span class="value" id="load">--</span></div>
-    <div class="row"><span class="label">Disk</span>     <span class="muted" id="disk">--</span>        <span class="value">&nbsp;</span></div>
-    <div class="row"><span class="label">Network</span>  <span class="muted" id="net">--</span>         <span class="value">&nbsp;</span></div>
-    <div class="row"><span class="label">Processes</span><span class="muted" id="proc">--</span>        <span class="value">&nbsp;</span></div>
-    <div class="row" id="tcpRow"><span class="label">TCP</span><span class="muted" id="tcp">--</span> <span class="value">&nbsp;</span></div>
-    <div class="row" id="udpRow"><span class="label">UDP</span><span class="muted" id="udp">--</span> <span class="value">&nbsp;</span></div>
-    <div class="row" id="fsRow"><span class="label">Filesystems</span><div class="bar"><i id="fsBar"></i></div> <span class="value" id="fs">--</span></div>
-    <div class="row" id="clockRow"><span class="label">Clock</span><span class="muted" id="clock">--</span> <span class="value">&nbsp;</span></div>
-    <div class="row" id="entropyRow"><span class="label">Entropy</span><span class="muted" id="entropy">--</span> <span class="value">&nbsp;</span></div>
-    <div class="row" id="thermalRow"><span class="label">Thermal</span><span class="muted" id="thermal">--</span> <span class="value">&nbsp;</span></div>
+    <div class="row" data-group="cpu"><span class="label">CPU</span>      <div class="bar"><i id="cpuBar"></i></div>     <span class="value" id="cpu">--</span></div>
+    <div class="row" data-group="cpu"><span class="label">CPU time</span> <span class="muted" id="cpuParts">--</span>    <span class="value">&nbsp;</span></div>
+    <div class="row" data-group="mem"><span class="label">Memory</span>   <div class="bar"><i id="memBar"></i></div>     <span class="value" id="mem">--</span></div>
+    <div class="row" data-group="swap"><span class="label">Swap</span>     <div class="bar"><i id="swapBar"></i></div>    <span class="value" id="swap">--</span></div>
+    <div class="row" data-group="load"><span class="label">Load 1m</span>  <div class="bar"><i id="loadBar"></i></div>    <span class="value" id="load">--</span></div>
+    <div class="row" data-group="disk"><span class="label">Disk</span>     <span class="muted" id="disk">--</span>        <span class="value">&nbsp;</span></div>
+    <div class="row" data-group="net"><span class="label">Network</span>  <span class="muted" id="net">--</span>         <span class="value">&nbsp;</span></div>
+    <div class="row" data-group="proc"><span class="label">Processes</span><span class="muted" id="proc">--</span>        <span class="value">&nbsp;</span></div>
+    <div class="row" id="tcpRow" data-group="tcp"><span class="label">TCP</span><span class="muted" id="tcp">--</span> <span class="value">&nbsp;</span></div>
+    <div class="row" id="udpRow" data-group="udp"><span class="label">UDP</span><span class="muted" id="udp">--</span> <span class="value">&nbsp;</span></div>
+    <div class="row" id="fsRow" data-group="fs"><span class="label">Filesystems</span><div class="bar"><i id="fsBar"></i></div> <span class="value" id="fs">--</span></div>
+    <div class="row" id="clockRow" data-group="clock"><span class="label">Clock</span><span class="muted" id="clock">--</span> <span class="value">&nbsp;</span></div>
+    <div class="row" id="entropyRow" data-group="entropy"><span class="label">Entropy</span><span class="muted" id="entropy">--</span> <span class="value">&nbsp;</span></div>
+    <div class="row" id="thermalRow" data-group="thermal"><span class="label">Thermal</span><span class="muted" id="thermal">--</span> <span class="value">&nbsp;</span></div>
     <div class="row" id="fileWatchRow"><span class="label">Files</span><span class="muted" id="fileWatch">--</span> <span class="value">&nbsp;</span></div>
-    <div class="row"><span class="label">budyk RSS</span><span class="muted" id="self">--</span>        <span class="value">&nbsp;</span></div>
-    <div class="row"><span class="label">Uptime</span>   <span class="muted" id="uptime">--</span>      <span class="value">&nbsp;</span></div>
+    <div class="row" data-group="self"><span class="label">budyk RSS</span><span class="muted" id="self">--</span>        <span class="value">&nbsp;</span></div>
+    <div class="row" data-group="uptime"><span class="label">Uptime</span>   <span class="muted" id="uptime">--</span>      <span class="value">&nbsp;</span></div>
   </div>
   <div class="status" id="status">connecting&hellip;</div>
 
@@ -297,26 +298,55 @@ function render(s) {
   }
 
   $("uptime").textContent = fmtUptime(s.uptime_seconds ?? 0);
+
+  // A group the sample's level does not collect (collection.<level>.metrics,
+  // or a rate on its first read) holds zeros, not readings: say so.
+  for (const row of document.querySelectorAll(".panel .row[data-group]")) {
+    const off = !collected(s, row.dataset.group);
+    const why = firstRead(s.baseline, row.dataset.group)
+      ? "measuring…" : "not collected at this level";
+    row.classList.toggle("off", off);
+    row.title = off ? why : "";
+    if (!off) continue;
+    row.classList.remove("hidden");
+    for (const el of row.querySelectorAll("[id]")) {
+      if (el.tagName === "I") el.style.width = "0";
+      else el.textContent = el.classList.contains("value") ? "—" : why;
+    }
+  }
+}
+
+// Whether `name` is in a "baseline" list: read for the first time in a
+// row, so a rate only from the next tick.
+function firstRead(list, name) {
+  return Array.isArray(list) && list.includes(name);
+}
+
+// Whether sample `s` has group `g` ("cpu", "disk", ...). A sample without
+// the list (an older daemon) has them all.
+function collected(s, g) {
+  return !Array.isArray(s.groups) || s.groups.includes(g);
 }
 
 // --- History chart (consumes /api/range) -----------------------------------
-// Each metric pulls a scalar from a sample and formats its axis labels.
+// Each metric pulls a scalar from a sample and formats its axis labels; a
+// sample without the metric's group leaves a gap in the line.
 const METRICS = {
-  cpu:  { label: "CPU %",   pick: s => s.cpu?.total_percent ?? 0,
+  cpu:  { label: "CPU %",   group: "cpu", pick: s => s.cpu?.total_percent ?? 0,
           fmt: v => v.toFixed(0) + "%" },
-  mem:  { label: "Mem %",   pick: s => 100 - (s.mem?.available_percent ?? 0),
+  mem:  { label: "Mem %",   group: "mem", pick: s => 100 - (s.mem?.available_percent ?? 0),
           fmt: v => v.toFixed(0) + "%" },
-  load: { label: "Load 1m", pick: s => s.load?.avg_1m ?? 0,
+  load: { label: "Load 1m", group: "load", pick: s => s.load?.avg_1m ?? 0,
           fmt: v => v.toFixed(2) },
-  disk: { label: "Disk B/s", pick: s => (s.disk?.read_bytes_per_sec ?? 0) +
+  disk: { label: "Disk B/s", group: "disk", pick: s => (s.disk?.read_bytes_per_sec ?? 0) +
                                          (s.disk?.write_bytes_per_sec ?? 0),
           fmt: v => fmtBytes(v) + "/s" },
-  net:  { label: "Net B/s",  pick: s => (s.net?.rx_bytes_per_sec ?? 0) +
+  net:  { label: "Net B/s",  group: "net", pick: s => (s.net?.rx_bytes_per_sec ?? 0) +
                                          (s.net?.tx_bytes_per_sec ?? 0),
           fmt: v => fmtBytes(v) + "/s" },
-  tcp:  { label: "TCP estab", pick: s => s.tcp?.established ?? 0,
+  tcp:  { label: "TCP estab", group: "tcp", pick: s => s.tcp?.established ?? 0,
           fmt: v => v.toFixed(0) },
-  fs:   { label: "FS used %", pick: s => s.fs?.max_used_percent ?? 0,
+  fs:   { label: "FS used %", group: "fs", pick: s => s.fs?.max_used_percent ?? 0,
           fmt: v => v.toFixed(0) + "%" },
 };
 // Range presets → window in ms. loadHistory reads every level's ring for
@@ -346,9 +376,11 @@ function drawChart(samples) {
   const m   = METRICS[histMetric];
   const W = 1000, H = 220, padL = 6, padR = 6, padT = 14, padB = 22;
 
-  const pts = (samples || [])
-    .map(s => ({ t: Number(s.ts) / 1e6, v: m.pick(s) }))
-    .filter(p => Number.isFinite(p.t) && Number.isFinite(p.v));
+  // null: not collected there (a gap).
+  const all = (samples || [])
+    .map(s => ({ t: Number(s.ts) / 1e6, v: collected(s, m.group) ? m.pick(s) : null }))
+    .filter(p => Number.isFinite(p.t) && (p.v === null || Number.isFinite(p.v)));
+  const pts = all.filter(p => p.v !== null);
 
   if (pts.length < 2) {
     svg.innerHTML =
@@ -370,20 +402,28 @@ function drawChart(samples) {
   const X = t => padL + (t - t0) / ((t1 - t0) || 1) * (W - padL - padR);
   const Y = v => padT + (1 - (v - vmin) / ((vmax - vmin) || 1)) * (H - padT - padB);
 
-  let line = "", area = "";
-  for (let i = 0; i < pts.length; ++i) {
-    const x = X(pts[i].t).toFixed(1), y = Y(pts[i].v).toFixed(1);
-    line += (i === 0 ? "M" : "L") + x + " " + y + " ";
+  // One path piece per run of collected points, the area under each.
+  let line = "", area = "", run = [];
+  const flush = () => {
+    if (run.length === 0) return;
+    let piece = "";
+    run.forEach((p, i) => { piece += (i === 0 ? "M" : "L") + X(p.t).toFixed(1) + " " + Y(p.v).toFixed(1) + " "; });
+    line += piece;
+    area += piece + "L" + X(run[run.length - 1].t).toFixed(1) + " " + (H - padB) + " "
+                  + "L" + X(run[0].t).toFixed(1) + " " + (H - padB) + " Z ";
+    run = [];
+  };
+  for (const p of all) {
+    if (p.v === null) flush(); else run.push(p);
   }
-  area = line + "L" + X(t1).toFixed(1) + " " + (H - padB) + " "
-              + "L" + X(t0).toFixed(1) + " " + (H - padB) + " Z";
+  flush();
 
   const longSpan = (t1 - t0) > 86400e3;        // >1 day → show dates
   const tfmt = longSpan ? fmtClockDay : fmtClock;
   const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
 
   svg.innerHTML =
-    `<path class="area" d="${area}"/>` +
+    `<path class="area" d="${area.trim()}"/>` +
     `<path class="line" d="${line.trim()}"/>` +
     `<text x="${padL}" y="11" class="axis">${esc(m.fmt(vmax))}</text>` +
     `<text x="${padL}" y="${H - padB + 16}" class="axis">${esc(m.fmt(vmin))}</text>` +
@@ -498,20 +538,41 @@ function miniBar(pct, warnAt, critAt) {
   bar.classList.toggle("crit", pct >= critAt);
   return bar;
 }
-function fillRows(tbodyId, items, row) {
+function fillRows(tbodyId, items, row, off) {
   const tb = $(tbodyId);
   tb.replaceChildren();
+  if (off) {
+    const tr = document.createElement("tr");
+    const td = document.createElement("td");
+    td.colSpan = 6;
+    td.className = "muted";
+    td.textContent = off;
+    tr.appendChild(td);
+    tb.appendChild(tr);
+  }
   for (const it of items || []) {
     const tr = document.createElement("tr");
     row(tr, it);
     tb.appendChild(tr);
   }
 }
+// A list the level does not collect gets one line saying so (or that
+// its rates come with the next tick).
+function notCollected(d, name) {
+  if (!Array.isArray(d.collected) || d.collected.includes(name)) return "";
+  return firstRead(d.baseline, name) ? "measuring…" : "not collected at this level";
+}
 function renderDetail(d) {
   if (!d) return;
   $("detail").classList.remove("hidden");
   const cores = $("cores");
   cores.replaceChildren();
+  if (notCollected(d, "cpu.cores")) {
+    const n = document.createElement("span");
+    n.className = "muted";
+    n.textContent = notCollected(d, "cpu.cores");
+    cores.appendChild(n);
+  }
   (d.cores || []).forEach((c, i) => {
     const div = document.createElement("div");
     div.className = "core";
@@ -533,7 +594,7 @@ function renderDetail(d) {
     cell(tr, rate(x.write_bytes_per_sec));
     cell(tr, ((x.reads_per_sec ?? 0) + (x.writes_per_sec ?? 0)).toFixed(1));
     cell(tr, (x.busy_percent ?? 0).toFixed(0) + "%");
-  });
+  }, notCollected(d, "disk.devices"));
   fillRows("ifaces", d.interfaces, (tr, x) => {
     cell(tr, x.name + (x.up ? "" : " (down)"), x.up ? "" : "down");
     cell(tr, rate(x.rx_bytes_per_sec));
@@ -541,7 +602,7 @@ function renderDetail(d) {
     cell(tr, ((x.rx_packets_per_sec ?? 0) + (x.tx_packets_per_sec ?? 0)).toFixed(1));
     cell(tr, ((x.rx_errors_per_sec ?? 0) + (x.tx_errors_per_sec ?? 0)).toFixed(1));
     cell(tr, (x.rx_drops_per_sec ?? 0).toFixed(1));
-  });
+  }, notCollected(d, "net.interfaces"));
   fillRows("mounts", d.filesystems, (tr, x) => {
     cell(tr, x.mount);
     cell(tr, x.type, "muted");
@@ -549,7 +610,7 @@ function renderDetail(d) {
     cell(tr, fmtBytes(x.total_bytes ?? 0));
     cell(tr, miniBar(x.used_percent, 80, 90));
     cell(tr, (x.inodes_used_percent ?? 0).toFixed(1) + "%");
-  });
+  }, notCollected(d, "fs.mounts"));
 }
 
 let ws = null;

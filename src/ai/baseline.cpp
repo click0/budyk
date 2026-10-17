@@ -47,12 +47,16 @@ MetricBaseline compute_from_vector(std::vector<double>& vals) {
     return b;
 }
 
+// Over the samples that have `group`: in the others it is zeros, not
+// readings (a level that does not collect it, a rate's first read).
 template <typename Fn>
-MetricBaseline extract_and_compute(const Sample* s, size_t n, Fn extract) {
+MetricBaseline extract_and_compute(const Sample* s, size_t n, uint32_t group, Fn extract) {
     if (s == nullptr || n == 0) return MetricBaseline{};
     std::vector<double> vals;
     vals.reserve(n);
-    for (size_t i = 0; i < n; ++i) vals.push_back(extract(s[i]));
+    for (size_t i = 0; i < n; ++i) {
+        if ((s[i].groups & group) != 0) vals.push_back(extract(s[i]));
+    }
     return compute_from_vector(vals);
 }
 
@@ -67,42 +71,49 @@ MetricBaseline compute_stats(const double* values, size_t n) {
     return compute_from_vector(v);
 }
 
+uint32_t newest_cpu_count(const Sample* s, size_t n) {
+    for (size_t i = n; s != nullptr && i > 0; --i) {
+        if ((s[i - 1].groups & kGroupCpu) != 0) return s[i - 1].cpu.count;
+    }
+    return 0;
+}
+
 MetricBaseline compute_cpu_total_percent_stats(const Sample* s, size_t n) {
-    return extract_and_compute(s, n, [](const Sample& x) { return x.cpu.total_percent; });
+    return extract_and_compute(s, n, kGroupCpu, [](const Sample& x) { return x.cpu.total_percent; });
 }
 
 MetricBaseline compute_mem_available_percent_stats(const Sample* s, size_t n) {
-    return extract_and_compute(s, n, [](const Sample& x) { return x.mem.available_percent; });
+    return extract_and_compute(s, n, kGroupMem, [](const Sample& x) { return x.mem.available_percent; });
 }
 
 MetricBaseline compute_swap_used_percent_stats(const Sample* s, size_t n) {
-    return extract_and_compute(s, n, [](const Sample& x) { return x.swap.used_percent; });
+    return extract_and_compute(s, n, kGroupSwap, [](const Sample& x) { return x.swap.used_percent; });
 }
 
 MetricBaseline compute_load_1m_stats(const Sample* s, size_t n) {
-    return extract_and_compute(s, n, [](const Sample& x) { return x.load.avg_1m; });
+    return extract_and_compute(s, n, kGroupLoad, [](const Sample& x) { return x.load.avg_1m; });
 }
 
 MetricBaseline compute_disk_read_bytes_per_sec_stats(const Sample* s, size_t n) {
-    return extract_and_compute(s, n, [](const Sample& x) {
+    return extract_and_compute(s, n, kGroupDisk, [](const Sample& x) {
         return static_cast<double>(x.disk.read_bytes_per_sec);
     });
 }
 
 MetricBaseline compute_disk_write_bytes_per_sec_stats(const Sample* s, size_t n) {
-    return extract_and_compute(s, n, [](const Sample& x) {
+    return extract_and_compute(s, n, kGroupDisk, [](const Sample& x) {
         return static_cast<double>(x.disk.write_bytes_per_sec);
     });
 }
 
 MetricBaseline compute_net_rx_bytes_per_sec_stats(const Sample* s, size_t n) {
-    return extract_and_compute(s, n, [](const Sample& x) {
+    return extract_and_compute(s, n, kGroupNet, [](const Sample& x) {
         return static_cast<double>(x.net.rx_bytes_per_sec);
     });
 }
 
 MetricBaseline compute_net_tx_bytes_per_sec_stats(const Sample* s, size_t n) {
-    return extract_and_compute(s, n, [](const Sample& x) {
+    return extract_and_compute(s, n, kGroupNet, [](const Sample& x) {
         return static_cast<double>(x.net.tx_bytes_per_sec);
     });
 }

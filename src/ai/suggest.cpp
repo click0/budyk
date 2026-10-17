@@ -193,7 +193,7 @@ std::string suggest_rules_for_samples(const Sample* s, size_t n) {
 
     if (s == nullptr || n == 0) return os.str();
 
-    const double cpu_count_est = static_cast<double>(s[n - 1].cpu.count);
+    const double cpu_count_est = static_cast<double>(newest_cpu_count(s, n));
 
     os << suggest_rule_cpu_total_percent       (compute_cpu_total_percent_stats       (s, n));
     os << suggest_rule_mem_available_percent   (compute_mem_available_percent_stats   (s, n));

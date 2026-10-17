@@ -54,7 +54,8 @@ budyk serve (one process per server)
 On each tick the collection loop:
 
 1. reads the kernel counters (`sysctl`, devstat and kvm on FreeBSD,
-   `/proc` and `/sys` on Linux) into one sample;
+   `/proc` and `/sys` on Linux) that the level's
+   [metric set](#what-each-level-collects) asks for into one sample;
 2. asks the scheduler for the level: **L3** while a dashboard or TUI is
    connected and for `grace_period` (60 s) after it leaves, or once a
    threshold has stayed crossed for `escalate_after` (5 min), **L2**
@@ -107,6 +108,9 @@ single dashboard that combines servers isn't part of budyk yet.
 - **Custom levels:** your own cadences next to L1–L3, such as 2 Hz
   under pressure or 30 min on an idle box, switched on by a condition or
   by a rule.
+- **Per-level metric sets:** a heartbeat that reads five groups, a
+  watchful level that reads everything; or `collection.mode: always` /
+  `on-demand`.
 - **Rules:** Lua `watch()` rules or a simple YAML form, reloaded on
   `SIGHUP` without a restart. Cooldowns survive restarts.
 - **Alert channels:** ntfy, Discord, Telegram, SMTP e-mail, Twilio SMS.
@@ -268,6 +272,62 @@ that level's own ring file and carry its id in their `level` field.
 level. The dashboard shows the current level and includes every level
 in its history chart.
 
+## What each level collects
+
+Each level reads its own set of metrics, `metrics:` under the level:
+
+```yaml
+collection:
+  l1: { metrics: minimal }                  # the heartbeat: five groups
+  l3: { metrics: [standard, cpu.cores] }    # every total, and each core
+  levels:
+    - { name: burst, interval: 0.5, priority: 40, metrics: [disk, disk.devices] }
+```
+
+| Set | Holds |
+|-----|-------|
+| `minimal` | `cpu`, `mem`, `swap`, `load`, `uptime` |
+| `standard` | every group: the above and `disk`, `net`, `proc`, `entropy`, `self`, `thermal`, `tcp`, `udp`, `fs`, `clock` |
+| `full` | `standard` and the per-entity lists `cpu.cores`, `disk.devices`, `net.interfaces`, `fs.mounts` |
+
+A list may name sets, groups and lists. Every set includes `minimal`
+(the thresholds are checked against it), and a list brings its group
+(`disk.devices` reads `disk`). The defaults, L1 `standard` and L2, L3
+and custom levels `full`, read what earlier versions read. The file
+watcher, when enabled, runs at every level. An unknown name is logged
+and the level keeps its default.
+
+A tick reads the set of the level it slept at, or of the level a client
+or a request has raised it to since. Each sample says what it has
+(`groups` in the JSON; the dashboard and the TUI mark the rest "not
+collected at this level"). A rate (CPU, disk, network, TCP and UDP, and
+the per-core, per-disk and per-interface rates) is the change between
+two reads in a row: on the daemon's first tick, and on the first tick of
+a level that reads it after one that did not, there is only a baseline
+and the sample leaves the group out.
+
+**Rules.** A `when` that reads a group or list the sample does not have
+skips the rule for that tick: it is not an error, and the rule's
+`for_ticks` count stays where it was. A rate's first read passes in a
+tick and is not logged; a level that does not collect what a rule reads
+is, once per rule:
+
+```
+budyk: rule 'io' skipped while the level does not collect what it reads: rules.lua:3: disk is not collected at this level
+```
+
+`collected("disk")` or `collected("disk.devices")` tells a rule what the
+sample has. An action that reads what is missing fails with the same
+message; a custom level's `when` that does counts as false.
+
+**Modes.** `collection.mode` changes the levels themselves:
+
+| Mode | Behaviour |
+|------|-----------|
+| `adaptive` | the default: the levels as described above |
+| `always` | L3 all the time, like an always-on monitor; the L2 and L1 rings get folded records. A custom level of higher priority still wins |
+| `on-demand` | collect only while someone looks: a dashboard or TUI (and `grace_period` after), or a custom level switched on in the meantime. Thresholds raise no level, L1 and L2 collect nothing, and samples go to the hot buffer only: nothing is written to the rings, whose earlier history stays readable |
+
 ## Rules
 
 Point `rules.path` at a `.lua` or `.yaml` file. After editing it, send
@@ -316,6 +376,7 @@ Functions available to rules:
 | `print(...)` | Write to the daemon log. |
 | `exec(cmd [, timeout_s])` | Run a program: a string or an argv table, absolute path, 30 s timeout by default. **Off by default.** Enable with `rules.exec.enabled` or `--enable-exec`, and restrict it with `rules.exec.allow`. The command runs in the background: the call returns `{ queued = true }` at once (or `{ queued = false, error = "exec queue full" }`), the rules carry on, and the outcome is logged. To run it inline and get its result, `exec(cmd, { timeout = 5, wait = true })` returns `{ ok, exit_status, signal, timed_out, elapsed_seconds }`; the tick waits, so that timeout is capped at 60 s. |
 | `freeze(pid)` / `unfreeze(pid)` | Send `SIGSTOP` / `SIGCONT`. **Off by default.** Enable with `rules.freeze.enabled` or `--enable-freeze`, and restrict by process name with `rules.freeze.allow`. |
+| `collected(name)` | Whether the sample has a group (`"disk"`, `"self"`) or list (`"disk.devices"`); see [What each level collects](#what-each-level-collects). Raises for an unknown name. |
 | `escalate(level [, seconds])` | Keep a collection level active for `seconds` (default 60): a [custom level](#custom-levels)'s name, `"L2"` or `"L3"`. Takes effect for the current sleep. Raises for an unknown level. |
 
 Metrics are refreshed every tick as globals:
@@ -360,6 +421,9 @@ watch("partition_full", {
     severity = "critical",
 })
 ```
+
+A group or list the current level does not collect skips the rule; see
+[What each level collects](#what-each-level-collects).
 
 Rules run in a sandbox that has only the base library, `math`, `string`
 and `table`. `io`, `os`, `require`, `load`, `loadfile` and `dofile` are
@@ -442,7 +506,7 @@ needs.
 | `POST` | `/api/auth/logout` | no | clears the session |
 | `GET` | `/api/samples` | yes | recent samples from the in-memory buffer |
 | `GET` | `/api/range` | yes | stored history: `since`, `until` (nanoseconds since the epoch), `limit` (up to 5000), and either `level` (`L1`–`L3`, a custom level's name, or `all` for every level merged and thinned over the window) or `tier` (`1` = L3 samples, `2` = L2, `3` = L1) |
-| `GET` | `/api/levels` | yes | every level: `id` (the value of a sample's `level`), `name`, `interval_ms`, `priority`, `builtin` |
+| `GET` | `/api/levels` | yes | every level: `id` (the value of a sample's `level`), `name`, `interval_ms`, `priority`, `builtin`, `collects` (false for L1 and L2 in on-demand mode), `metrics` (its set, by name) |
 | `GET` | `/api/ws` | yes | WebSocket live stream |
 
 "Auth" applies only when `web.auth.enabled` is `true`.

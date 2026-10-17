@@ -99,7 +99,7 @@ std::string build_llm_summary(const budyk::Sample* s, size_t n) {
     if (s == nullptr || n == 0) return "no samples available\n";
     std::string out;
     out += "samples=" + std::to_string(n) + "\n";
-    out += "cpu_count=" + std::to_string(s[n - 1].cpu.count) + "\n";
+    out += "cpu_count=" + std::to_string(budyk::newest_cpu_count(s, n)) + "\n";
     out += fmt_baseline_line("cpu.total_percent",
                              budyk::compute_cpu_total_percent_stats(s, n));
     out += fmt_baseline_line("mem.available_percent",

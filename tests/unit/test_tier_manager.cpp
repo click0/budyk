@@ -16,6 +16,7 @@ using namespace budyk;
 
 static Sample mk(Level level, uint64_t ts) {
     Sample s{};
+    s.groups             = kGroupsAll;
     s.timestamp_nanos    = ts;
     s.level              = level;
     s.cpu.total_percent  = 42.0;

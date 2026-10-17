@@ -22,6 +22,7 @@ endfunction()
 # core, storage, scheduler, hot buffer
 budyk_add_test(test_codec           LIBS budyk_core)
 budyk_add_test(test_parse_int       LIBS budyk_core)
+budyk_add_test(test_metric_set      LIBS budyk_core)
 budyk_add_test(test_storage_codec   LIBS budyk_storage budyk_core)
 budyk_add_test(test_hot_buffer      LIBS budyk_hot_buffer budyk_core)
 budyk_add_test(test_scheduler       LIBS budyk_scheduler budyk_core)
@@ -85,4 +86,5 @@ budyk_add_test(test_file_watcher    LIBS budyk_security budyk_core)
 budyk_add_test(test_util            LIBS budyk_util budyk_core)
 # The daemon's routes, through make_router(): needs the whole app library.
 budyk_add_test(test_router          LIBS budyk_app)
+budyk_add_test(test_collect         LIBS budyk_app)
 budyk_add_test(test_tui             LIBS budyk_tui budyk_core)

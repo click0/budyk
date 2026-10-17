@@ -183,6 +183,7 @@ int main() {
         assert(e.load_string(lua.c_str()) == 0);
         assert(e.rule_count() == 1);
         Sample s{};
+        s.groups = kGroupsAll;
         assert(e.eval_tick(s) == 1);   // fired
         e.shutdown();
     }
@@ -207,6 +208,7 @@ int main() {
         assert(e.init(false) == 0);
         assert(e.load_string(lua.c_str()) == 0);
         Sample s{};
+        s.groups = kGroupsAll;
         assert(e.eval_tick(s) == 1);
         e.shutdown();
 

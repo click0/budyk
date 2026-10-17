@@ -2,6 +2,7 @@
 #include "web/json.h"
 
 #include "core/json_text.h"
+#include "core/metric_set.h"
 
 #include <cmath>
 #include <cstdio>
@@ -53,6 +54,21 @@ void append_kv_str(std::string* out, const char* key, const char* v) {
     out->push_back('"');
 }
 
+// "key":["name",...], — the name of each bit of `bits` up to `last`.
+void append_names(std::string* out, const char* key, uint32_t bits,
+                  const char* (*name_of)(uint32_t), uint32_t last) {
+    out->push_back('"'); out->append(key); out->append("\":[");
+    bool first = true;
+    for (uint32_t bit = 1; bit <= last; bit <<= 1) {
+        const char* name = (bits & bit) != 0 ? name_of(bit) : nullptr;
+        if (name == nullptr) continue;
+        if (!first) out->push_back(',');
+        first = false;
+        out->push_back('"'); out->append(name); out->push_back('"');
+    }
+    out->append("],");
+}
+
 } // namespace
 
 std::string sample_to_json(const Sample& s) {
@@ -65,6 +81,11 @@ std::string sample_to_json(const Sample& s) {
     // Only on a record folded from finer samples (/api/range); live
     // samples never carry it.
     if (s.folded) out.append("\"folded\":true,");
+    // The groups this sample has; the others are zeros, not readings.
+    // "baseline" (live samples only, when there is one): those read for
+    // the first time in a row, a rate from the next tick.
+    append_names(&out, "groups", s.groups, metric_group_name, kGroupsAll);
+    if (s.baseline != 0) append_names(&out, "baseline", s.baseline, metric_group_name, kGroupsAll);
 
     out.append("\"cpu\":{");
     append_kv_double(&out, "total_percent",  s.cpu.total_percent);    out.push_back(',');
@@ -194,7 +215,10 @@ std::string sample_to_json(const Sample& s) {
 std::string detail_to_json(const budyk_detail_c& d) {
     std::string out;
     out.reserve(256 + d.ncores * 160 + (d.ndisks + d.nifaces) * 200 + d.nmounts * 320);
-    out.append("{\"cores\":[");
+    out.push_back('{');
+    append_names(&out, "collected", d.collected, metric_detail_name, kDetailAll);
+    if (d.baseline != 0) append_names(&out, "baseline", d.baseline, metric_detail_name, kDetailAll);
+    out.append("\"cores\":[");
     for (uint32_t i = 0; i < d.ncores; ++i) {
         const budyk_core_c& c = d.cores[i];
         if (i > 0) out.push_back(',');

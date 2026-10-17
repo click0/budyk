@@ -37,6 +37,7 @@ struct World {
     HttpHandler            handler;
 
     World() : sched(cfg.scheduler) {}
+    explicit World(const SchedulerConfig& sc) : sched(sc) {}
 
     void init() {
         char tmpl[] = "/tmp/budyk_router_XXXXXX";
@@ -267,6 +268,35 @@ int main() {
         std::snprintf(w.cfg.password_hash, sizeof(w.cfg.password_hash), "%s", "$argon2id$v=19$dummy");
         r = w.handler(up);
         assert(r.status == 401 && !r.hijack);
+    }
+
+    // 8. /api/levels: each level's metric set and whether it collects
+    //    (L1 and L2 do not in on-demand mode).
+    {
+        SchedulerConfig sc;
+        sc.mode = CollectionMode::OnDemand;
+        sc.l1_metrics = metric_set_minimal();
+        CustomLevel lv;
+        lv.id = kFirstCustomLevel; lv.name = "burst"; lv.interval_ms = 300; lv.priority = 40;
+        lv.metrics = MetricSet{kGroupsMinimal | kGroupDisk, kDetailDisks};
+        sc.custom_levels.push_back(lv);
+        World w(sc);
+        w.init();
+        const HttpResponse r = w.handler(get("/api/levels"));
+        assert(r.status == 200);
+        assert(has(r.body, "{\"id\":1,\"name\":\"L1\",\"interval_ms\":300000,\"priority\":0,"
+                           "\"builtin\":true,\"collects\":false,"
+                           "\"metrics\":[\"cpu\",\"mem\",\"swap\",\"load\",\"uptime\"]}"));
+        assert(has(r.body, "\"name\":\"L2\",\"interval_ms\":30000,\"priority\":20,"
+                           "\"builtin\":true,\"collects\":false,\"metrics\":[\"cpu\","));
+        assert(has(r.body, "\"name\":\"L3\",\"interval_ms\":1000,\"priority\":30,"
+                           "\"builtin\":true,\"collects\":true,\"metrics\":[\"cpu\","));
+        assert(has(r.body, "\"tcp\",\"udp\",\"fs\",\"clock\",\"cpu.cores\",\"disk.devices\","
+                           "\"net.interfaces\",\"fs.mounts\"]}"));
+        assert(has(r.body, "{\"id\":4,\"name\":\"burst\",\"interval_ms\":300,\"priority\":40,"
+                           "\"builtin\":false,\"collects\":true,"
+                           "\"metrics\":[\"cpu\",\"mem\",\"swap\",\"load\",\"disk\",\"uptime\","
+                           "\"disk.devices\"]}]\n"));
     }
 
     std::printf("test_router: PASS\n");

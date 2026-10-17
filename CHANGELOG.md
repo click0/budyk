@@ -9,6 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Per-level metric sets** (spec §3.4.4). `collection.<level>.metrics`
+  (and `metrics:` on a custom level) says what a level reads: `minimal`
+  (cpu, mem, swap, load, uptime: spec §3.4.1's heartbeat), `standard`
+  (every group), `full` (also `cpu.cores`, `disk.devices`,
+  `net.interfaces`, `fs.mounts`) or a list of names. The defaults, L1
+  `standard` and the rest `full`, read what this version read before.
+  A tick reads the set of the level it slept at, or of the level a
+  client or a request has raised it to since; the collectors a set
+  leaves out do not run. Each sample says what it has: `groups` in the
+  JSON (and in the record, since codec v8), `"collected"` in the detail,
+  `metrics` and `collects` per level in `/api/levels`. The dashboard and
+  the TUI mark the rest "not collected at this level", and the history
+  chart leaves a gap. A rate needs two reads in a row: on the daemon's
+  first tick and on a level's first tick after one that did not read it,
+  its group is left out instead of reading 0.
+- **Rules skip what their level does not collect** (spec §3.6.5). A
+  `when` that reads a missing group or list is skipped for the tick,
+  its `for_ticks` count kept; a level that does not collect it is logged
+  once per rule ("rule 'io' skipped while the level does not collect
+  what it reads: rules.lua:3: disk is not collected at this level"), a
+  rate's first read is not. `collected("disk")` tells a rule what the
+  sample has. A custom level's `when` that reads something missing is
+  false.
+- **`collection.mode`** (spec §3.4.4): `adaptive` (the default),
+  `always` (L3 all the time; the L2 and L1 rings get folded records) or
+  `on-demand` (collect only while a dashboard or TUI is connected, plus
+  `grace_period`, or a custom level is active; thresholds raise
+  nothing, L1 and L2 collect nothing, nothing is written to the rings).
+  The new `tests/smoke/modes.sh` checks the sets and both modes on the
+  daemon.
+
 - **Each core, disk, interface and filesystem, live** (spec §2.1). The
   dashboard gets per-core bars and tables of disks (read / write rates,
   operations, busy %), interfaces (rates, packets, errors, drops, down
@@ -108,6 +139,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Folded records average each group over the samples that have it**,
+  and keep every group some sample had; `budyk suggest-rules` leaves a
+  sample out of a metric's statistics when it lacks that group. A
+  zero from a group that was not collected no longer pulls a mean down.
+
 - **`proc.total` counts processes on Linux too.** It came from
   `/proc/loadavg`, which counts threads; the collector now reads every
   `/proc/<pid>/stat` (for the states), and `proc.threads` has the
@@ -123,6 +159,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   values, checked against the bitwise definition in the tests) makes it
   about eight times faster. `/api/range?level=all` over a day of L3
   went from 36 ms to 16 ms.
+
+### Fixed
+
+- **No CPU spike when a dashboard opens.** Its `/api/samples` poll and
+  its WebSocket connect, a few ms apart, each woke the collection loop,
+  and the second tick computed its rates over those few ms: a core that
+  ran for 3 ms of 3 read 100%, and the spike went into the L3 ring and
+  to the rules. A wake-up now cuts a sleep to no less than 250 ms after
+  the tick (a level's own shorter interval still applies);
+  `tests/smoke/modes.sh` checks that two wake-ups at once leave no two
+  ticks closer than that.
 
 ## [0.6.5] — 2026-10-07
 

@@ -11,7 +11,13 @@ dependencies at runtime, no database. BSD-3-Clause license.
 - **Language:** C++17 (everything except the collectors) + C (platform collectors)
 - **Build:** CMake 3.22+; a static binary by default (`STATIC_LINK=ON`)
 - **Collection:** 3-level adaptive model (L1 heartbeat / L2 watchful / L3 active)
-  plus custom levels (name, interval, priority, Lua `when` condition, hold)
+  plus custom levels (name, interval, priority, Lua `when` condition, hold);
+  each level reads its own `MetricSet` (`collection.<level>.metrics`:
+  minimal / standard / full or a list; `collect_one()` runs only those
+  collectors), and `collection.mode` is adaptive / always / on-demand.
+  `Sample::groups` says what a sample has; a rate's first read in a row is
+  a baseline, not in `groups` (`Sample::baseline`). Rules skip what their
+  sample lacks (`lua_bindings.cpp`: the proxies raise, the engine skips)
 - **Rule engine:** embedded Lua 5.4, sandboxed `watch()` API, per-call
   instruction and memory limits
 - **Metrics:** fixed totals in `Sample` (persisted); per-entity detail
@@ -40,7 +46,9 @@ There is no event-loop library (no libuv, kqueue or epoll). The daemon is:
 - **Main thread:** the collector tick: collect → store → hot buffer → Lua
   rules → WebSocket broadcast → sleep until the next tick. The sleep is a
   `poll()` on a wake pipe, so an escalation (a client connecting, a rule
-  calling `escalate()`) cuts it short.
+  calling `escalate()`) cuts it short, though to no less than 250 ms after
+  the tick (`kMinWakeGapMs`: a rate over a few ms is noise). In on-demand
+  mode a tick whose level is L1 or L2 only sleeps, and nothing is stored.
 - **HTTP thread:** one blocking accept-handle-close loop. Every connection
   is bounded by `HttpServer::set_io_timeout_ms` (5 s) so a stalled client
   cannot hold it. A WebSocket upgrade hands the fd to the hub.
@@ -61,7 +69,8 @@ There is no event-loop library (no libuv, kqueue or epoll). The daemon is:
 ## Directory structure
 
 ```
-src/core/          — Sample struct, codec, json_text, endian.h, clock.h (C++, no I/O)
+src/core/          — Sample struct, codec, metric_set, json_text, endian.h, clock.h
+                     (C++, no I/O)
 src/util/          — shared helpers that need I/O or a library: the data_dir
                      lock (dir_lock), private temp files (tmpfile), libyaml
                      DOM lookups (yaml_dom)
@@ -91,7 +100,8 @@ tests/smoke/       — serve.sh (HTTP, WS, SIGHUP, fd check), crash.sh (SIGKILL 
                      restart), warm_grace.sh (hot buffer emptied after warm_grace),
                      escalate.sh (a sustained anomaly escalates L2 to L3),
                      fsck.sh (fsck, recovery after a crash, the data_dir lock),
-                     upgrade.sh (rings of an older release converted on start)
+                     upgrade.sh (rings of an older release converted on start),
+                     modes.sh (per-level metric sets, always / on-demand)
 addons/            — FreeBSD port + rc.d, systemd unit, Docker
 docs/              — spec (en/uk), man page
 ```
@@ -110,6 +120,7 @@ tests/smoke/warm_grace.sh build/src/budyk  # daemon: hot buffer emptied after wa
 tests/smoke/escalate.sh build/src/budyk  # daemon: a sustained anomaly escalates L2 to L3
 tests/smoke/fsck.sh build/src/budyk      # fsck, start-up recovery, the data_dir lock
 tests/smoke/upgrade.sh build/src/budyk OLD/budyk  # rings of an older release converted
+tests/smoke/modes.sh build/src/budyk     # metric sets per level, always / on-demand
 tests/check_whitespace.sh                # trailing blanks, tabs, CR, final newline
 ```
 
@@ -223,8 +234,6 @@ on every target; a new implicit sign or width change is a build error in CI
 - No process list (top processes by CPU / RSS). The per-entity detail
   (cores, disks, interfaces, filesystems) is live only: not in the rings,
   so not in the history.
-- Every collector runs at every level; no per-level metric sets, no
-  `collection.mode`.
 - Rule semantics that differ from §3.6: `cooldown` defaults to 0; a `nil`
   from `when()` resets the sustain counter; `action = { alert, exec(...) }`
   tables are rejected; `alert()` emits no WebSocket event.
@@ -233,9 +242,10 @@ on every target; a new implicit sign or width change is a build error in CI
 ### Kept on purpose for later milestones (do not remove as dead code)
 
 - `src/core/metric_source.h`, `src/collector/collector.h`
-  (`MetricSource`, `create_collector()`): the collector interface. `main.cpp`
-  calls the C collectors directly today; the interface is for per-level
-  metric sets (a minimal set at L1, the full set at L3).
+  (`MetricSource`, `create_collector()`): the collector interface, unused.
+  Per-level metric sets did not need it: `collect_one()` calls the C
+  collectors directly and leaves out those the level's `MetricSet` does
+  not ask for.
 - `ENABLE_EXEC` in `CMakeLists.txt`: a build-time gate for a binary with
   `exec()` compiled out (air-gapped or hardened hosts), on top of the runtime
   `--enable-exec` / `rules.exec.enabled`.

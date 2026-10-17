@@ -18,14 +18,20 @@ namespace budyk {
 // don't apply to numeric metric fields. Strings we emit (data_dir,
 // version, status) come from trusted sources.
 
-// Serialise one Sample as a JSON object: ts, level, cpu, mem, swap,
+// Serialise one Sample as a JSON object: ts, level, "folded":true on a
+// record folded from finer samples (TierAggregator), groups (the names of
+// the groups the sample has: those its level collected), baseline (when
+// not empty: those read for the first time, a rate from the next tick), cpu, mem, swap,
 // load, disk, net, proc, entropy, self, thermal, file_watch, tcp, udp,
-// fs, clock, uptime_seconds, and "folded":true on a record folded from
-// finer samples (TierAggregator). No trailing newline.
+// fs, clock, uptime_seconds. No trailing newline.
 std::string sample_to_json(const Sample& s);
 
-// The per-entity detail of the newest sample: {"cores":[...],
-// "disks":[...],"interfaces":[...],"filesystems":[...]}, names escaped.
+// The per-entity detail of the newest sample: {"collected":[...],
+// "cores":[...],"disks":[...],"interfaces":[...],"filesystems":[...]},
+// names escaped. "collected" names the lists the sample's level read
+// ("cpu.cores", "disk.devices", "net.interfaces", "fs.mounts"), and
+// "baseline" (when not empty) those read for the first time in a row;
+// the lists not collected are empty.
 std::string detail_to_json(const budyk_detail_c& d);
 
 // Serialise a span of samples as the body of /api/samples:

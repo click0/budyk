@@ -29,6 +29,7 @@ struct LuaRule {
     int         consecutive_hits;  // runtime: current streak of true evaluations
     int         cooldown_remaining;// runtime: ticks left before rule becomes active again
     std::string last_error;        // last logged when/action error, to log each one once
+    std::string last_skip;         // last logged "not collected at this level", likewise
 };
 
 // A request made by escalate() in a rule: keep `level` active for
@@ -78,6 +79,10 @@ public:
     // Returns the number of rules that fired, or -1 if not initialised.
     // `detail` (optional): the per-entity detail of `s`, for the rules'
     // cpu.cores, disk.devices, net.interfaces and fs.mounts.
+    // A when() that reads a group or list `s` lacks (see lua_bindings.h)
+    // skips the rule for this tick: its sustain count stays where it was
+    // (spec §3.6.5). The first skip of each kind is logged, unless it was
+    // only a rate's first read.
     int  eval_tick(const Sample& s, const budyk_detail_c* detail = nullptr);
 
     // Custom-level entry conditions (collection.levels[].when). The
@@ -87,9 +92,21 @@ public:
     int  add_level_condition(uint8_t level_id, const std::string& expr);
     // Binds `s` and evaluates every condition. *active is cleared, then
     // gets the id of each level whose expression is true. A condition
-    // that raises counts as false and is logged once per distinct error.
+    // that raises counts as false and is logged once per distinct error;
+    // so does one that reads what `s` lacks, logged as skipped (unless
+    // only a rate's first read).
     void eval_level_conditions(const Sample& s, std::vector<uint8_t>* active,
                                const budyk_detail_c* detail = nullptr);
+
+    // A level condition and what it last logged: an error, or a skip for
+    // reading what the level does not collect.
+    struct LevelCondition {
+        uint8_t     level_id;
+        int         ref;
+        std::string last_error;
+        std::string last_skip;
+    };
+    const std::vector<LevelCondition>& level_conditions() const;
 
     // Level names escalate() accepts ("L1".."L3" and the custom names).
     void set_level_names(std::vector<std::string> names);
@@ -199,11 +216,6 @@ private:
     AlertDispatcher          alerts_;
     Worker                   exec_worker_{"exec"};
     std::string              last_error_;
-    struct LevelCondition {
-        uint8_t     level_id;
-        int         ref;
-        std::string last_error;
-    };
     std::vector<LevelCondition> level_conditions_;
     std::vector<std::string>    level_names_;
     std::vector<Escalation>     escalations_;

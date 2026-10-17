@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #pragma once
+#include "core/metric_set.h"
 #include "core/sample.h"
 
 #include <atomic>
@@ -11,6 +12,15 @@ namespace budyk {
 
 enum class AnomalyState { NORMAL, ELEVATED, CRITICAL };
 
+// collection.mode (spec §3.4.4):
+//   Adaptive  the levels as below
+//   Always    L3 is always active (a level of higher priority still wins)
+//   OnDemand  thresholds raise no level and escalate nothing; L1 and L2
+//             collect nothing (see Scheduler::collects()), so the daemon
+//             collects only while a client, a custom level or escalate()
+//             holds a level above them
+enum class CollectionMode { Adaptive, Always, OnDemand };
+
 // A user-defined collection level (collection.levels in the config).
 struct CustomLevel {
     uint8_t     id          = 0;   // kFirstCustomLevel + index, set by the loader
@@ -20,9 +30,11 @@ struct CustomLevel {
     std::string when;              // Lua expression; empty = only escalate()
     int         hold_sec    = 0;   // stay active this long after `when` was true
     int         storage_mb  = 50;  // size of the level's own ring file
+    MetricSet   metrics     = metric_set_full();
 };
 
 struct SchedulerConfig {
+    CollectionMode mode    = CollectionMode::Adaptive;
     int  l1_interval_sec   = 300;
     int  l2_interval_sec   = 30;
     int  l3_interval_sec   = 1;
@@ -40,6 +52,11 @@ struct SchedulerConfig {
     double critical_cpu_percent    = 95.0;
     double critical_swap_percent   = 80.0;
 
+    // What each level collects (collection.<level>.metrics).
+    MetricSet l1_metrics = metric_set_standard();
+    MetricSet l2_metrics = metric_set_full();
+    MetricSet l3_metrics = metric_set_full();
+
     std::vector<CustomLevel> custom_levels;
 };
 
@@ -51,10 +68,12 @@ struct SchedulerConfig {
 // priority wins, ties going to the shorter interval:
 //   L1  priority  0   always active (the fallback)
 //   L2  priority 20   a threshold is crossed, then for `hysteresis`
+//                     (not in on-demand mode)
 //   L3  priority 30   a client is connected, then for `grace_period`;
 //                     or the anomaly has held on every tick for
 //                     `escalate_after`, then while it lasts and for
-//                     `grace_period` after its last tick
+//                     `grace_period` after its last tick (not in
+//                     on-demand mode); in always mode, all the time
 //   custom levels     their configured priority, active while requested
 // Any level can also be requested until a deadline (a custom level's
 // `when` condition, or escalate() from a rule).
@@ -91,6 +110,12 @@ public:
     int         interval_ms(Level lv) const;
     int         priority(Level lv)    const;
     const char* level_name(Level lv)  const;
+    // The metric set the level collects.
+    const MetricSet& metrics(Level lv) const;
+    // False for L1 and L2 in on-demand mode: the serve loop sleeps through
+    // them without collecting.
+    bool        collects(Level lv)    const;
+    CollectionMode mode()             const;
     // Level for a name ("L1".."L3", case-insensitive, or a custom name);
     // returns false if there is none.
     bool        level_by_name(const std::string& name, Level* out) const;

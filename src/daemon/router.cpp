@@ -2,6 +2,7 @@
 #include "daemon/router.h"
 
 #include "core/clock.h"
+#include "core/metric_set.h"
 #include "web/auth.h"
 #include "web/http_util.h"
 #include "web/json.h"
@@ -239,7 +240,9 @@ HttpHandler make_router(const RouterDeps& d) {
         }
 
         // Level table, so clients can name the `level` id carried by every
-        // sample: [{"id","name","interval_ms","priority","builtin"}, ...].
+        // sample: [{"id","name","interval_ms","priority","builtin",
+        // "collects","metrics"}, ...]; "collects" is false for L1 and L2 in
+        // on-demand mode, "metrics" names what the level reads.
         if (req.method == "GET" && req.path == "/api/levels") {
             if (!authed(req)) {
                 return budyk::HttpResponse{
@@ -251,11 +254,17 @@ HttpHandler make_router(const RouterDeps& d) {
                 char buf[256];
                 std::snprintf(buf, sizeof(buf),
                     "{\"id\":%u,\"name\":\"%s\",\"interval_ms\":%d,"
-                    "\"priority\":%d,\"builtin\":%s}",
+                    "\"priority\":%d,\"builtin\":%s,\"collects\":%s,\"metrics\":[",
                     static_cast<unsigned>(lv), sched.level_name(lv),
                     sched.interval_ms(lv), sched.priority(lv),
-                    builtin ? "true" : "false");
+                    builtin ? "true" : "false", sched.collects(lv) ? "true" : "false");
                 body += buf;
+                const auto names = budyk::metric_set_names(sched.metrics(lv));
+                for (size_t i = 0; i < names.size(); ++i) {
+                    if (i > 0) body += ",";
+                    body += "\"" + names[i] + "\"";
+                }
+                body += "]}";
             };
             add(budyk::Level::L1, true);
             add(budyk::Level::L2, true);

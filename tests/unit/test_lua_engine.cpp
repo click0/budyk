@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #include "core/sample.h"
+#include "core/metric_set.h"
 #include "rules/lua_engine.h"
 #include "rules/alert.h"
 
@@ -16,6 +17,7 @@ using namespace budyk;
 
 static Sample mk(double cpu_pct, double mem_avail_pct, double load1, double swap_used_pct) {
     Sample s{};
+    s.groups                 = kGroupsAll;
     s.timestamp_nanos        = 1;
     s.level                  = Level::L3;
     s.cpu.total_percent      = cpu_pct;
@@ -997,7 +999,7 @@ int main() {
     // N+1. The per-entity detail reaches rules as read-only collections:
     //      cpu.cores (an array: # and ipairs work), disk.devices,
     //      net.interfaces and fs.mounts (by name). A device that is gone
-    //      is gone from its table; without detail they are empty. Item
+    //      is gone from its table; without detail none is collected. Item
     //      tables are reused, and dropped with the item, so names that
     //      come and go (veths) do not grow the state.
     {
@@ -1025,6 +1027,7 @@ int main() {
             "watch('ro_coll', { when = function() fs.mounts['/x'] = 1 return true end })\n") == 0);
 
         std::unique_ptr<budyk_detail_c> d(new budyk_detail_c());
+        d->collected = kDetailAll;
         d->ncores = 2;
         d->cores[1].iowait_percent = 30.0;
         d->ndisks = 1;
@@ -1048,7 +1051,7 @@ int main() {
         std::snprintf(d->disks[0].name, sizeof(d->disks[0].name), "sdb");
         d->mounts[0].used_percent = 50.0;
         assert(e.eval_tick(x, d.get()) == 2);   // cores, nic
-        assert(e.eval_tick(x, nullptr) == 0);   // no detail: empty collections
+        assert(e.eval_tick(x, nullptr) == 0);   // no detail: no list collected, all skip
 
         // Interface names that change every tick: the state does not grow.
         for (int i = 0; i < 200; ++i) {
@@ -1061,6 +1064,111 @@ int main() {
             e.eval_tick(x, d.get());
         }
         assert(e.memory_used() < after_200 + 64 * 1024);
+        e.shutdown();
+    }
+
+    // N+2. A group or list the sample's level did not collect (spec
+    //      §3.6.5): reading it, its length or pairs() over it raises "<name>
+    //      is not collected at this level"; a when() that does is skipped,
+    //      its sustain count kept, the skip logged once (last_skip), no
+    //      error. collected(name) tells. An action that reads it fails
+    //      like any other. A rule may still pcall() around it. A level
+    //      condition that reads it is false. Once collected, it reads again.
+    {
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        assert(e.load_string(
+            "watch('io', { for_ticks = 3, when = function()\n"
+            "  return disk.read_bytes_per_sec > 100\n"
+            "end })\n"
+            "watch('len', { when = function() return #cpu.cores >= 0 end })\n"
+            "watch('iter', { when = function() for k in pairs(tcp) do end return true end })\n"
+            "watch('guard', { when = function()\n"
+            "  return collected('disk') and collected('disk.devices') and collected('self_')\n"
+            "end })\n"
+            "watch('typo', { when = function() return collected('dsik') end })\n"
+            "watch('act', { when = function() return true end,\n"
+            "               action = function() local x = net.rx_bytes_per_sec end })\n"
+            "watch('caught', { when = function()\n"
+            "  local ok, err = pcall(function() return disk.read_bytes_per_sec end)\n"
+            "  return not ok and err:find('disk is not collected at this level') ~= nil\n"
+            "end })\n") == 0);
+        assert(e.add_level_condition(kFirstCustomLevel, "disk.read_bytes_per_sec > 100") == 0);
+        assert(e.add_level_condition(kFirstCustomLevel + 1, "cpu.total_percent >= 0") == 0);
+
+        Sample full = mk_io(500, 0, 0, 0);
+        Sample bare = full;
+        clear_groups(&bare, kGroupsAll & ~kGroupsMinimal);   // an L1 with metrics: minimal
+        std::unique_ptr<budyk_detail_c> d(new budyk_detail_c());
+        d->collected = kDetailAll;
+        std::unique_ptr<budyk_detail_c> none(new budyk_detail_c());
+
+        // full, bare, full, full: 'io' fires on the 4th (3 hits, the skip kept the count).
+        assert(e.eval_tick(full, d.get()) == 4);   // len, iter, guard, act; io 1/3, caught false
+        assert(e.rules()[0].consecutive_hits == 1);
+        assert(e.eval_tick(bare, none.get()) == 2);   // act (fires, its action fails), caught
+        assert(e.rules()[0].consecutive_hits == 1 && e.rules()[0].last_error.empty());
+        assert(e.rules()[0].last_skip.find("disk is not collected at this level") != std::string::npos);
+        assert(e.rules()[1].last_skip.find("]:4: cpu.cores is not collected at this level") != std::string::npos);
+        assert(e.rules()[2].last_skip.find("]:5: tcp is not collected at this level") != std::string::npos);
+        assert(e.rules()[3].last_skip.empty() && e.rules()[3].last_error.empty());
+        assert(e.rules()[4].last_error.find("collected: unknown metric 'dsik'") != std::string::npos);
+        assert(e.rules()[5].last_error.find("net is not collected at this level") != std::string::npos);
+        std::vector<uint8_t> active;
+        e.eval_level_conditions(bare, &active, none.get());
+        assert((active == std::vector<uint8_t>{uint8_t(kFirstCustomLevel + 1)}));
+        assert(e.level_conditions()[0].last_skip.find("disk is not collected at this level") !=
+               std::string::npos);
+        assert(e.level_conditions()[0].last_error.empty());
+        e.eval_level_conditions(full, &active, d.get());
+        assert(active.size() == 2);
+
+        assert(e.eval_tick(full, d.get()) == 4);
+        assert(e.rules()[0].consecutive_hits == 2);
+        assert(e.eval_tick(full, d.get()) == 5);   // io fires
+        assert(e.rules()[0].fire_count == 1);
+
+        // A rate on its first read (s.baseline, d->baseline): skipped the
+        // same way, sustain kept, but not logged; the error says so.
+        Sample first = full;
+        clear_groups(&first, kGroupDisk | kGroupTcp);
+        first.baseline = kGroupDisk | kGroupTcp;
+        std::unique_ptr<budyk_detail_c> fd(new budyk_detail_c());
+        fd->collected = kDetailAll & ~kDetailCores;
+        fd->baseline  = kDetailCores;
+        LuaEngine f;
+        assert(f.init(false) == 0);
+        assert(f.load_string(
+            "watch('io', { for_ticks = 2, when = function() return disk.read_bytes_per_sec > 100 end })\n"
+            "watch('len', { when = function() return #cpu.cores >= 0 end })\n"
+            "watch('why', { when = function()\n"
+            "  local ok, err = pcall(function() return tcp.established end)\n"
+            "  return not ok and err:find('tcp has no rate yet: its first read at this level') ~= nil\n"
+            "end })\n"
+            "watch('none', { when = function() return not collected('disk') end })\n"
+            "watch('nocores', { when = function() return not collected('cpu.cores') end })\n") == 0);
+        assert(f.eval_tick(full, d.get()) == 1);    // len; io 1/2
+        assert(f.eval_tick(first, fd.get()) == 3);  // why, none, nocores; io and len skipped
+        assert(f.rules()[0].consecutive_hits == 1);
+        assert(f.rules()[0].last_skip.empty() && f.rules()[0].last_error.empty());
+        assert(f.rules()[1].last_skip.empty() && f.rules()[1].last_error.empty());
+        assert(f.eval_tick(full, d.get()) == 2);    // len, and io: the first read kept its count
+        assert(f.add_level_condition(kFirstCustomLevel, "disk.read_bytes_per_sec > 100") == 0);
+        f.eval_level_conditions(first, &active, fd.get());
+        assert(active.empty());
+        assert(f.level_conditions()[0].last_skip.empty() && f.level_conditions()[0].last_error.empty());
+        f.shutdown();
+
+        // A list alone: cpu collected, cpu.cores not.
+        d->collected = kDetailAll & ~kDetailCores;
+        assert(e.eval_tick(full, d.get()) == 3);   // len skipped, guard still true
+        assert(e.rules()[1].fire_count == 3);
+
+        // Swapping the handlers back and forth allocates nothing that stays.
+        for (int i = 0; i < 200; ++i) e.eval_tick(i % 2 ? full : bare, i % 2 ? d.get() : none.get());
+        const size_t settled = e.memory_used();
+        for (int i = 0; i < 2000; ++i) e.eval_tick(i % 2 ? full : bare, i % 2 ? d.get() : none.get());
+        assert(e.memory_used() < settled + 64 * 1024);
         e.shutdown();
     }
 

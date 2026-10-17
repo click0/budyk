@@ -100,6 +100,7 @@ int main() {
     {
         Sample s[10]{};
         for (int i = 0; i < 10; ++i) {
+            s[i].groups = kGroupsAll;
             s[i].cpu.total_percent     = 40.0 + i;
             s[i].cpu.count             = 4;
             s[i].mem.available_percent = 30.0 - i;
@@ -170,6 +171,7 @@ int main() {
     {
         Sample s[10]{};
         for (int i = 0; i < 10; ++i) {
+            s[i].groups = kGroupsAll;
             s[i].cpu.total_percent     = 40.0 + i;
             s[i].cpu.count             = 4;
             s[i].mem.available_percent = 30.0 - i;

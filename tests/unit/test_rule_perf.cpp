@@ -21,6 +21,7 @@ namespace {
 
 Sample mk(int i) {
     Sample s{};
+    s.groups                  = kGroupsAll;
     s.timestamp_nanos         = 1;
     s.level                   = Level::L3;
     s.cpu.total_percent       = 20.0 + (i % 50);
