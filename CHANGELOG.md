@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`budyk fsck [--repair] [--config FILE] [DATA_DIR]`** (spec M4).
+  Checks every ring in the data directory: the header, then each record
+  (CRC, level, time order), and reports per ring the records, their time
+  span and any problem: damaged records (readers skip them; nothing to
+  repair), records of another level, a clock that stepped back (a note:
+  a query across that point may miss records). `--repair` counts in the
+  records written past `write_idx` and never counted, which a crash
+  between a record's `pwrite` and the index update leaves. Exit status
+  as fsck(8): 0 clean, 1 repaired, 4 problems left, 8 the check could
+  not run.
+- **A daemon crash loses no stored record.** On start, `TierManager`
+  counts in such records itself and the daemon logs it
+  ("level-burst.ring: 1 record(s) written before a crash and not yet
+  indexed, now counted in"). It used to lose the last record.
+- **One daemon per data_dir.** `budyk serve` takes an flock on
+  `<data_dir>/budyk.lock` (with its pid in it) and a second one on the
+  same directory stops with "data_dir '...' is in use by another budyk
+  (pid N)". Two daemons used to write into the same rings. `fsck
+  --repair` takes the same lock; a plain check runs next to the daemon.
+
 - **A sustained anomaly escalates to L3** (spec §3.4.1, "escalation
   from L2"). A crossed load, CPU or swap threshold switched on L2 and
   nothing more, however long it lasted. Now, once it has held on every
@@ -44,6 +64,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   samples are overwritten.
 
 ### Changed
+
+- **`budyk suggest-rules` opens `tier1.ring` read-only.** It opened it
+  for writing and created it when missing: run as root before the
+  daemon's first start, it left a root-owned ring the daemon could not
+  open.
 
 - **CRC32C by table.** Every record read checks a CRC32C, computed
   bit by bit until now; a 256-entry table (same polynomial, identical

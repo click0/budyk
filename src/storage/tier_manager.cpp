@@ -2,6 +2,7 @@
 #include "storage/tier_manager.h"
 
 #include "storage/codec.h"
+#include "storage/ring_check.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -15,9 +16,6 @@ namespace {
 // Capacities arrive in MiB; convert to record counts using the codec's
 // per-record size. Floor at 1 record so an absurdly tiny budget still
 // produces a usable ring (mostly for tests).
-// Header tier byte for custom-level rings (built-ins use 1..3).
-constexpr uint8_t kCustomRingTier = 0x80;
-
 uint64_t records_from_mb(int mb, size_t record_size) {
     if (mb <= 0 || record_size == 0) return 1;
     constexpr uint64_t kMiB  = 1024 * 1024;
@@ -129,6 +127,7 @@ int TierManager::init(const char* data_dir,
                       int tier3_max_mb,
                       const std::vector<LevelRingSpec>& custom) {
     last_error_.clear();
+    recovered_.clear();
     if (data_dir == nullptr) { last_error_ = "data_dir is null"; return -1; }
     if (ready_)              { last_error_ = "already initialised"; return -2; }
 
@@ -164,6 +163,7 @@ int TierManager::init(const char* data_dir,
         ring_failed("tier1.ring", tier1_, rc);
         return -4;
     }
+    recover("tier1.ring", &tier1_);
 
     if (!join_path(path, sizeof(path), data_dir, "tier2.ring")) {
         path_failed("tier2.ring");
@@ -175,6 +175,7 @@ int TierManager::init(const char* data_dir,
         tier1_.close();
         return -6;
     }
+    recover("tier2.ring", &tier2_);
 
     if (!join_path(path, sizeof(path), data_dir, "tier3.ring")) {
         path_failed("tier3.ring");
@@ -188,6 +189,7 @@ int TierManager::init(const char* data_dir,
         tier1_.close();
         return -8;
     }
+    recover("tier3.ring", &tier3_);
 
     // Custom levels. Every custom ring has the same header tier byte; the
     // file name identifies the level.
@@ -210,6 +212,7 @@ int TierManager::init(const char* data_dir,
             tier1_.close();
             return -9;
         }
+        recover(leaf.c_str(), ring.get());
         custom_.push_back(CustomRing{spec.level_id, std::move(ring)});
     }
 
@@ -218,6 +221,17 @@ int TierManager::init(const char* data_dir,
 }
 
 const std::string& TierManager::last_error() const { return last_error_; }
+
+const std::vector<TierManager::Recovered>& TierManager::recovered() const {
+    return recovered_;
+}
+
+void TierManager::recover(const char* leaf, RingFile* ring) {
+    const uint64_t n = count_unindexed(*ring);
+    if (n > 0 && ring->advance_write_index(n) == 0) {
+        recovered_.push_back(Recovered{leaf, n});
+    }
+}
 
 void TierManager::set_fold_windows(uint64_t l2_ns, uint64_t l1_ns) {
     fold_l2_ns_ = l2_ns;

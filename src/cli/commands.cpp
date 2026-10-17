@@ -59,8 +59,10 @@ int load_samples_for_suggest(const char* ring_path,
                              uint64_t cap,
                              uint64_t window_ns,
                              std::vector<budyk::Sample>* out) {
+    // Read only: the daemon owns the rings (and running this as root must
+    // not leave a root-owned ring behind for it).
     budyk::RingFile ring;
-    if (ring.open(ring_path, /*tier*/1, record_size, cap) != 0) return -1;
+    if (ring.open_read_only(ring_path, /*tier*/1, record_size, cap) != 0) return -1;
 
     const uint64_t widx     = ring.write_index();
     const uint64_t valid    = widx < cap ? widx : cap;

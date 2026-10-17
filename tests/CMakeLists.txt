@@ -28,6 +28,7 @@ budyk_add_test(test_scheduler       LIBS budyk_scheduler budyk_core)
 budyk_add_test(test_ring_file       LIBS budyk_storage budyk_core)
 budyk_add_test(test_tier_aggregator LIBS budyk_storage budyk_core)
 budyk_add_test(test_tier_manager    LIBS budyk_storage budyk_core)
+budyk_add_test(test_ring_check      LIBS budyk_storage budyk_core)
 
 # AI suggestions
 budyk_add_test(test_baseline        LIBS budyk_ai budyk_core)

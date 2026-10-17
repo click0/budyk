@@ -56,15 +56,17 @@ There is no event-loop library (no libuv, kqueue or epoll). The daemon is:
 
 ```
 src/core/          — Sample struct, codec, json_text, endian.h, clock.h (C++, no I/O)
-src/util/          — shared helpers that need I/O or a library: private temp
-                     files (tmpfile), libyaml DOM lookups (yaml_dom)
+src/util/          — shared helpers that need I/O or a library: the data_dir
+                     lock (dir_lock), private temp files (tmpfile), libyaml
+                     DOM lookups (yaml_dom)
 src/collector/     — platform metric collection (plain C)
   freebsd/         — sysctl, devstat, kvm, getifaddrs
   linux/           — /proc, /sys parsers
 src/scheduler/     — L1↔L2↔L3 (+ custom levels) tick scheduler, anomaly detection
 src/hot_buffer/    — in-memory ring for WS catch-up (RAM-only)
 src/storage/       — ring files (mmap header, pwrite, CRC32C), TierManager,
-                     TierAggregator (the L2/L1 folds)
+                     TierAggregator (the L2/L1 folds), ring_check (fsck and
+                     the start-up recovery of unindexed records)
 src/rules/         — Lua 5.4 engine, sandbox, bindings, alerts, exec, freeze, Worker
 src/security/      — file watcher (inotify / kqueue) feeding the `files` Lua global
 src/ai/            — rule suggestions (Tier A: local stats; Tier B: LLM via curl)
@@ -76,12 +78,13 @@ src/daemon/        — the daemon: serve.cpp (loop, signals, reload, shutdown),
                      router.cpp (HTTP routes behind RouterDeps, testable without
                      a socket), collect.cpp (C collectors → Sample)
 src/cli/           — the one-shot commands: hash-password, suggest-rules,
-                     watch-files, tui
+                     watch-files, tui, fsck (fsck.cpp)
 src/main.cpp       — dispatch only
 tests/unit/        — one assert()-based executable per module (ctest)
 tests/smoke/       — serve.sh (HTTP, WS, SIGHUP, fd check), crash.sh (SIGKILL +
                      restart), warm_grace.sh (hot buffer emptied after warm_grace),
-                     escalate.sh (a sustained anomaly escalates L2 to L3)
+                     escalate.sh (a sustained anomaly escalates L2 to L3),
+                     fsck.sh (fsck, recovery after a crash, the data_dir lock)
 addons/            — FreeBSD port + rc.d, systemd unit, Docker
 docs/              — spec (en/uk), man page
 ```
@@ -98,6 +101,7 @@ tests/smoke/serve.sh build/src/budyk     # daemon: endpoints, WS, SIGHUP, close-
 tests/smoke/crash.sh build/src/budyk     # daemon: SIGKILL + restart, at most one record lost
 tests/smoke/warm_grace.sh build/src/budyk  # daemon: hot buffer emptied after warm_grace
 tests/smoke/escalate.sh build/src/budyk  # daemon: a sustained anomaly escalates L2 to L3
+tests/smoke/fsck.sh build/src/budyk      # fsck, start-up recovery, the data_dir lock
 tests/check_whitespace.sh                # trailing blanks, tabs, CR, final newline
 ```
 
@@ -167,8 +171,11 @@ on every target; a new implicit sign or width change is a build error in CI
    client has been connected for `hot_buffer.warm_grace` (`WarmGrace`).
 4. Storage records carry an absolute timestamp, a level marker, a flags
    byte (bit 0: folded) and a CRC32C; each level has its own ring;
-   `write_idx` is advanced only after the `pwrite`, so a crash loses at most
-   one record (`tests/smoke/crash.sh`). The L2 and L1 rings get folded
+   `write_idx` is advanced only after the `pwrite`, and on start
+   `TierManager::init()` counts in a record that reached its slot but not
+   the index (`count_unindexed()`), so a daemon crash loses no stored
+   record (`tests/smoke/crash.sh`, `fsck.sh`). `budyk serve` holds an
+   flock on `<data_dir>/budyk.lock`: one daemon per data_dir. The L2 and L1 rings get folded
    records while a finer level runs (spec §3.4.1); a window ends after its
    interval, when the level drops to the ring's own, or on shutdown — a
    SIGKILL loses the open windows, not the raw samples.
@@ -205,7 +212,6 @@ on every target; a new implicit sign or width change is a build error in CI
 - The metric set is roughly 40% of §2.1: no per-core CPU, per-device disk,
   per-interface network, TCP/socket counters, filesystem usage or process
   list.
-- No `fsck`; damaged records are skipped on read.
 - Every collector runs at every level; no per-level metric sets, no
   `collection.mode`.
 - Rule semantics that differ from §3.6: `cooldown` defaults to 0; a `nil`
