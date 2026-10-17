@@ -220,6 +220,56 @@ int main() {
         assert(sch.current_level() == before);
     }
 
+    // 11. A sustained anomaly escalates to L3 (spec §3.4.1). With
+    //     escalate_after 100 s at the L2 cadence, ticks 0..90 stay L2 and
+    //     the tick at 100 s goes L3. L3 then holds while the anomaly lasts
+    //     and for grace_period (60 s) after its last tick; a dip inside
+    //     the grace doesn't end it. Before escalation, one normal tick
+    //     starts the count again; 0 turns escalation off.
+    {
+        SchedulerConfig c = cfg;
+        c.escalate_after_sec = 100;
+        auto hot = [](uint64_t t) { Sample x = at(t); x.cpu.total_percent = 90.0; return x; };
+
+        Scheduler sch(c);
+        for (uint64_t t = 0; t < 100; t += 30) {
+            assert(sch.tick(hot(t)) == Level::L2);
+            assert(!sch.escalated());
+        }
+        assert(sch.tick(hot(100)) == Level::L3 && sch.escalated());
+        assert(sch.tick(hot(101)) == Level::L3);
+        assert(sch.tick(at(120))  == Level::L3);   // a dip, 19 s after the last hot tick
+        assert(sch.tick(hot(121)) == Level::L3);   // back: the same run
+        assert(sch.tick(at(150))  == Level::L3);   // 29 s since 121
+        assert(sch.tick(at(180))  == Level::L3);   // 59 s
+        assert(sch.tick(at(182))  == Level::L2 && !sch.escalated());   // 61 s: over,
+                                                   // hysteresis keeps L2
+        assert(sch.tick(at(500))  == Level::L1);   // past hysteresis too
+
+        // A normal tick before escalation resets the count.
+        Scheduler b(c);
+        assert(b.tick(hot(0))  == Level::L2);
+        assert(b.tick(hot(90)) == Level::L2);
+        assert(b.tick(at(95))  == Level::L2);      // normal: run broken
+        assert(b.tick(hot(100)) == Level::L2);     // a new run starts at 100
+        assert(b.tick(hot(190)) == Level::L2 && !b.escalated());
+        assert(b.tick(hot(200)) == Level::L3 && b.escalated());
+
+        // escalate_after 0: never.
+        c.escalate_after_sec = 0;
+        Scheduler z(c);
+        for (uint64_t t = 0; t <= 3600; t += 30) assert(z.tick(hot(t)) == Level::L2);
+        assert(!z.escalated());
+
+        // A clock step back restarts the run rather than escalating at once.
+        c.escalate_after_sec = 100;
+        Scheduler k(c);
+        assert(k.tick(hot(1000)) == Level::L2);
+        assert(k.tick(hot(10))   == Level::L2 && !k.escalated());
+        assert(k.tick(hot(109))  == Level::L2);
+        assert(k.tick(hot(110))  == Level::L3);
+    }
+
     std::printf("test_scheduler: PASS\n");
     return 0;
 }

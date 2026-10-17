@@ -19,6 +19,9 @@ collection:
     always_on: false       # `true` keeps the watchful tier alive without
                            # an active client / anomaly
     hysteresis: 300        # seconds before stepping down a level
+    escalate_after: 300    # an anomaly that holds this long (seconds, on
+                           # every tick) switches L3 on until it clears;
+                           # 0 = never
     escalation_thresholds:
       load_1m: 4.0
       cpu_percent: 85

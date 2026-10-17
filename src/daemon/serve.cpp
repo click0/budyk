@@ -499,6 +499,7 @@ int cmd_serve(int argc, char* argv[], const char* version) {
         level_hold_ns[lv.id] = static_cast<uint64_t>(lv.hold_sec) * kNsPerSec;
     }
     std::vector<uint8_t> level_hits;
+    bool escalated = false;   // a sustained anomaly holds L3 (logged on change)
 
     while (!g_stop) {
         // SIGHUP latched in the handler — process it at a clean tick
@@ -562,6 +563,20 @@ int cmd_serve(int argc, char* argv[], const char* version) {
                           s.timestamp_nanos + level_hold_ns[id]);
         }
         s.level = sched.tick(s);
+        if (sched.escalated() != escalated) {
+            escalated = sched.escalated();
+            if (escalated) {
+                std::fprintf(stderr,
+                    "budyk serve: anomaly held for %d s (load 1m %.2f, cpu %.1f%%, "
+                    "swap %.1f%%): collecting at L3 until it clears\n",
+                    cfg.scheduler.escalate_after_sec, s.load.avg_1m,
+                    s.cpu.total_percent, s.swap.used_percent);
+            } else {
+                std::fprintf(stderr,
+                    "budyk serve: anomaly gone for %d s: escalation to L3 ended\n",
+                    cfg.scheduler.grace_period_sec);
+            }
+        }
         tm.store(s);
         {
             std::lock_guard<std::mutex> g(hot_mtx);

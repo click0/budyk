@@ -22,6 +22,7 @@ int main() {
         assert(c.listen_port == 8080);
         assert(c.scheduler.l1_interval_sec == 300);
         assert(c.scheduler.hysteresis_sec  == 300);
+        assert(c.scheduler.escalate_after_sec == 300);
         assert(near(c.scheduler.escalation_load_1m, 4.0));
     }
 
@@ -48,6 +49,7 @@ int main() {
             "    interval: 45\n"
             "    always_on: true\n"
             "    hysteresis: 120\n"
+            "    escalate_after: 0\n"
             "    escalation_thresholds:\n"
             "      load_1m: 2.5\n"
             "      cpu_percent: 75\n"
@@ -59,6 +61,7 @@ int main() {
         assert(c.scheduler.l2_interval_sec == 45);
         assert(c.scheduler.l2_always_on    == true);
         assert(c.scheduler.hysteresis_sec  == 120);
+        assert(c.scheduler.escalate_after_sec == 0);
         assert(near(c.scheduler.escalation_load_1m,     2.5));
         assert(near(c.scheduler.escalation_cpu_percent, 75.0));
         assert(near(c.scheduler.escalation_swap_percent, 30.0));
@@ -382,6 +385,7 @@ int main() {
             "port: 70000\n"
             "collection:\n"
             "  l1: { interval: -5 }\n"
+            "  l2: { escalate_after: -1 }\n"
             "  l3: { interval: 0, grace_period: -1 }\n"
             "  hot_buffer: { capacity: 0 }\n"
             "storage: { tier1_max_mb: 0 }\n", &c) == 0);
@@ -390,6 +394,7 @@ int main() {
         assert(c.scheduler.l1_interval_sec  == d.scheduler.l1_interval_sec);
         assert(c.scheduler.l3_interval_sec  == d.scheduler.l3_interval_sec);
         assert(c.scheduler.grace_period_sec == d.scheduler.grace_period_sec);
+        assert(c.scheduler.escalate_after_sec == d.scheduler.escalate_after_sec);
         assert(c.hot_buffer_capacity        == d.hot_buffer_capacity);
         assert(c.tier1_max_mb               == d.tier1_max_mb);
     }

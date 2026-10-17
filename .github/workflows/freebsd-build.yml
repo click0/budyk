@@ -105,6 +105,7 @@ jobs:
             tests/smoke/serve.sh build-static/src/budyk
             tests/smoke/crash.sh build-static/src/budyk
             tests/smoke/warm_grace.sh build-static/src/budyk
+            tests/smoke/escalate.sh build-static/src/budyk
             echo "::endgroup::"
 
             echo "::group::Disk usage"

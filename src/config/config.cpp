@@ -224,6 +224,7 @@ void clamp_numbers(Config* c) {
     clamp_int(&c->scheduler.l3_interval_sec, 1, 86400, d.scheduler.l3_interval_sec, "collection.l3.interval");
     clamp_int(&c->scheduler.hysteresis_sec,   0, 86400, d.scheduler.hysteresis_sec,   "collection.l2.hysteresis");
     clamp_int(&c->scheduler.grace_period_sec, 0, 86400, d.scheduler.grace_period_sec, "collection.l3.grace_period");
+    clamp_int(&c->scheduler.escalate_after_sec, 0, 86400, d.scheduler.escalate_after_sec, "collection.l2.escalate_after");
     clamp_int(&c->hot_buffer_capacity,   1, 100000, d.hot_buffer_capacity,   "collection.hot_buffer.capacity");
     clamp_int(&c->hot_buffer_warm_grace, 0, 86400,  d.hot_buffer_warm_grace, "collection.hot_buffer.warm_grace");
     clamp_int(&c->tier1_max_mb, 1, 100000, d.tier1_max_mb, "storage.tier1_max_mb");
@@ -247,6 +248,7 @@ void apply_collection(yaml_document_t* d, const yaml_node_t* col, Config* out) {
         apply_int (d, l2, "interval",   &out->scheduler.l2_interval_sec);
         apply_bool(d, l2, "always_on",  &out->scheduler.l2_always_on);
         apply_int (d, l2, "hysteresis", &out->scheduler.hysteresis_sec);
+        apply_int (d, l2, "escalate_after", &out->scheduler.escalate_after_sec);   // seconds
         if (auto* e = yaml_find_key(d, l2, "escalation_thresholds")) {
             apply_double(d, e, "load_1m",           &out->scheduler.escalation_load_1m);
             apply_double(d, e, "cpu_percent",       &out->scheduler.escalation_cpu_percent);

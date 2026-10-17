@@ -29,6 +29,9 @@ struct SchedulerConfig {
     int  hysteresis_sec    = 300;
     int  grace_period_sec  = 60;
     bool l2_always_on      = false;
+    // An anomaly that has held on every tick for this long escalates to
+    // L3 (spec §3.4.1, "escalation from L2"); 0 turns that off.
+    int  escalate_after_sec = 300;
 
     double escalation_load_1m      = 4.0;
     double escalation_cpu_percent  = 85.0;
@@ -48,7 +51,10 @@ struct SchedulerConfig {
 // priority wins, ties going to the shorter interval:
 //   L1  priority  0   always active (the fallback)
 //   L2  priority 20   a threshold is crossed, then for `hysteresis`
-//   L3  priority 30   a client is connected, then for `grace_period`
+//   L3  priority 30   a client is connected, then for `grace_period`;
+//                     or the anomaly has held on every tick for
+//                     `escalate_after`, then while it lasts and for
+//                     `grace_period` after its last tick
 //   custom levels     their configured priority, active while requested
 // Any level can also be requested until a deadline (a custom level's
 // `when` condition, or escalate() from a rule).
@@ -100,6 +106,8 @@ public:
     Level        current_level()   const;
     AnomalyState current_anomaly() const;
     int          client_count()    const;
+    // True while a sustained anomaly holds L3 (see escalate_after_sec).
+    bool         escalated()       const;
 
 private:
     SchedulerConfig  cfg_;
@@ -110,6 +118,13 @@ private:
     uint64_t         last_client_active_ns_;
     bool             had_anomaly_;
     bool             had_clients_;
+    // The current run of anomalous ticks: whether there is one, when it
+    // started, and whether it has lasted escalate_after. Before that, one
+    // normal tick ends the run; after it, the run (and L3) ends once the
+    // anomaly has been gone for grace_period.
+    bool             in_anomaly_run_       = false;
+    uint64_t         anomaly_run_start_ns_ = 0;
+    bool             escalated_            = false;
     bool             requested_[kMaxLevelId + 1]          = {};
     uint64_t         requested_until_ns_[kMaxLevelId + 1] = {};
 
