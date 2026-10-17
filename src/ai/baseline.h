@@ -22,7 +22,11 @@ struct MetricBaseline {
 // a zeroed struct with n == 0.
 MetricBaseline compute_stats(const double* values, size_t n);
 
-// Extract a scalar metric from a Sample array and compute its stats.
+// cpu.count of the newest sample that has the cpu group; 0 if none does.
+uint32_t newest_cpu_count(const Sample* s, size_t n);
+
+// Extract a scalar metric from a Sample array and compute its stats,
+// over the samples that have its group (Sample::groups).
 MetricBaseline compute_cpu_total_percent_stats       (const Sample* s, size_t n);
 MetricBaseline compute_mem_available_percent_stats   (const Sample* s, size_t n);
 MetricBaseline compute_swap_used_percent_stats       (const Sample* s, size_t n);

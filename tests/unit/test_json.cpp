@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: BSD-3-Clause
+#include "core/metric_set.h"
 #include "core/sample.h"
 #include "web/json.h"
 
@@ -217,7 +218,7 @@ int main() {
         assert(sample_to_json(s).find("folded") == std::string::npos);
         s.folded = true;
         const std::string j = sample_to_json(s);
-        assert(j.find("\"level\":1,\"folded\":true,\"cpu\":{") != std::string::npos);
+        assert(j.find("\"level\":1,\"folded\":true,\"groups\":[],\"cpu\":{") != std::string::npos);
     }
 
     // 8. detail_to_json: cores, disks, interfaces, filesystems, names
@@ -247,15 +248,45 @@ int main() {
         assert(contains(j, "\"total_bytes\":1000,"));
 
         d->ncores = d->ndisks = d->nifaces = d->nmounts = 0;
-        assert(detail_to_json(*d) == "{\"cores\":[],\"disks\":[],\"interfaces\":[],\"filesystems\":[]}");
+        assert(detail_to_json(*d) ==
+               "{\"collected\":[],\"cores\":[],\"disks\":[],\"interfaces\":[],\"filesystems\":[]}");
+        d->collected = kDetailAll;
+        assert(contains(detail_to_json(*d), "{\"collected\":[\"cpu.cores\",\"disk.devices\","
+                                            "\"net.interfaces\",\"fs.mounts\"],\"cores\":[]"));
+        d->collected = kDetailDisks | kDetailMounts;
+        assert(contains(detail_to_json(*d), "{\"collected\":[\"disk.devices\",\"fs.mounts\"],\"cores\""));
+        d->baseline = kDetailCores | kDetailInterfaces;
+        assert(contains(detail_to_json(*d), "\"fs.mounts\"],\"baseline\":[\"cpu.cores\","
+                                            "\"net.interfaces\"],\"cores\":["));
+        d->baseline = 0;
 
         Sample x{};
         x.level = Level::L3;
         const std::string with = samples_to_json(&x, 1, &j);
-        assert(contains(with, "}],\"detail\":{\"cores\":[") && with.back() == '\n');
+        assert(contains(with, "}],\"detail\":{\"collected\":[],\"cores\":[") && with.back() == '\n');
         const std::string empty;
         assert(!contains(samples_to_json(&x, 1, &empty), "detail"));
         assert(!contains(samples_to_json(&x, 1), "detail"));
+    }
+
+    // 9. "groups" names the groups a sample has, in bit order, file_watch
+    //    and the v8 ones included.
+    {
+        Sample s{};
+        s.groups = kGroupsMinimal | kGroupFileWatch | kGroupClock;
+        assert(contains(sample_to_json(s),
+                        "\"groups\":[\"cpu\",\"mem\",\"swap\",\"load\",\"file_watch\","
+                        "\"uptime\",\"clock\"],\"cpu\":{"));
+        assert(!contains(sample_to_json(s), "baseline"));
+        s.baseline = kGroupDisk | kGroupTcp;
+        assert(contains(sample_to_json(s), "\"clock\"],\"baseline\":[\"disk\",\"tcp\"],\"cpu\":{"));
+        s.baseline = 0;
+        s.groups = kGroupsAll;
+        const std::string all = sample_to_json(s);
+        for (const char* g : { "\"disk\"", "\"net\"", "\"proc\"", "\"entropy\"", "\"self\"",
+                               "\"thermal\"", "\"tcp\"", "\"udp\"", "\"fs\"" }) {
+            assert(contains(all.substr(0, all.find("\"cpu\":{")), g));
+        }
     }
 
     std::printf("test_json: PASS\n");

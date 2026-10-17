@@ -3,6 +3,7 @@
 # Core library (C++17, no I/O)
 add_library(budyk_core STATIC
     core/json_text.cpp
+    core/metric_set.cpp
     core/sample.cpp
     core/codec.cpp
 )

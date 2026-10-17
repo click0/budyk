@@ -25,13 +25,16 @@ namespace budyk {
 //   min       entropy.available_bits — so does a drained pool
 //   sum       file_watch.events_this_tick — events in the whole window
 //   any       the present flags
-//   all       clock.synced (of the samples that read the clock), groups
-//             (a group only if every sample had it)
+//   all       clock.synced (of the samples that read the clock)
 //   last      timestamp_nanos (the window's end), the counts and totals
 //             (cpu.count, mem.total, swap.total, disk.device_count,
 //             net.interface_count, thermal.sensor_count, fs.count,
 //             file_watch.watched_count), uptime_seconds and the
 //             cumulative self_ fields (peak_rss_bytes, cpu_*_seconds)
+// Each group comes from the samples that have it (Sample::groups): its
+// means divide by their number, its last fields are the last of them,
+// and the result has every group some sample had. A group no sample had
+// stays zero.
 // The result has level `out_level` and folded = true.
 //
 // Single-threaded; fold() returns the summary and starts a new window.
@@ -51,9 +54,12 @@ public:
     void   reset();
 
 private:
+    static constexpr unsigned kGroupCount = 16;   // MetricGroup bits
+
     Level    out_level_;
     size_t   n_;
     uint64_t first_ts_;
+    uint32_t group_n_[kGroupCount];   // samples that had each group
 
     // Means.
     double   cpu_total_percent_sum_;
@@ -87,7 +93,6 @@ private:
     bool         udp_present_;
     FsStats      fs_max_;     // the two percentages max, present
     ClockStats   clock_;      // offset (largest |x|), max error, synced, present
-    uint32_t     groups_;
 
     Sample   last_;
 };

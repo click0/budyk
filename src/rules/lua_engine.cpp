@@ -35,6 +35,16 @@ void log_rule_error(std::string* last, const char* rule, const char* part,
     std::fprintf(stderr, "budyk: rule '%s' %s failed: %s\n", rule, part, m);
 }
 
+// A when() or level condition that read what this level does not
+// collect: logged once per distinct message, as a skip, not a failure.
+void log_skip(std::string* last, const char* what, const char* msg) {
+    const char* m = msg != nullptr ? msg : "unknown error";
+    if (*last == m) return;
+    *last = m;
+    std::fprintf(stderr, "budyk: %s skipped while the level does not collect what it reads: %s\n",
+                 what, m);
+}
+
 void open_sandbox_libs(lua_State* L) {
     // Only the safe subset: base + math + string + table.
     luaL_requiref(L, "_G",     luaopen_base,   1); lua_pop(L, 1);
@@ -107,6 +117,7 @@ int LuaEngine::init(bool enable_exec) {
     lua_setfield(L, LUA_REGISTRYINDEX, kEngineRegKey);
 
     budyk_lua_register_stdlib(L, enable_exec);
+    budyk_lua_register_collected(L);
 
     lua_sethook(L, &LuaEngine::count_hook, LUA_MASKCOUNT, kHookInterval);
 
@@ -261,6 +272,16 @@ int LuaEngine::eval_tick(const Sample& s, const budyk_detail_c* detail) {
         lua_rawgeti(L_, LUA_REGISTRYINDEX, r.when_ref);
         begin_call();
         if (lua_pcall(L_, 0, 1, 0) != LUA_OK) {
+            if (const int why = budyk_lua_uncollected(L_, -1); why != 0) {
+                // Skipped: the sustain count stays. A rate's first read
+                // passes in a tick; a level that does not collect it is
+                // worth a line.
+                if (why == 1) {
+                    log_skip(&r.last_skip, ("rule '" + r.name + "'").c_str(), lua_tostring(L_, -1));
+                }
+                lua_pop(L_, 1);
+                continue;
+            }
             log_rule_error(&r.last_error, r.name.c_str(), "when", lua_tostring(L_, -1));
             lua_pop(L_, 1);
             r.consecutive_hits = 0;
@@ -362,7 +383,7 @@ int LuaEngine::add_level_condition(uint8_t level_id, const std::string& expr) {
         return -2;
     }
     level_conditions_.push_back(
-        LevelCondition{level_id, luaL_ref(L_, LUA_REGISTRYINDEX), std::string()});
+        LevelCondition{level_id, luaL_ref(L_, LUA_REGISTRYINDEX), std::string(), std::string()});
     return 0;
 }
 
@@ -380,6 +401,14 @@ void LuaEngine::eval_level_conditions(const Sample& s, std::vector<uint8_t>* act
         lua_rawgeti(L_, LUA_REGISTRYINDEX, c.ref);
         begin_call();
         if (lua_pcall(L_, 0, 1, 0) != LUA_OK) {
+            if (const int why = budyk_lua_uncollected(L_, -1); why != 0) {
+                if (why == 1) {
+                    const std::string what = "level " + std::to_string(c.level_id) + " condition";
+                    log_skip(&c.last_skip, what.c_str(), lua_tostring(L_, -1));
+                }
+                lua_pop(L_, 1);
+                continue;
+            }
             const char* m = lua_tostring(L_, -1);
             const std::string msg = m != nullptr ? m : "unknown error";
             if (c.last_error != msg) {
@@ -394,6 +423,10 @@ void LuaEngine::eval_level_conditions(const Sample& s, std::vector<uint8_t>* act
         if (lua_toboolean(L_, -1) != 0) active->push_back(c.level_id);
         lua_pop(L_, 1);
     }
+}
+
+const std::vector<LuaEngine::LevelCondition>& LuaEngine::level_conditions() const {
+    return level_conditions_;
 }
 
 void LuaEngine::set_level_names(std::vector<std::string> names) {
@@ -429,7 +462,7 @@ void LuaEngine::add_rule(const std::string& name, int when_ref, int action_ref,
         /*fire_count*/ 0,
         for_ticks, cooldown_ticks,
         /*consecutive_hits*/ 0, /*cooldown_remaining*/ 0,
-        /*last_error*/ std::string()
+        /*last_error*/ std::string(), /*last_skip*/ std::string()
     });
 }
 

@@ -123,6 +123,33 @@ bool valid_level_name(const std::string& n) {
     return true;
 }
 
+// <level>.metrics: a set name or a list of names (parse_metric_set). A
+// bad one is logged and the level keeps its default.
+void apply_metrics(yaml_document_t* d, const yaml_node_t* m, const char* where,
+                   MetricSet* dst) {
+    const yaml_node_t* n = yaml_find_key(d, m, "metrics");
+    if (n == nullptr) return;
+    std::vector<std::string> names;
+    if (const char* v = yaml_scalar(n)) {
+        names.emplace_back(v);
+    } else if (n->type == YAML_SEQUENCE_NODE) {
+        for (auto* item = n->data.sequence.items.start;
+             item     != n->data.sequence.items.top; ++item) {
+            const char* name = yaml_scalar(yaml_document_get_node(d, *item));
+            names.emplace_back(name != nullptr ? name : "(not a name)");
+        }
+    } else {
+        names.emplace_back("(not a name)");
+    }
+    std::string error;
+    if (parse_metric_set(names, dst, &error) != 0) {
+        std::fprintf(stderr,
+            "budyk config: %s.metrics: %s (a set: minimal, standard, full; or a list "
+            "of groups such as cpu, disk, net.interfaces); using the default\n",
+            where, error.c_str());
+    }
+}
+
 // collection.levels: a sequence of user-defined levels. Each needs name,
 // interval (seconds, fractions allowed, 0.1 .. 86400) and priority; when,
 // hold (seconds >= 0) and storage_mb (>= 1) are optional. A level that
@@ -195,6 +222,8 @@ void apply_custom_levels(yaml_document_t* d, const yaml_node_t* col,
             }
             lv.storage_mb = static_cast<int>(mb);
         }
+        const std::string where = "collection.levels[" + std::to_string(index) + "]";
+        apply_metrics(d, n, where.c_str(), &lv.metrics);
 
         if (dst->size() >= kMaxCustomLevels) {
             reject("too many levels (at most 16)");
@@ -241,14 +270,29 @@ void clamp_numbers(Config* c) {
 void apply_collection(yaml_document_t* d, const yaml_node_t* col, Config* out) {
     if (col == nullptr) return;
 
-    if (auto* l1 = yaml_find_key(d, col, "l1"))
+    if (const yaml_node_t* m = yaml_find_key(d, col, "mode")) {
+        const char* v = yaml_scalar(m);
+        if      (v != nullptr && std::strcmp(v, "adaptive")  == 0) out->scheduler.mode = CollectionMode::Adaptive;
+        else if (v != nullptr && std::strcmp(v, "always")    == 0) out->scheduler.mode = CollectionMode::Always;
+        else if (v != nullptr && std::strcmp(v, "on-demand") == 0) out->scheduler.mode = CollectionMode::OnDemand;
+        else {
+            std::fprintf(stderr,
+                "budyk config: collection.mode: '%s' is not adaptive, always or on-demand; "
+                "using adaptive\n", v != nullptr ? v : "(not a name)");
+            out->scheduler.mode = CollectionMode::Adaptive;
+        }
+    }
+    if (auto* l1 = yaml_find_key(d, col, "l1")) {
         apply_int(d, l1, "interval", &out->scheduler.l1_interval_sec);
+        apply_metrics(d, l1, "collection.l1", &out->scheduler.l1_metrics);
+    }
 
     if (auto* l2 = yaml_find_key(d, col, "l2")) {
         apply_int (d, l2, "interval",   &out->scheduler.l2_interval_sec);
         apply_bool(d, l2, "always_on",  &out->scheduler.l2_always_on);
         apply_int (d, l2, "hysteresis", &out->scheduler.hysteresis_sec);
         apply_int (d, l2, "escalate_after", &out->scheduler.escalate_after_sec);   // seconds
+        apply_metrics(d, l2, "collection.l2", &out->scheduler.l2_metrics);
         if (auto* e = yaml_find_key(d, l2, "escalation_thresholds")) {
             apply_double(d, e, "load_1m",           &out->scheduler.escalation_load_1m);
             apply_double(d, e, "cpu_percent",       &out->scheduler.escalation_cpu_percent);
@@ -258,6 +302,7 @@ void apply_collection(yaml_document_t* d, const yaml_node_t* col, Config* out) {
     if (auto* l3 = yaml_find_key(d, col, "l3")) {
         apply_int(d, l3, "interval",     &out->scheduler.l3_interval_sec);
         apply_int(d, l3, "grace_period", &out->scheduler.grace_period_sec);
+        apply_metrics(d, l3, "collection.l3", &out->scheduler.l3_metrics);
     }
     apply_custom_levels(d, col, &out->scheduler.custom_levels);
 

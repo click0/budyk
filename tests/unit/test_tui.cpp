@@ -110,6 +110,36 @@ int main() {
         assert(odd.size() == 1 && odd[0].id == 5 && odd[0].interval_ms == 0);
     }
 
+    // 6. sample_has_group: the newest sample's "groups"; none listed
+    //    (an older daemon) means all. /api/levels rows with "collects" and
+    //    "metrics" still parse.
+    {
+        const std::string body =
+            "{\"count\":2,\"samples\":["
+            "{\"ts\":1,\"level\":3,\"groups\":[\"cpu\",\"disk\"],\"cpu\":{}},"
+            "{\"ts\":2,\"level\":1,\"groups\":[\"cpu\",\"mem\"],\"cpu\":{},\"disk\":{}}"
+            "],\"detail\":{\"collected\":[\"disk.devices\"]}}";
+        assert(sample_has_group(body, "cpu") && sample_has_group(body, "mem"));
+        assert(!sample_has_group(body, "disk"));    // the older sample had it; "disk": is a key
+        assert(!sample_has_group(body, "tcp"));
+        assert(sample_has_group("{\"samples\":[{\"ts\":1,\"cpu\":{}}]}", "tcp"));
+        assert(sample_has_group("{\"samples\":[{\"ts\":1,\"groups\":[\"cpu\"", "tcp"));
+        const std::string first =
+            "{\"samples\":[{\"ts\":1,\"baseline\":[\"disk\"],\"groups\":[\"cpu\",\"disk\"]},"
+            "{\"ts\":2,\"groups\":[\"cpu\"],\"baseline\":[\"net\",\"tcp\"]}]}";
+        assert(sample_in_list(first, "baseline", "tcp") == 1);
+        assert(sample_in_list(first, "baseline", "disk") == 0);   // the older sample's
+        assert(sample_in_list(first, "groups", "disk") == 0);
+        assert(sample_in_list(body, "baseline", "cpu") == -1);
+        const auto lv = parse_levels(
+            "[{\"id\":1,\"name\":\"L1\",\"interval_ms\":300000,\"priority\":0,\"builtin\":true,"
+            "\"collects\":false,\"metrics\":[\"cpu\",\"mem\",\"swap\",\"load\",\"uptime\"]},"
+            "{\"id\":4,\"name\":\"burst\",\"interval_ms\":500,\"priority\":40,\"builtin\":false,"
+            "\"collects\":true,\"metrics\":[\"cpu\",\"disk.devices\"]}]\n");
+        assert(lv.size() == 2 && lv[0].name == "L1" && lv[1].name == "burst");
+        assert(lv[1].id == 4 && lv[1].interval_ms == 500);
+    }
+
     std::printf("test_tui: PASS\n");
     return 0;
 }

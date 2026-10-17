@@ -39,6 +39,14 @@ std::string json_quote(const std::string& s);
 double sample_number(const std::string& body, const char* section,
                      const char* key, double fallback = 0.0);
 
+// Whether the newest sample of an /api/samples body has `name` in its
+// list `key` ("groups", "baseline"): 1 yes, 0 no, -1 no such list.
+int  sample_in_list(const std::string& body, const char* key, const char* name);
+
+// Whether the newest sample has metric group `group` ("cpu", "disk", ...).
+// A sample without a "groups" list (an older daemon) has every group.
+bool sample_has_group(const std::string& body, const char* group);
+
 // One row of GET /api/levels.
 struct LevelInfo {
     int         id          = 0;

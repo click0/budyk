@@ -74,6 +74,7 @@ int main() {
     {
         Sample s[5]{};
         for (int i = 0; i < 5; ++i) {
+            s[i].groups = kGroupsAll;
             s[i].cpu.total_percent     = 10.0 * (i + 1);
             s[i].mem.available_percent = 20.0 + i;
             s[i].swap.used_percent     = 0.0;
@@ -104,6 +105,7 @@ int main() {
     {
         Sample s[5]{};
         for (int i = 0; i < 5; ++i) {
+            s[i].groups = kGroupsAll;
             s[i].disk.read_bytes_per_sec  = static_cast<uint64_t>(1'000'000ULL * static_cast<unsigned long long>(i + 1));
             s[i].disk.write_bytes_per_sec = static_cast<uint64_t>(  500'000ULL * static_cast<unsigned long long>(i + 1));
             s[i].net.rx_bytes_per_sec     = static_cast<uint64_t>(2'000'000ULL * static_cast<unsigned long long>(i + 1));
@@ -120,6 +122,32 @@ int main() {
         assert(near(nt.mean, 2'250'000.0));
         assert(near(dr.max, 5'000'000.0));
         assert(near(nr.min, 2'000'000.0));
+    }
+
+    // 9. A sample without the metric's group (a level that does not
+    //     collect it, a rate's first read) is left out; the CPU count is
+    //     the newest sample's that has cpu.
+    {
+        Sample s[4]{};
+        for (int i = 0; i < 4; ++i) {
+            s[i].groups = kGroupsAll;
+            s[i].cpu.total_percent = 10.0 * (i + 1);
+            s[i].cpu.count = uint32_t(2 + i);
+            s[i].disk.read_bytes_per_sec = 100;
+        }
+        s[0].groups &= ~uint32_t(kGroupCpu);   // the first read: zeros
+        s[0].cpu.total_percent = 0.0;
+        s[3].groups &= ~uint32_t(kGroupCpu | kGroupDisk);
+        s[3].disk.read_bytes_per_sec = 0;
+        const MetricBaseline cpu = compute_cpu_total_percent_stats(s, 4);
+        assert(cpu.n == 2 && near(cpu.mean, 25.0) && near(cpu.min, 20.0));
+        const MetricBaseline rd = compute_disk_read_bytes_per_sec_stats(s, 4);
+        assert(rd.n == 3 && near(rd.min, 100.0));
+        assert(compute_net_rx_bytes_per_sec_stats(s, 4).n == 4);
+        assert(newest_cpu_count(s, 4) == 4);   // s[2]
+        assert(newest_cpu_count(s, 1) == 0 && newest_cpu_count(nullptr, 4) == 0);
+        for (Sample& x : s) x.groups = 0;
+        assert(compute_load_1m_stats(s, 4).n == 0);
     }
 
     std::printf("test_baseline: PASS\n");

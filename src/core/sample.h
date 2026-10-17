@@ -181,6 +181,9 @@ struct Sample {
     FsStats    fs;
     ClockStats clock;
     uint32_t   groups;        // MetricGroup bits
+    // Groups this tick read for the first time in a row: a rate's
+    // baseline, so not in `groups` yet. This tick's only: not stored.
+    uint32_t   baseline;
     double    uptime_seconds;
     // True for a record folded from finer samples by TierAggregator (an
     // L2 or L1 summary of an L3 or custom-level stretch). Not part of
@@ -188,5 +191,9 @@ struct Sample {
     // (storage/codec.h), like the timestamp and the level.
     bool      folded;
 };
+
+// Zeroes the groups in `groups` (MetricGroup bits) and drops them from
+// s->groups: what a sample says about a group it did not collect.
+void clear_groups(Sample* s, uint32_t groups);
 
 } // namespace budyk

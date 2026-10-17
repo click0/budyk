@@ -12,6 +12,7 @@ using namespace budyk;
 static Sample mk(uint64_t ts, Level lv, double cpu_pct, double load1,
                  uint64_t mem_avail, double mem_avail_pct) {
     Sample s{};
+    s.groups                 = kGroupsAll;
     s.timestamp_nanos        = ts;
     s.level                  = lv;
     s.cpu.total_percent      = cpu_pct;
@@ -194,8 +195,8 @@ int main() {
     //    process states, TCP sockets, the fullest filesystem and the
     //    clock's max error are maxima; the clock offset is the one
     //    furthest from zero and synced only if every sample that read the
-    //    clock was; present flags are "any"; groups is what every sample
-    //    had; fs.count is the last.
+    //    clock was; present flags are "any"; fs.count is the last. A
+    //    sample without udp leaves the udp mean to the others.
     {
         TierAggregator agg(Level::L2);
         for (int i = 0; i < 4; ++i) {
@@ -230,12 +231,12 @@ int main() {
         assert(out.proc.zombie == 5 && out.proc.blocked == 3 && out.proc.threads == 903);
         assert(out.tcp.established == 40 && out.tcp.time_wait == 30);
         assert(near(out.tcp.retransmits_per_sec, 1.5) && out.tcp.present);
-        assert(near(out.udp.in_errors_per_sec, 1.0) && out.udp.present);
+        assert(near(out.udp.in_errors_per_sec, 4.0 / 3.0) && out.udp.present);
         assert(out.fs.count == 6 && near(out.fs.max_used_percent, 97.0));
         assert(near(out.fs.max_inodes_used_percent, 23.0) && out.fs.present);
         assert(out.clock.present && out.clock.synced);
         assert(near(out.clock.offset_ms, -9.0) && near(out.clock.max_error_ms, 7.0));
-        assert(out.groups == (kGroupsAll & ~kGroupUdp));
+        assert(out.groups == kGroupsAll);
 
         // One sample that read the clock unsynced makes the window
         // unsynced; none that read it at all: not present, not synced.
@@ -248,6 +249,52 @@ int main() {
         assert(agg.fold(&out) && out.clock.present && !out.clock.synced);
         agg.add(mk(9100, Level::L3, 1.0, 1.0, 1, 1.0));
         assert(agg.fold(&out) && !out.clock.present && !out.clock.synced);
+    }
+
+    // 9. Each group from the samples that have it (a level that does not
+    //    collect it, a rate's first read): the mean divides by their
+    //    number, the max ignores the others, the last fields come from
+    //    the last that had it; the result has every group some sample
+    //    had, and a group none had stays zero.
+    {
+        TierAggregator agg(Level::L1);
+        const uint32_t minimal = kGroupCpu | kGroupMem | kGroupSwap | kGroupLoad | kGroupUptime;
+        for (int i = 0; i < 4; ++i) {
+            Sample x = mk(uint64_t(i + 1) * 1000, Level::L3, 10.0 * (i + 1), 1.0, 1ULL << 30, 10.0);
+            x.disk.read_bytes_per_sec = 1000u * uint32_t(i + 1);   // 1000 .. 4000
+            x.disk.device_count       = uint32_t(i + 1);
+            x.proc.total              = 100u * uint32_t(i + 1);    // 100 .. 400
+            x.net.rx_bytes_per_sec    = 77;
+            x.entropy.present         = true;
+            x.entropy.available_bits  = i == 3 ? 1u : 256u;
+            x.uptime_seconds          = 50.0 + i;
+            // disk only in samples 1 and 2, proc and entropy only in 0,
+            // cpu not in 0 (its first read), net in none.
+            x.groups = minimal & ~(i == 0 ? uint32_t(kGroupCpu) : 0u);
+            if (i == 1 || i == 2) x.groups |= kGroupDisk;
+            if (i == 0)           x.groups |= kGroupProc | kGroupEntropy;
+            agg.add(x);
+        }
+        Sample out{};
+        assert(agg.fold(&out) && out.folded && out.level == Level::L1);
+        assert(out.timestamp_nanos == 4000);
+        assert(near(out.cpu.total_percent, 30.0));                 // (20 + 30 + 40) / 3
+        assert(out.disk.read_bytes_per_sec == 2500);               // (2000 + 3000) / 2
+        assert(out.disk.device_count == 3);                        // sample 2, the last with disk
+        assert(out.proc.total == 100);                             // only sample 0
+        assert(out.entropy.present && out.entropy.available_bits == 256);
+        assert(out.net.rx_bytes_per_sec == 0);                     // no sample had net
+        assert(near(out.uptime_seconds, 53.0));
+        assert(out.groups == (minimal | kGroupDisk | kGroupProc | kGroupEntropy));
+
+        // No sample with a group at all: zero, and the means don't divide
+        // by zero.
+        Sample bare = mk(5000, Level::L3, 55.0, 2.0, 1, 1.0);
+        bare.groups = 0;
+        agg.add(bare);
+        assert(agg.fold(&out) && out.groups == 0);
+        assert(out.cpu.total_percent == 0.0 && out.load.avg_1m == 0.0 && out.mem.total == 0);
+        assert(out.timestamp_nanos == 5000);
     }
 
     std::printf("test_tier_aggregator: PASS\n");

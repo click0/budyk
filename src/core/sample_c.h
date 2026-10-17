@@ -227,6 +227,12 @@ typedef struct {
 } budyk_entity_prev_c;
 
 typedef struct {
+    /* The lists this tick has (MetricDetail bits, core/metric_set.h),
+     * and those it read for the first time in a row (a rate's baseline,
+     * not in `collected` yet); set by the daemon's collect_one(), not by
+     * the collectors. */
+    uint32_t         collected;
+    uint32_t         baseline;
     uint32_t         ncores;
     budyk_core_c     cores[BUDYK_MAX_CORES];
     uint32_t         ndisks;

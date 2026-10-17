@@ -24,7 +24,9 @@ Level Scheduler::tick(const Sample& current) {
     anomaly_ = check_anomaly(current);
     const uint64_t escalate_ns = static_cast<uint64_t>(cfg_.escalate_after_sec) * kNanosPerSec;
     const uint64_t grace_ns    = static_cast<uint64_t>(cfg_.grace_period_sec)   * kNanosPerSec;
-    if (anomaly_ != AnomalyState::NORMAL) {
+    if (cfg_.mode == CollectionMode::OnDemand) {
+        // Thresholds raise nothing: no L2, no escalation to L3.
+    } else if (anomaly_ != AnomalyState::NORMAL) {
         // A clock step back starts the run afresh.
         if (!in_anomaly_run_ || now < anomaly_run_start_ns_) {
             in_anomaly_run_       = true;
@@ -62,7 +64,8 @@ Level Scheduler::select(uint64_t now) const {
 
     // L3: a client is connected, or the last one left less than
     // grace_period ago; or a sustained anomaly, likewise.
-    const bool l3 = client_count_.load() > 0 ||
+    const bool l3 = cfg_.mode == CollectionMode::Always ||
+        client_count_.load() > 0 ||
         (had_clients_ && now >= last_client_active_ns_ &&
          (now - last_client_active_ns_) < grace_ns) ||
         (escalated_ && now >= last_anomaly_ns_ &&
@@ -70,10 +73,12 @@ Level Scheduler::select(uint64_t now) const {
         requested(Level::L3);
 
     // L2: a threshold is crossed now, or was less than hysteresis ago.
-    const bool l2 = anomaly_ != AnomalyState::NORMAL ||
+    // In on-demand mode only a request.
+    const bool adaptive = cfg_.mode != CollectionMode::OnDemand;
+    const bool l2 = (adaptive && anomaly_ != AnomalyState::NORMAL) ||
         (had_anomaly_ && now >= last_anomaly_ns_ &&
          (now - last_anomaly_ns_) < hysteresis_ns) ||
-        cfg_.l2_always_on || requested(Level::L2);
+        (adaptive && cfg_.l2_always_on) || requested(Level::L2);
 
     Level best       = Level::L1;
     int   best_prio  = kPriorityL1;
@@ -152,6 +157,22 @@ const char* Scheduler::level_name(Level lv) const {
     const CustomLevel* c = find_custom(lv);
     return c != nullptr ? c->name.c_str() : "?";
 }
+
+const MetricSet& Scheduler::metrics(Level lv) const {
+    switch (lv) {
+        case Level::L1: return cfg_.l1_metrics;
+        case Level::L2: return cfg_.l2_metrics;
+        case Level::L3: return cfg_.l3_metrics;
+    }
+    const CustomLevel* c = find_custom(lv);
+    return c != nullptr ? c->metrics : cfg_.l1_metrics;
+}
+
+bool Scheduler::collects(Level lv) const {
+    return cfg_.mode != CollectionMode::OnDemand || (lv != Level::L1 && lv != Level::L2);
+}
+
+CollectionMode Scheduler::mode() const { return cfg_.mode; }
 
 bool Scheduler::level_by_name(const std::string& name, Level* out) const {
     if (out == nullptr) return false;

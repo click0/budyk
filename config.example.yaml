@@ -12,8 +12,27 @@ data_dir: "/var/db/budyk"  # ring files + (future) exports
 
 # ---- Collection cadence (spec §3.3) --------------------------------------
 collection:
+  # adaptive   the levels below (default)
+  # always     L3 all the time; the L2 / L1 rings get folded records
+  # on-demand  collect only while a dashboard or TUI is connected (and
+  #            grace_period after) or a custom level is active; thresholds
+  #            raise nothing, L1 / L2 collect nothing, nothing is written
+  #            to the rings (the hot buffer only)
+  mode: adaptive
+
+  # metrics: what a level reads on each tick. A set or a list of names:
+  #   minimal   cpu, mem, swap, load, uptime (in every set: the thresholds
+  #             read them)
+  #   standard  every group: also disk, net, proc, entropy, self, thermal,
+  #             tcp, udp, fs, clock
+  #   full      standard and the lists cpu.cores, disk.devices,
+  #             net.interfaces, fs.mounts
+  # e.g. [standard, cpu.cores] or [disk, net.interfaces]; a list brings its
+  # group. A rule that reads what its level does not collect is skipped
+  # for that tick (collected("disk") tells).
   l1:
     interval: 300          # heartbeat — seconds
+    metrics: standard
   l2:
     interval: 30
     always_on: false       # `true` keeps the watchful tier alive without
@@ -26,10 +45,12 @@ collection:
       load_1m: 4.0
       cpu_percent: 85
       swap_used_percent: 50
+    metrics: full
   l3:
     interval: 1            # active — seconds
     grace_period: 60       # how long to keep L3 after the last client
                            # disconnects
+    metrics: full
   hot_buffer:
     capacity: 300          # records held in RAM for WS catch-up
     warm_grace: 60         # seconds
@@ -44,6 +65,7 @@ collection:
   #                         YAML rule's `when`; the level is active while true
   #   hold        optional  seconds to stay active after `when` was last true (0)
   #   storage_mb  optional  size of the level's ring file, level-<name>.ring (50)
+  #   metrics     optional  what it reads, as above (full)
   # A rule can also switch a level on: escalate("burst", 120).
   # levels:
   #   - name: burst           # 2 Hz while the box is under real pressure

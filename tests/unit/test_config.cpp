@@ -399,6 +399,63 @@ int main() {
         assert(c.tier1_max_mb               == d.tier1_max_mb);
     }
 
+    // collection.mode and <level>.metrics: a set name or a list; an
+    // unknown mode is adaptive, a bad list leaves the level its default.
+    {
+        auto same = [](const MetricSet& x, const MetricSet& y) {
+            return x.groups == y.groups && x.detail == y.detail;
+        };
+        Config d;
+        assert(d.scheduler.mode == CollectionMode::Adaptive);
+        assert(same(d.scheduler.l1_metrics, metric_set_standard()));
+        assert(same(d.scheduler.l2_metrics, metric_set_full()));
+        assert(same(d.scheduler.l3_metrics, metric_set_full()));
+
+        Config c;
+        assert(config_load_string(
+            "collection:\n"
+            "  mode: on-demand\n"
+            "  l1: { interval: 300, metrics: minimal }\n"
+            "  l2: { metrics: [disk, net.interfaces] }\n"
+            "  l3: { metrics: standard }\n"
+            "  levels:\n"
+            "    - { name: a, interval: 1, priority: 40, metrics: [tcp] }\n"
+            "    - { name: b, interval: 1, priority: 41 }\n", &c) == 0);
+        assert(c.scheduler.mode == CollectionMode::OnDemand);
+        assert(c.scheduler.l1_interval_sec == 300);
+        assert(same(c.scheduler.l1_metrics, metric_set_minimal()));
+        assert(same(c.scheduler.l2_metrics,
+                    MetricSet{kGroupsMinimal | kGroupDisk | kGroupNet, kDetailInterfaces}));
+        assert(same(c.scheduler.l3_metrics, metric_set_standard()));
+        assert(c.scheduler.custom_levels.size() == 2);
+        assert(same(c.scheduler.custom_levels[0].metrics,
+                    MetricSet{kGroupsMinimal | kGroupTcp, 0}));
+        assert(same(c.scheduler.custom_levels[1].metrics, metric_set_full()));
+
+        Config a;
+        assert(config_load_string("collection: { mode: always }\n", &a) == 0);
+        assert(a.scheduler.mode == CollectionMode::Always);
+        assert(config_load_string("collection: { mode: adaptive }\n", &a) == 0);
+        assert(a.scheduler.mode == CollectionMode::Adaptive);
+
+        Config b;
+        b.scheduler.mode = CollectionMode::Always;
+        assert(config_load_string(
+            "collection:\n"
+            "  mode: sometimes\n"
+            "  l1: { metrics: [cpu, dsik] }\n"
+            "  l2: { metrics: { a: b } }\n"
+            "  l3: { metrics: [[cpu]] }\n"
+            "  levels:\n"
+            "    - { name: a, interval: 1, priority: 40, metrics: Full }\n", &b) == 0);
+        assert(b.scheduler.mode == CollectionMode::Adaptive);
+        assert(same(b.scheduler.l1_metrics, metric_set_standard()));
+        assert(same(b.scheduler.l2_metrics, metric_set_full()));
+        assert(same(b.scheduler.l3_metrics, metric_set_full()));
+        assert(b.scheduler.custom_levels.size() == 1);
+        assert(same(b.scheduler.custom_levels[0].metrics, metric_set_full()));
+    }
+
     std::printf("test_config: PASS\n");
     return 0;
 }

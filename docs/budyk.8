@@ -62,6 +62,26 @@ overwritten. The history API marks such records
 and, for the whole-history view, shows each stretch once, at the finest
 level still on disk.
 .PP
+Each level reads its own set of metrics,
+\fBcollection.\fIlevel\fB.metrics\fR:
+.B minimal
+(cpu, mem, swap, load, uptime),
+.B standard
+(every group),
+.B full
+(also each core, disk, interface and filesystem) or a list of names;
+standard at L1 and full elsewhere by default. A rule that reads a group
+its level does not collect is skipped for that tick.
+.B collection.mode
+is
+.B adaptive
+(the default),
+.B always
+(L3 all the time) or
+.B on-demand
+(collect only while a client is connected, and write nothing to the
+rings).
+.PP
 A record that reached its slot before a crash but not the index is
 counted in when the daemon starts again (and by
 .BR "budyk fsck \-\-repair" ),

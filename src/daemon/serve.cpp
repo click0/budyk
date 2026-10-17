@@ -110,20 +110,29 @@ void warn_if_writable_by_others(const char* what, const char* path) {
         what, path, static_cast<unsigned>(st.st_mode & 07777));
 }
 
+// The least time between two ticks that a wake-up may cut a sleep to. A
+// rate is the change between two reads over the time between them: a
+// dashboard's /api/samples poll and its WebSocket connect, a few ms
+// apart, woke two ticks a few ms apart, and the second read 100% for a
+// core that had run for 3 ms of 3. A level's own interval may be shorter
+// (a custom level, down to 100 ms).
+constexpr int kMinWakeGapMs = 250;
+
 // Sleep for at most `ms` milliseconds, returning early when:
 //   * a signal sets g_stop (shutdown) or g_reload (SIGHUP; the reload is
 //     applied at the top of the next tick, so it no longer waits out an
 //     L1 sleep);
-//   * wake_collection_loop() is called (a client connected).
+//   * wake_collection_loop() is called (a client connected), but not
+//     before kMinWakeGapMs into the sleep: a wake-up earlier than that
+//     shortens the sleep to it.
 // poll() is interrupted by signals because the handlers are installed
 // without SA_RESTART. Safe to call with ms <= 0 (no-op).
 void interruptible_sleep(int ms) {
     if (ms <= 0 || g_stop || g_reload) return;
     struct timespec ts{};
     ::clock_gettime(CLOCK_MONOTONIC, &ts);
-    const int64_t deadline_ms = static_cast<int64_t>(ts.tv_sec) * 1000 +
-                                ts.tv_nsec / 1000000 +
-                                static_cast<int64_t>(ms);
+    const int64_t start_ms = static_cast<int64_t>(ts.tv_sec) * 1000 + ts.tv_nsec / 1000000;
+    int64_t deadline_ms    = start_ms + static_cast<int64_t>(ms);
     for (;;) {
         ::clock_gettime(CLOCK_MONOTONIC, &ts);
         const int64_t now_ms = static_cast<int64_t>(ts.tv_sec) * 1000 +
@@ -136,7 +145,9 @@ void interruptible_sleep(int ms) {
         if (rc > 0) {
             char buf[64];
             while (::read(g_wake_pipe[0], buf, sizeof(buf)) > 0) {}
-            return;
+            if (now_ms - start_ms >= kMinWakeGapMs) return;
+            if (start_ms + kMinWakeGapMs < deadline_ms) deadline_ms = start_ms + kMinWakeGapMs;
+            continue;
         }
         if (rc < 0 && errno != EINTR) return;
         if (g_stop || g_reload) return;
@@ -485,6 +496,13 @@ int cmd_serve(int argc, char* argv[], const char* version) {
         "budyk serve: started (config=%s, data_dir=%s, rules=%d, listen=%s:%d)\n",
         config_path, cfg.data_dir, engine.rule_count(),
         cfg.listen_addr, http.bound_port());
+    if (sched.mode() == budyk::CollectionMode::Always) {
+        std::fprintf(stderr, "budyk serve: collection.mode always: collecting at L3 all the time\n");
+    } else if (sched.mode() == budyk::CollectionMode::OnDemand) {
+        std::fprintf(stderr,
+            "budyk serve: collection.mode on-demand: collecting only while a client is "
+            "connected; nothing is written to the rings\n");
+    }
 
     budyk::CollectContext collect_ctx;
 
@@ -523,6 +541,17 @@ int cmd_serve(int argc, char* argv[], const char* version) {
     // create() also purge, but a quiet daemon sees neither for hours,
     // and the table (and sessions.tsv) would hold every past login.
     time_t next_session_purge = next_state_save;
+    auto housekeeping = [&] {
+        const time_t now = ::time(nullptr);
+        if (cfg.rules_persist_state && now >= next_state_save) {
+            engine.save_state(state_path.c_str());
+            next_state_save = now + 60;
+        }
+        if (now >= next_session_purge) {
+            sessions.purge_expired();
+            next_session_purge = now + 60;
+        }
+    };
 
     // hot_buffer.warm_grace: empty the hot buffer once no client has been
     // connected for this long (see WarmGrace).
@@ -536,6 +565,10 @@ int cmd_serve(int argc, char* argv[], const char* version) {
     }
     std::vector<uint8_t> level_hits;
     bool escalated = false;   // a sustained anomaly holds L3 (logged on change)
+    // The level the loop last slept at: the next tick collects its
+    // metric set (or that of a level selected since, if higher).
+    budyk::Level slept_at = budyk::Level::L1;
+    const bool on_demand = sched.mode() == budyk::CollectionMode::OnDemand;
 
     while (!g_stop) {
         // SIGHUP latched in the handler — process it at a clean tick
@@ -548,29 +581,6 @@ int cmd_serve(int argc, char* argv[], const char* version) {
 
         budyk::Sample s{};
         s.timestamp_nanos = now_realtime_ns();
-
-        collect_one(&s, &collect_ctx);
-
-        // File-watch drain — non-blocking poll so the tick cadence is
-        // unchanged. apply() always clears the tampered set first, so
-        // a tick with zero events drops `files[p].tampered` back to
-        // false (one-shot semantics). Done before tm.store/hot.push so
-        // the persisted + broadcast sample carries this tick's counts.
-        if (fw_active) {
-            std::vector<budyk::FileChangeEvent> events;
-            const int n = file_watcher.poll(/*timeout_ms=*/0, &events);
-            if (n < 0) {
-                std::fprintf(stderr,
-                    "budyk serve: file_watcher.poll failed: %s\n", std::strerror(-n));
-            }
-            file_state.apply(events);
-            engine.set_file_state(file_state);
-            s.file_watch.events_this_tick =
-                static_cast<uint32_t>(file_state.tampered_this_tick.size());
-            s.file_watch.watched_count =
-                static_cast<uint32_t>(file_watcher.count());
-            s.file_watch.present = true;
-        }
 
         // Clients that hold the level at L3: every open WebSocket (the
         // dashboard) plus one for a recent /api/samples poller (the TUI).
@@ -591,6 +601,48 @@ int cmd_serve(int argc, char* argv[], const char* version) {
                 hot.reset();
             }
         }
+
+        // Collect what the level slept at reads, or the level a client or
+        // a request has raised it to since (the scheduler can only tell
+        // a threshold from the sample itself, so that one waits a tick).
+        // In on-demand mode L1 and L2 collect nothing: sleep on.
+        const budyk::Level collect_at =
+            sched.higher(slept_at, sched.select(s.timestamp_nanos));
+        if (!sched.collects(collect_at)) {
+            housekeeping();
+            slept_at = collect_at;
+            int idle_ms = sched.interval_ms(collect_at);
+            const uint64_t idle_due = warm.ns_until_due(now_realtime_ns());
+            if (idle_due != UINT64_MAX && idle_due / 1000000 + 1 < static_cast<uint64_t>(idle_ms)) {
+                idle_ms = static_cast<int>(idle_due / 1000000 + 1);
+            }
+            interruptible_sleep(idle_ms);
+            continue;
+        }
+        collect_one(&s, &collect_ctx, sched.metrics(collect_at));
+
+        // File-watch drain — non-blocking poll so the tick cadence is
+        // unchanged. apply() always clears the tampered set first, so
+        // a tick with zero events drops `files[p].tampered` back to
+        // false (one-shot semantics). Done before tm.store/hot.push so
+        // the persisted + broadcast sample carries this tick's counts.
+        if (fw_active) {
+            std::vector<budyk::FileChangeEvent> events;
+            const int n = file_watcher.poll(/*timeout_ms=*/0, &events);
+            if (n < 0) {
+                std::fprintf(stderr,
+                    "budyk serve: file_watcher.poll failed: %s\n", std::strerror(-n));
+            }
+            file_state.apply(events);
+            engine.set_file_state(file_state);
+            s.file_watch.events_this_tick =
+                static_cast<uint32_t>(file_state.tampered_this_tick.size());
+            s.file_watch.watched_count =
+                static_cast<uint32_t>(file_watcher.count());
+            s.file_watch.present = true;
+            s.groups |= budyk::kGroupFileWatch;
+        }
+
         // Custom levels whose `when` holds on this sample stay requested
         // for their hold time (0 = this tick only).
         engine.eval_level_conditions(s, &level_hits, collect_ctx.detail.get());
@@ -613,7 +665,7 @@ int cmd_serve(int argc, char* argv[], const char* version) {
                     cfg.scheduler.grace_period_sec);
             }
         }
-        tm.store(s);
+        if (!on_demand) tm.store(s);    // on-demand: the hot buffer only
         {
             std::string detail = budyk::detail_to_json(*collect_ctx.detail);
             std::lock_guard<std::mutex> g(hot_mtx);
@@ -627,17 +679,7 @@ int cmd_serve(int argc, char* argv[], const char* version) {
                 static_cast<uint64_t>(e.seconds) * kNsPerSec);
         }
 
-        {
-            const time_t now = ::time(nullptr);
-            if (cfg.rules_persist_state && now >= next_state_save) {
-                engine.save_state(state_path.c_str());
-                next_state_save = now + 60;
-            }
-            if (now >= next_session_purge) {
-                sessions.purge_expired();
-                next_session_purge = now + 60;
-            }
-        }
+        housekeeping();
 
         // Push the freshly-collected sample to every connected WS client.
         // Failed sends are evicted by the hub itself. Nothing to build
@@ -648,6 +690,7 @@ int cmd_serve(int argc, char* argv[], const char* version) {
         // this sleep, not only from the next tick. The sample's own level
         // holds until the next tick re-checks its condition.
         const budyk::Level next = sched.higher(s.level, sched.select(now_realtime_ns()));
+        slept_at = next;
         // Wake for the warm-grace reset too, or an L1 sleep of minutes
         // would leave stale samples for the next client's catch-up.
         int sleep_ms = sched.interval_ms(next);

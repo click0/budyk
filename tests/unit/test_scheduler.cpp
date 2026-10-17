@@ -270,6 +270,87 @@ int main() {
         assert(k.tick(hot(110))  == Level::L3);
     }
 
+    // 12. collection.mode. always: L3 with no client, an anomaly or not,
+    //     and a custom level of higher priority still wins. on-demand:
+    //     thresholds raise nothing (no L2, no escalation, l2_always_on
+    //     ignored), L1 and L2 collect nothing, a client still means L3 and
+    //     a request still holds its level. adaptive collects at every level.
+    {
+        auto hot = [](uint64_t t) { Sample s = at(t); s.load.avg_1m = 99.0; return s; };
+        SchedulerConfig c;
+        c.mode = CollectionMode::Always;
+        CustomLevel burst;
+        burst.id = kFirstCustomLevel; burst.name = "burst"; burst.interval_ms = 100;
+        burst.priority = 40;
+        c.custom_levels.push_back(burst);
+        Scheduler a(c);
+        assert(a.mode() == CollectionMode::Always);
+        assert(a.tick(at(0)) == Level::L3);
+        assert(a.tick(hot(10)) == Level::L3);
+        assert(a.tick(at(100000)) == Level::L3);
+        assert(a.select(200000 * kSec) == Level::L3);
+        a.request(static_cast<Level>(kFirstCustomLevel), 200001 * kSec);
+        assert(a.select(200000 * kSec) == static_cast<Level>(kFirstCustomLevel));
+        assert(a.collects(Level::L1) && a.collects(Level::L2) && a.collects(Level::L3));
+
+        c.mode = CollectionMode::OnDemand;
+        c.l2_always_on = true;
+        c.escalate_after_sec = 10;
+        Scheduler o(c);
+        for (uint64_t t = 0; t <= 600; t += 30) assert(o.tick(hot(t)) == Level::L1);
+        assert(!o.escalated() && o.current_anomaly() == AnomalyState::CRITICAL);
+        assert(!o.collects(Level::L1) && !o.collects(Level::L2));
+        assert(o.collects(Level::L3) && o.collects(static_cast<Level>(kFirstCustomLevel)));
+        o.set_client_count(1);
+        assert(o.tick(hot(630)) == Level::L3);
+        o.set_client_count(0);
+        assert(o.tick(at(640)) == Level::L3);                   // grace_period
+        assert(o.tick(at(630 + 60)) == Level::L1);
+        o.request(Level::L2, 800 * kSec);
+        assert(o.tick(at(700)) == Level::L2 && !o.collects(Level::L2));
+        o.request(Level::L3, 900 * kSec);
+        assert(o.tick(at(850)) == Level::L3);
+        assert(o.tick(at(901)) == Level::L1);
+
+        c.mode = CollectionMode::Adaptive;
+        Scheduler d(c);
+        assert(d.mode() == CollectionMode::Adaptive);
+        assert(d.tick(at(0)) == Level::L2);                     // l2_always_on
+        for (int id = 1; id <= kMaxLevelId; ++id) assert(d.collects(static_cast<Level>(id)));
+    }
+
+    // 13. Each level's metric set: L1 standard, L2 / L3 / custom full by
+    //     default; configured ones as given; an unknown level gets L1's.
+    {
+        SchedulerConfig c;
+        Scheduler a(c);
+        auto same = [](const MetricSet& x, const MetricSet& y) {
+            return x.groups == y.groups && x.detail == y.detail;
+        };
+        assert(same(a.metrics(Level::L1), metric_set_standard()));
+        assert(same(a.metrics(Level::L2), metric_set_full()));
+        assert(same(a.metrics(Level::L3), metric_set_full()));
+
+        c.l1_metrics = metric_set_minimal();
+        c.l2_metrics = MetricSet{kGroupsMinimal | kGroupDisk, 0};
+        c.l3_metrics = MetricSet{kGroupsMinimal, kDetailCores};
+        CustomLevel lv;
+        lv.id = kFirstCustomLevel + 1; lv.name = "x"; lv.interval_ms = 500; lv.priority = 5;
+        lv.metrics = MetricSet{kGroupsMinimal | kGroupTcp, 0};
+        c.custom_levels.push_back(lv);
+        CustomLevel dflt;
+        dflt.id = kFirstCustomLevel; dflt.name = "y"; dflt.interval_ms = 500; dflt.priority = 6;
+        c.custom_levels.push_back(dflt);
+        Scheduler b(c);
+        assert(same(b.metrics(Level::L1), metric_set_minimal()));
+        assert(same(b.metrics(Level::L2), MetricSet{kGroupsMinimal | kGroupDisk, 0}));
+        assert(same(b.metrics(Level::L3), MetricSet{kGroupsMinimal, kDetailCores}));
+        assert(same(b.metrics(static_cast<Level>(kFirstCustomLevel + 1)),
+                    MetricSet{kGroupsMinimal | kGroupTcp, 0}));
+        assert(same(b.metrics(static_cast<Level>(kFirstCustomLevel)), metric_set_full()));
+        assert(same(b.metrics(static_cast<Level>(kMaxLevelId)), metric_set_minimal()));
+    }
+
     std::printf("test_scheduler: PASS\n");
     return 0;
 }

@@ -233,6 +233,21 @@ double sample_number(const std::string& body, const char* section,
     return v;
 }
 
+int sample_in_list(const std::string& body, const char* key, const char* name) {
+    size_t from = body.rfind("{\"ts\":");
+    if (from == std::string::npos) from = 0;
+    const auto at = body.find("\"" + std::string(key) + "\":[", from);
+    if (at == std::string::npos) return -1;
+    const auto end = body.find(']', at);
+    if (end == std::string::npos) return -1;
+    const auto hit = body.find("\"" + std::string(name) + "\"", at);
+    return hit != std::string::npos && hit < end ? 1 : 0;
+}
+
+bool sample_has_group(const std::string& body, const char* group) {
+    return sample_in_list(body, "groups", group) != 0;
+}
+
 namespace {
 
 // The integer at `p` (as in `"id":4,`), or `fallback` when there is no
@@ -410,18 +425,33 @@ int tui_run(const char* host, int port, std::string (*ask_password)()) {
             ::mvprintw(2, 0, "Level  %s", tui_detail::level_label(levels, level).c_str());
 
             const int barw = COLS > 50 ? COLS - 40 : 10;
-            ::mvprintw(3, 0, "CPU    %5.1f%% %s %u cores",
-                       cpu_pct, bar(cpu_pct, barw).c_str(), cores);
-            ::mvprintw(4, 0, "Memory %5.1f%% %s free %s / %s",
-                       100.0 - mem_av, bar(100.0 - mem_av, barw).c_str(),
-                       fmt_bytes(ma).c_str(), fmt_bytes(mt).c_str());
-            ::mvprintw(5, 0, "Swap   %5.1f%% %s",
-                       swap_us, bar(swap_us, barw).c_str());
-            ::mvprintw(7, 0, "Load   %.2f / %.2f / %.2f", load1, load5, load15);
-            ::mvprintw(8, 0, "Disk   r %s/s   w %s/s   (%u devs)",
-                       fmt_bytes(dr).c_str(), fmt_bytes(dw).c_str(), devs);
-            ::mvprintw(9, 0, "Net    rx %s/s  tx %s/s   (%u ifaces)",
-                       fmt_bytes(rx).c_str(), fmt_bytes(tx).c_str(), ifs);
+            // A group the level does not collect holds zeros, not readings;
+            // one read for the first time has its rate from the next tick.
+            auto has = [&](int row, const char* label, const char* group) {
+                if (tui_detail::sample_has_group(b, group)) return true;
+                ::mvprintw(row, 0, "%-6s %s", label,
+                           tui_detail::sample_in_list(b, "baseline", group) == 1
+                               ? "measuring..." : "not collected at this level");
+                return false;
+            };
+            if (has(3, "CPU", "cpu"))
+                ::mvprintw(3, 0, "CPU    %5.1f%% %s %u cores",
+                           cpu_pct, bar(cpu_pct, barw).c_str(), cores);
+            if (has(4, "Memory", "mem"))
+                ::mvprintw(4, 0, "Memory %5.1f%% %s free %s / %s",
+                           100.0 - mem_av, bar(100.0 - mem_av, barw).c_str(),
+                           fmt_bytes(ma).c_str(), fmt_bytes(mt).c_str());
+            if (has(5, "Swap", "swap"))
+                ::mvprintw(5, 0, "Swap   %5.1f%% %s",
+                           swap_us, bar(swap_us, barw).c_str());
+            if (has(7, "Load", "load"))
+                ::mvprintw(7, 0, "Load   %.2f / %.2f / %.2f", load1, load5, load15);
+            if (has(8, "Disk", "disk"))
+                ::mvprintw(8, 0, "Disk   r %s/s   w %s/s   (%u devs)",
+                           fmt_bytes(dr).c_str(), fmt_bytes(dw).c_str(), devs);
+            if (has(9, "Net", "net"))
+                ::mvprintw(9, 0, "Net    rx %s/s  tx %s/s   (%u ifaces)",
+                           fmt_bytes(rx).c_str(), fmt_bytes(tx).c_str(), ifs);
             const double iowait   = sample_number(b, "cpu", "iowait_percent");
             const double zombies  = sample_number(b, "proc", "zombie");
             const double blocked  = sample_number(b, "proc", "blocked");
@@ -430,12 +460,16 @@ int tui_run(const char* host, int port, std::string (*ask_password)()) {
             const double retr     = sample_number(b, "tcp", "retransmits_per_sec");
             const double fs_used  = sample_number(b, "fs", "max_used_percent");
             const double fs_count = sample_number(b, "fs", "count");
-            ::mvprintw(10, 0, "Procs  %.0f   %.0f blocked, %.0f zombie   iowait %.1f%%",
-                       procs, blocked, zombies, iowait);
-            ::mvprintw(11, 0, "TCP    %.0f established   %.1f retransmits/s", estab, retr);
-            ::mvprintw(12, 0, "FS     fullest %5.1f%% %s of %.0f",
-                       fs_used, bar(fs_used, barw).c_str(), fs_count);
-            ::mvprintw(13, 0, "Uptime %s", fmt_uptime(uptime).c_str());
+            if (has(10, "Procs", "proc"))
+                ::mvprintw(10, 0, "Procs  %.0f   %.0f blocked, %.0f zombie   iowait %.1f%%",
+                           procs, blocked, zombies, iowait);
+            if (has(11, "TCP", "tcp"))
+                ::mvprintw(11, 0, "TCP    %.0f established   %.1f retransmits/s", estab, retr);
+            if (has(12, "FS", "fs"))
+                ::mvprintw(12, 0, "FS     fullest %5.1f%% %s of %.0f",
+                           fs_used, bar(fs_used, barw).c_str(), fs_count);
+            if (has(13, "Uptime", "uptime"))
+                ::mvprintw(13, 0, "Uptime %s", fmt_uptime(uptime).c_str());
         }
         ::refresh();
 
