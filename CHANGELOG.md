@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-10-17
+
+Adaptive collection as the spec describes it. Each level reads its own
+set of metrics (`collection.<level>.metrics`), `collection.mode` adds
+`always` and `on-demand`, and a sustained anomaly now escalates from L2
+to L3. While L3 or a custom level runs, the L2 and L1 rings keep
+filling with folded summaries, so the long history has no holes. The
+metric set grows to CPU time by kind, processes by state, TCP and UDP,
+filesystem usage and clock sync, plus live per-core, per-disk,
+per-interface and per-filesystem detail on the dashboard and in rules.
+Rules skip a tick when their level does not collect what they read,
+instead of seeing zeros. New: `budyk fsck`; a crash no longer loses the
+last stored record; one daemon per data directory. Opening the
+dashboard no longer records a false CPU spike. **Upgrade note:** the
+new fields make a record 502 bytes (codec v8), and the rings of an
+older budyk are converted when the daemon first starts. A 0.6 daemon
+does not open the converted rings, so to go back, move them aside. The
+defaults collect every metric at every level, so an unchanged config
+behaves as before.
+
 ### Added
 
 - **Per-level metric sets** (spec §3.4.4). `collection.<level>.metrics`
@@ -14,7 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (cpu, mem, swap, load, uptime: spec §3.4.1's heartbeat), `standard`
   (every group), `full` (also `cpu.cores`, `disk.devices`,
   `net.interfaces`, `fs.mounts`) or a list of names. The defaults, L1
-  `standard` and the rest `full`, read what this version read before.
+  `standard` and the rest `full`, read every metric, as before.
   A tick reads the set of the level it slept at, or of the level a
   client or a request has raised it to since; the collectors a set
   leaves out do not run. Each sample says what it has: `groups` in the
@@ -128,9 +148,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   interval, when the level drops to the ring's own (the folded record
   is written first, so every ring stays in time order), or on shutdown.
 - **`"folded":true` on summary records.** The flag lives in the
-  record header's spare byte (bit 0), so the ring format and record
-  size are unchanged: older rings read as unfolded, and an older budyk
-  reads folded records as ordinary ones. `/api/range?level=L1` (or
+  record header's spare byte (bit 0); records of older rings read as
+  unfolded. `/api/range?level=L1` (or
   `L2`, `tier=2|3`) returns them flagged; `level=all` (the dashboard's
   history chart) leaves a folded record out where a finer ring still
   holds samples from its window, so a stretch is drawn once, at the
@@ -658,6 +677,7 @@ it turned up two untested storage paths, which are now covered.
   opened, and init with the original size works again. tier_manager.cpp
   coverage went from 84.3% to 94.4%.
 
+[0.7.0]: https://github.com/click0/budyk/releases/tag/v0.7.0
 [0.6.5]: https://github.com/click0/budyk/releases/tag/v0.6.5
 [0.6.4]: https://github.com/click0/budyk/releases/tag/v0.6.4
 [0.6.3]: https://github.com/click0/budyk/releases/tag/v0.6.3

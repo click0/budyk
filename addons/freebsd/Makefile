@@ -2,7 +2,7 @@
 
 PORTNAME=       budyk
 DISTVERSIONPREFIX= v
-DISTVERSION=    0.6.5
+DISTVERSION=    0.7.0
 CATEGORIES=     sysutils
 
 MAINTAINER=     ports@FreeBSD.org
