@@ -19,10 +19,11 @@ looking. budyk switches between three collection levels:
 |-------|---------|------|
 | **L1 Heartbeat** | every 5 min | nobody is watching and the system is healthy |
 | **L2 Watchful** | 30 s | a threshold (load, CPU, swap) is crossed |
-| **L3 Active** | 1 Hz | a dashboard or TUI client is connected |
+| **L3 Active** | 1 Hz | a dashboard or TUI client is connected, or a threshold has stayed crossed for 5 min |
 
 Opening the dashboard switches to L3 at once. A crossed threshold is
-seen at the next tick and switches to L2. Each level steps back down
+seen at the next tick and switches to L2; if it stays crossed for
+`escalate_after` (5 min), L3 follows. Each level steps back down
 after a hold period: 60 s after the last client leaves, 5 min after the
 threshold clears. All intervals and thresholds are set in the config,
 and you can add your own levels (see [Custom levels](#custom-levels)).
@@ -55,13 +56,16 @@ On each tick the collection loop:
 1. reads the kernel counters (`sysctl`, devstat and kvm on FreeBSD,
    `/proc` and `/sys` on Linux) into one sample;
 2. asks the scheduler for the level: **L3** while a dashboard or TUI is
-   connected and for `grace_period` (60 s) after it leaves, **L2** while
-   a load, CPU or swap threshold is crossed and for `hysteresis` (5 min)
-   after, **L1** otherwise, or a [custom level](#custom-levels) whose
-   priority is higher;
+   connected and for `grace_period` (60 s) after it leaves, or once a
+   threshold has stayed crossed for `escalate_after` (5 min), **L2**
+   while a load, CPU or swap threshold is crossed and for `hysteresis`
+   (5 min) after, **L1** otherwise, or a [custom level](#custom-levels)
+   whose priority is higher;
 3. appends the sample to the ring file for that level (tier 1 for L3,
    2 for L2, 3 for L1, `level-<name>.ring` for a custom level), each
-   record tagged with its level;
+   record tagged with its level. While L3 or a custom level runs, its
+   samples are also folded into one record per L2 interval in tier 2
+   and one per L1 interval in tier 3, so the coarse rings have no holes;
 4. keeps the last 300 samples in an in-memory hot buffer;
 5. evaluates the rules and sends any alerts;
 6. pushes the sample to every open WebSocket;
@@ -231,7 +235,7 @@ interval wins. The built-ins have fixed priorities:
 |-------|----------|-------------|
 | L1 | 0 | always (the fallback) |
 | L2 | 20 | a threshold is crossed, and for `hysteresis` after |
-| L3 | 30 | a dashboard or TUI is connected, and for `grace_period` after |
+| L3 | 30 | a dashboard or TUI is connected, and for `grace_period` after; or a threshold has stayed crossed for `escalate_after`, until it has been clear for `grace_period` |
 | custom | yours | its `when` is true (and for `hold` seconds after), or a rule called `escalate()` |
 
 So `burst` (40) wins even while someone watches the dashboard, and

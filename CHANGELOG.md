@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A sustained anomaly escalates to L3** (spec §3.4.1, "escalation
+  from L2"). A crossed load, CPU or swap threshold switched on L2 and
+  nothing more, however long it lasted. Now, once it has held on every
+  tick for `collection.l2.escalate_after` (default 300 s; 0 turns it
+  off), L3 collects at 1 Hz until the anomaly has been gone for
+  `grace_period`; a dip inside that grace keeps L3. The daemon logs
+  both ends ("anomaly held for 300 s (load 1m 6.10, ...): collecting
+  at L3 until it clears"). The new `tests/smoke/escalate.sh` checks it
+  on the daemon with a CPU threshold below zero.
+
 - **The L2 and L1 rings keep filling while a finer level collects**
   (spec §3.4.1). While a client held L3, or a custom level ran, only
   that level's ring got records: the L1 ring, the one that keeps weeks

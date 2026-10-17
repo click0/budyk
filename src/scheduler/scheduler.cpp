@@ -22,9 +22,25 @@ Level Scheduler::tick(const Sample& current) {
     const uint64_t now = current.timestamp_nanos;
 
     anomaly_ = check_anomaly(current);
+    const uint64_t escalate_ns = static_cast<uint64_t>(cfg_.escalate_after_sec) * kNanosPerSec;
+    const uint64_t grace_ns    = static_cast<uint64_t>(cfg_.grace_period_sec)   * kNanosPerSec;
     if (anomaly_ != AnomalyState::NORMAL) {
+        // A clock step back starts the run afresh.
+        if (!in_anomaly_run_ || now < anomaly_run_start_ns_) {
+            in_anomaly_run_       = true;
+            anomaly_run_start_ns_ = now;
+        }
         last_anomaly_ns_ = now;
         had_anomaly_     = true;
+        if (escalate_ns > 0 && now - anomaly_run_start_ns_ >= escalate_ns) {
+            escalated_ = true;
+        }
+    } else if (!escalated_) {
+        in_anomaly_run_ = false;     // broken before it escalated
+    }
+    if (escalated_ && (now < last_anomaly_ns_ || now - last_anomaly_ns_ >= grace_ns)) {
+        escalated_      = false;
+        in_anomaly_run_ = false;
     }
     if (client_count_.load() > 0) {
         last_client_active_ns_ = now;
@@ -45,10 +61,12 @@ Level Scheduler::select(uint64_t now) const {
     };
 
     // L3: a client is connected, or the last one left less than
-    // grace_period ago.
+    // grace_period ago; or a sustained anomaly, likewise.
     const bool l3 = client_count_.load() > 0 ||
         (had_clients_ && now >= last_client_active_ns_ &&
          (now - last_client_active_ns_) < grace_ns) ||
+        (escalated_ && now >= last_anomaly_ns_ &&
+         (now - last_anomaly_ns_) < grace_ns) ||
         requested(Level::L3);
 
     // L2: a threshold is crossed now, or was less than hysteresis ago.
@@ -157,6 +175,7 @@ void Scheduler::set_client_count(int n) { client_count_.store(n > 0 ? n : 0); }
 Level        Scheduler::current_level()   const { return level_; }
 AnomalyState Scheduler::current_anomaly() const { return anomaly_; }
 int          Scheduler::client_count()    const { return client_count_.load(); }
+bool         Scheduler::escalated()       const { return escalated_; }
 
 AnomalyState Scheduler::check_anomaly(const Sample& s) const {
     if (s.load.avg_1m       > cfg_.critical_load_1m       ) return AnomalyState::CRITICAL;

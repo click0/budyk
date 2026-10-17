@@ -80,7 +80,8 @@ src/cli/           — the one-shot commands: hash-password, suggest-rules,
 src/main.cpp       — dispatch only
 tests/unit/        — one assert()-based executable per module (ctest)
 tests/smoke/       — serve.sh (HTTP, WS, SIGHUP, fd check), crash.sh (SIGKILL +
-                     restart), warm_grace.sh (hot buffer emptied after warm_grace)
+                     restart), warm_grace.sh (hot buffer emptied after warm_grace),
+                     escalate.sh (a sustained anomaly escalates L2 to L3)
 addons/            — FreeBSD port + rc.d, systemd unit, Docker
 docs/              — spec (en/uk), man page
 ```
@@ -96,6 +97,7 @@ ctest --test-dir build                   # unit tests
 tests/smoke/serve.sh build/src/budyk     # daemon: endpoints, WS, SIGHUP, close-on-exec
 tests/smoke/crash.sh build/src/budyk     # daemon: SIGKILL + restart, at most one record lost
 tests/smoke/warm_grace.sh build/src/budyk  # daemon: hot buffer emptied after warm_grace
+tests/smoke/escalate.sh build/src/budyk  # daemon: a sustained anomaly escalates L2 to L3
 tests/check_whitespace.sh                # trailing blanks, tabs, CR, final newline
 ```
 
@@ -206,7 +208,6 @@ on every target; a new implicit sign or width change is a build error in CI
 - No `fsck`; damaged records are skipped on read.
 - Every collector runs at every level; no per-level metric sets, no
   `collection.mode`.
-- No L2 → L3 escalation on a sustained anomaly.
 - Rule semantics that differ from §3.6: `cooldown` defaults to 0; a `nil`
   from `when()` resets the sustain counter; `action = { alert, exec(...) }`
   tables are rejected; `alert()` emits no WebSocket event.
