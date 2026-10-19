@@ -191,7 +191,7 @@ int LuaEngine::save_state(const char* path) const {
     // crash mid-write can never leave a half-written state file.
     std::string tmp = path;
     tmp += ".tmp";
-    std::FILE* f = std::fopen(tmp.c_str(), "w");
+    std::FILE* f = std::fopen(tmp.c_str(), "we");
     if (f == nullptr) return -errno;
 
     std::fputs("# budyk rule state v1\n", f);
@@ -220,7 +220,7 @@ int LuaEngine::save_state(const char* path) const {
 
 int LuaEngine::load_state(const char* path) {
     if (path == nullptr) return -EINVAL;
-    std::FILE* f = std::fopen(path, "r");
+    std::FILE* f = std::fopen(path, "re");
     if (f == nullptr) return 0;   // no state yet — fresh install, fine
 
     char line[1024];

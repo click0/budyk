@@ -95,6 +95,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **No descriptor leaks into a forked child.** The Linux collectors, the
+  config, rules, freeze and session files and the private temp files
+  for curl were opened without close-on-exec. They are open for a moment
+  only, but the alert and `exec()` workers fork from other threads, and
+  a child forked in that moment kept the descriptor through `exec`
+  (curl, or a rule's command, holding `/proc/<pid>/stat` or a temp
+  file). They are now `fopen(..., "re")` / `mkostemp(..., O_CLOEXEC)`.
+  The descriptor check in `tests/smoke/serve.sh` looked once, so it
+  saw a collector's file only by luck; it now reads the descriptors
+  over and over for 3 s.
 - **A name that is not UTF-8 no longer breaks the dashboard.** JSON
   strings carried a process name, a mount point or a rule's message as
   bytes; one that is not UTF-8 made the WebSocket frame invalid, and a

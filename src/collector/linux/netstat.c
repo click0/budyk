@@ -53,7 +53,7 @@ int budyk_collect_netstat_linux(budyk_netstat_ctx_c* ctx, budyk_sample_c* s) {
 
     char path[512];
     snprintf(path, sizeof(path), "%s/net/snmp", budyk_linux_proc_root());
-    FILE* f = fopen(path, "r");
+    FILE* f = fopen(path, "re");
     if (f == NULL) return -errno;
     char tcp_n[1024] = "", tcp_v[1024] = "", udp_n[1024] = "", udp_v[1024] = "";
     char icmp_n[1024] = "", icmp_v[1024] = "";
@@ -99,7 +99,7 @@ int budyk_collect_netstat_linux(budyk_netstat_ctx_c* ctx, budyk_sample_c* s) {
     /* TIME_WAIT sockets: /proc/net/sockstat, "TCP: inuse N orphan N tw N ...". */
     unsigned long long tw = 0;
     snprintf(path, sizeof(path), "%s/net/sockstat", budyk_linux_proc_root());
-    f = fopen(path, "r");
+    f = fopen(path, "re");
     if (f != NULL) {
         while (fgets(line, sizeof(line), f) != NULL) {
             const char* p = strncmp(line, "TCP: ", 5) == 0 ? strstr(line, " tw ") : NULL;

@@ -18,7 +18,7 @@
 int budyk_collect_uptime_linux(budyk_sample_c* s) {
     if (s == NULL) return -EINVAL;
 
-    FILE* f = fopen("/proc/uptime", "r");
+    FILE* f = fopen("/proc/uptime", "re");
     if (f == NULL) return -errno;
 
     double up = 0.0;
@@ -51,7 +51,7 @@ int budyk_collect_load_linux(budyk_sample_c* s) {
 int budyk_collect_entropy_linux(budyk_sample_c* s) {
     if (s == NULL) return -EINVAL;
 
-    FILE* f = fopen("/proc/sys/kernel/random/entropy_avail", "r");
+    FILE* f = fopen("/proc/sys/kernel/random/entropy_avail", "re");
     if (f == NULL) {
         s->entropy.available_bits = 0;
         s->entropy.present        = 0;
@@ -146,7 +146,7 @@ int budyk_collect_proc_linux_ex(budyk_sample_c* s, budyk_detail_c* d) {
         char path[512];
         const int n = snprintf(path, sizeof(path), "%s/%s/stat", root, ent->d_name);
         if (n <= 0 || (size_t)n >= sizeof(path)) continue;
-        FILE* f = fopen(path, "r");
+        FILE* f = fopen(path, "re");
         if (f == NULL) continue;
         char line[1024];
         const int got = fgets(line, sizeof(line), f) != NULL;
@@ -211,7 +211,7 @@ int budyk_collect_self_linux(budyk_sample_c* s) {
     s->self_.cpu_system_seconds = 0.0;
 
     /* Current RSS. */
-    FILE* f = fopen("/proc/self/statm", "r");
+    FILE* f = fopen("/proc/self/statm", "re");
     if (f != NULL) {
         unsigned long long sz_pages = 0, rss_pages = 0;
         if (fscanf(f, "%llu %llu", &sz_pages, &rss_pages) == 2) {
@@ -263,7 +263,7 @@ int budyk_collect_thermal_linux(budyk_sample_c* s) {
                          "/sys/class/thermal/%s/temp", ent->d_name);
         if (n <= 0 || (size_t)n >= sizeof(path)) continue;
 
-        FILE* f = fopen(path, "r");
+        FILE* f = fopen(path, "re");
         if (f == NULL) continue;
         long milli = 0;
         int ok = fscanf(f, "%ld", &milli);

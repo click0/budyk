@@ -21,7 +21,7 @@
 static uint8_t iface_up(const char* name) {
     char path[128];
     snprintf(path, sizeof(path), "/sys/class/net/%.64s/flags", name);
-    FILE* f = fopen(path, "r");
+    FILE* f = fopen(path, "re");
     if (f == NULL) return 1;
     unsigned int flags = 1;
     if (fscanf(f, "%x", &flags) != 1) flags = 1;
@@ -45,7 +45,7 @@ int budyk_collect_network_linux_ex(budyk_net_ctx_c* ctx, budyk_sample_c* s, budy
 
     char path[512];
     snprintf(path, sizeof(path), "%s/net/dev", budyk_linux_proc_root());
-    FILE* f = fopen(path, "r");
+    FILE* f = fopen(path, "re");
     if (f == NULL) return -errno;
 
     uint64_t rx_bytes = 0;

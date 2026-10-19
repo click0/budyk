@@ -10,7 +10,7 @@
 int budyk_collect_memory_linux(budyk_sample_c* s) {
     if (s == NULL) return -EINVAL;
 
-    FILE* f = fopen("/proc/meminfo", "r");
+    FILE* f = fopen("/proc/meminfo", "re");
     if (f == NULL) return -errno;
 
     unsigned long long total_kb = 0, available_kb = 0, swap_total_kb = 0, swap_free_kb = 0;

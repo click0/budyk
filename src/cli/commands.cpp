@@ -266,7 +266,7 @@ int cmd_suggest_rules(int argc, char* argv[]) {
     }
 
     if (output_path != nullptr) {
-        std::FILE* f = std::fopen(output_path, "w");
+        std::FILE* f = std::fopen(output_path, "we");
         if (f == nullptr) {
             std::fprintf(stderr,
                 "budyk suggest-rules: open '%s': %s\n",

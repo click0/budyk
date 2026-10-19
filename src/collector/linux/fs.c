@@ -63,7 +63,7 @@ int budyk_collect_fs_linux_ex(budyk_sample_c* s, budyk_detail_c* d) {
 
     char path[512];
     snprintf(path, sizeof(path), "%s/self/mounts", budyk_linux_proc_root());
-    FILE* f = fopen(path, "r");
+    FILE* f = fopen(path, "re");
     if (f == NULL) return -errno;
 
     dev_t    seen[64];

@@ -177,7 +177,7 @@ int yaml_rules_to_lua(const char* yaml_text, std::string* out) {
 int yaml_rules_to_lua_file(const char* path, std::string* out) {
     if (path == nullptr || out == nullptr) return -EINVAL;
 
-    std::FILE* f = std::fopen(path, "rb");
+    std::FILE* f = std::fopen(path, "rbe");
     if (f == nullptr) return -errno;
     if (std::fseek(f, 0, SEEK_END) != 0) { std::fclose(f); return -EIO; }
     const long sz = std::ftell(f);

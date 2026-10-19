@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <cstring>
 
+#include <fcntl.h>
 #include <unistd.h>
 
 namespace budyk {
@@ -21,7 +22,8 @@ bool write_private_tmp(const char* prefix, const std::string& body,
         return false;
     }
 
-    const int fd = ::mkstemp(path_out);
+    // Close-on-exec: the alert and exec() workers fork while it is open.
+    const int fd = ::mkostemp(path_out, O_CLOEXEC);
     if (fd < 0) return false;
 
     size_t done = 0;

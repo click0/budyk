@@ -43,8 +43,9 @@ start() {
     done
 }
 
-# The client reads samples for a random 0.5-2.5 s, then kills the daemon
-# itself, so the last sample it saw is as close to the kill as it gets.
+# The client reads samples for a random 0.5-2.5 s (longer, up to 15 s,
+# while none has come), then kills the daemon itself, so the last sample
+# it saw is as close to the kill as it gets.
 # It appends the timestamps it saw (one per line) to seen.<round>.
 watch_and_kill() {   # <round>
     python3 - "$PORT" "$PID" "$DIR/seen.$1" <<'EOF'
@@ -81,8 +82,9 @@ def parse():
             if smp["level"] == burst:
                 seen.append(smp["ts"])
 s.settimeout(0.05)
-deadline = time.time() + random.uniform(0.5, 2.5)
-while time.time() < deadline:
+start = time.time()
+deadline = start + random.uniform(0.5, 2.5)
+while time.time() < deadline or (not seen and time.time() < start + 15):
     try:
         d = s.recv(65536)
     except socket.timeout:
