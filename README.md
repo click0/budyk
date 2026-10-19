@@ -180,6 +180,27 @@ cmake --install build      # binary, example config, rules, man page
 The build is fully static by default. Pass `-DSTATIC_LINK=OFF` to link
 against shared libraries instead.
 
+### Cross-compiling for FreeBSD
+
+A Linux host with clang and lld (`apt install clang lld llvm`) builds the
+FreeBSD binary, for amd64 or aarch64, against a sysroot of a FreeBSD
+release:
+
+```sh
+cmake/toolchains/freebsd-sysroot.sh 14.4 aarch64 ~/sysroot-14.4-aarch64
+cmake -B build-freebsd --toolchain cmake/toolchains/freebsd-aarch64.cmake \
+      -DFREEBSD_SYSROOT=$HOME/sysroot-14.4-aarch64
+cmake --build build-freebsd -j
+```
+
+The script downloads the release's `base.txz` and the `lua54`, `libyaml`
+and `libargon2` packages, and checks each one: `base.txz` against the
+release's `MANIFEST`, the package catalogue against the pkg signing key
+in `base.txz`, each package against the catalogue. A binary built for 14.4
+runs on later 14.x and on 15.x. The tests are built but run only on
+FreeBSD; CI runs the smoke scripts with the cross-compiled amd64 binary on
+FreeBSD 15.0.
+
 ### Running as a service
 
 - **FreeBSD:** a port skeleton and an rc.d script are in
@@ -569,6 +590,7 @@ needs.
 ## Platforms
 
 - **FreeBSD 14.2, 15.0:** primary target, built and tested in CI.
+- **FreeBSD aarch64:** cross-compiled in CI, not run there.
 - **Linux:** built and tested in CI on Ubuntu.
 
 Other versions and systems aren't tested. NetBSD and OpenBSD have no

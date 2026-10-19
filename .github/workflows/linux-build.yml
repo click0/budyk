@@ -99,6 +99,69 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  # Cross-compiled for FreeBSD with clang and lld (cmake/toolchains/),
+  # against the sysroot of 14.4, the oldest supported 14.x: the static
+  # release configuration, tests included, for amd64 and aarch64. The
+  # FreeBSD workflow runs the amd64 binary on FreeBSD 15.0.
+  freebsd-cross:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, aarch64]
+    name: FreeBSD cross (${{ matrix.arch }})
+    env:
+      FREEBSD_VERSION: '14.4'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          set -ex
+          .github/scripts/apt-install.sh cmake clang lld llvm zstd
+          clang --version | head -1
+
+      - name: Sysroot (base.txz and packages, checksums and signature checked)
+        run: cmake/toolchains/freebsd-sysroot.sh "$FREEBSD_VERSION" ${{ matrix.arch }} "$RUNNER_TEMP/sysroot"
+
+      - name: Configure and build
+        run: |
+          set -ex
+          cmake -B build \
+            --toolchain cmake/toolchains/freebsd-${{ matrix.arch }}.cmake \
+            -DFREEBSD_SYSROOT="$RUNNER_TEMP/sysroot" \
+            -DBUILD_TESTS=ON \
+            -DENABLE_WERROR=ON
+          cmake --build build -j"$(nproc)"
+
+      - name: Check the binary
+        run: |
+          set -ex
+          case "${{ matrix.arch }}" in
+            amd64)   machine=x86-64 ;;
+            aarch64) machine="ARM aarch64" ;;
+          esac
+          file build/src/budyk
+          file build/src/budyk | grep "$machine" | grep "(FreeBSD)" \
+            | grep "statically linked" | grep -q "for FreeBSD $FREEBSD_VERSION"
+
+      # The static-analysis job leaves out the FreeBSD collectors and sees
+      # only the Linux side of every #ifdef; with the sysroot's headers,
+      # clang-tidy checks the FreeBSD side.
+      - name: clang-tidy, FreeBSD target
+        if: matrix.arch == 'amd64'
+        run: |
+          set -e
+          .github/scripts/apt-install.sh clang-tidy
+          cmake -B build-tidy \
+            --toolchain cmake/toolchains/freebsd-amd64.cmake \
+            -DFREEBSD_SYSROOT="$RUNNER_TEMP/sysroot" \
+            -DSTATIC_LINK=OFF \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          git ls-files 'src/*.cpp' 'src/*.c' | grep -v '/linux/' \
+            | xargs -P "$(nproc)" -n 8 clang-tidy -p build-tidy --quiet
+
   # ASan + UBSan: every unit test, plus a smoke test of the running daemon
   # (HTTP, WebSocket, collection loop, SIGHUP/SIGTERM) since main.cpp has
   # no unit tests, and a crash test (SIGKILL, restart on the same rings,
