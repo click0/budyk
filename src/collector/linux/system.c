@@ -79,32 +79,69 @@ int budyk_collect_entropy_linux(budyk_sample_c* s) {
  * and the read is skipped.
  */
 int budyk_linux_parse_proc_stat(const char* line, char* state, uint32_t* threads) {
-    const char* rp = strrchr(line, ')');
-    if (rp == NULL || rp[1] != ' ' || rp[2] == '\0') return -EINVAL;
-    *state = rp[2];
-    /* After the state come fields 4..19, then num_threads. */
-    const char* p = rp + 3;
-    for (int field = 4; field <= 19; ++field) {
-        while (*p == ' ') ++p;
-        while (*p != ' ' && *p != '\0') ++p;
-        if (*p == '\0') return -EINVAL;
-    }
-    char* end = NULL;
-    const unsigned long n = strtoul(p, &end, 10);
-    if (end == p) return -EINVAL;
-    *threads = (uint32_t)n;
+    budyk_proc_read_c r;
+    uint32_t flags = 0;
+    if (budyk_linux_parse_proc_stat_ex(line, &r, &flags) != 0) return -EINVAL;
+    *state   = r.state;
+    *threads = r.threads;
     return 0;
 }
 
+/* The whole line: pid (field 1), comm (2), state (3), flags (9), utime +
+ * stime (14, 15) as `cpu` in clock ticks, num_threads (20), starttime
+ * (22) as `start`, rss (24) in pages, as bytes. A line that ends after
+ * field 20 reads 0 for the rest. */
+int budyk_linux_parse_proc_stat_ex(const char* line, budyk_proc_read_c* out, uint32_t* flags) {
+    const char* lp = strchr(line, '(');
+    const char* rp = strrchr(line, ')');
+    if (lp == NULL || rp == NULL || rp < lp || rp[1] != ' ' || rp[2] == '\0') return -EINVAL;
+    memset(out, 0, sizeof(*out));
+    out->pid = (int32_t)strtol(line, NULL, 10);
+    size_t len = (size_t)(rp - lp - 1);
+    if (len >= sizeof(out->name)) len = sizeof(out->name) - 1;
+    memcpy(out->name, lp + 1, len);
+    out->state = rp[2];
+    /* Fields 4..24 after the state; up to num_threads (20) required,
+     * the rest 0 if a short line lacks them. */
+    long long f[25];
+    memset(f, 0, sizeof(f));
+    const char* p = rp + 3;
+    for (int field = 4; field <= 24; ++field) {
+        char* end = NULL;
+        f[field] = strtoll(p, &end, 10);
+        if (end == p) {
+            if (field <= 20) return -EINVAL;
+            f[field] = 0;
+            break;
+        }
+        p = end;
+    }
+    const long page = sysconf(_SC_PAGESIZE);
+    *flags         = (uint32_t)f[9];
+    out->cpu       = (uint64_t)(f[14] > 0 ? f[14] : 0) + (uint64_t)(f[15] > 0 ? f[15] : 0);
+    out->threads   = (uint32_t)f[20];
+    out->start     = (uint64_t)f[22];
+    out->rss_bytes = f[24] > 0 ? (uint64_t)f[24] * (uint64_t)(page > 0 ? page : 4096) : 0;
+    return 0;
+}
+
+#define BUDYK_PF_KTHREAD 0x00200000u   /* <linux/sched.h> PF_KTHREAD */
+
 int budyk_collect_proc_linux(budyk_sample_c* s) {
+    return budyk_collect_proc_linux_ex(s, NULL);
+}
+
+int budyk_collect_proc_linux_ex(budyk_sample_c* s, budyk_detail_c* d) {
     if (s == NULL) return -EINVAL;
     memset(&s->proc, 0, sizeof(s->proc));
 
     const char* root = budyk_linux_proc_root();
-    DIR* d = opendir(root);
-    if (d == NULL) return -errno;
+    DIR* dir = opendir(root);
+    if (dir == NULL) return -errno;
+    const long tck = sysconf(_SC_CLK_TCK);
+    if (d != NULL) budyk_procs_begin(d, s->timestamp_nanos);
     struct dirent* ent;
-    while ((ent = readdir(d)) != NULL) {
+    while ((ent = readdir(dir)) != NULL) {
         if (ent->d_name[0] < '1' || ent->d_name[0] > '9') continue;
         char path[512];
         const int n = snprintf(path, sizeof(path), "%s/%s/stat", root, ent->d_name);
@@ -114,10 +151,10 @@ int budyk_collect_proc_linux(budyk_sample_c* s) {
         char line[1024];
         const int got = fgets(line, sizeof(line), f) != NULL;
         fclose(f);
-        char     state   = 0;
-        uint32_t threads = 0;
-        if (!got || budyk_linux_parse_proc_stat(line, &state, &threads) != 0) continue;
-        switch (state) {
+        budyk_proc_read_c r;
+        uint32_t flags = 0;
+        if (!got || budyk_linux_parse_proc_stat_ex(line, &r, &flags) != 0) continue;
+        switch (r.state) {
             case 'R':                               ++s->proc.running;  break;
             case 'S': case 'I': case 'W': case 'P': ++s->proc.sleeping; break;
             case 'D':                               ++s->proc.blocked;  break;
@@ -126,9 +163,13 @@ int budyk_collect_proc_linux(budyk_sample_c* s) {
             default:                                continue;   /* X: being reaped */
         }
         ++s->proc.total;
-        s->proc.threads += threads;
+        s->proc.threads += r.threads;
+        if (d != NULL && (flags & BUDYK_PF_KTHREAD) == 0) {
+            budyk_procs_add(d, &r, (double)(tck > 0 ? tck : 100));
+        }
     }
-    closedir(d);
+    closedir(dir);
+    if (d != NULL) budyk_procs_end(d);
     return 0;
 }
 

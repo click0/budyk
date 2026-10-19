@@ -82,7 +82,8 @@ int main() {
         assert(metric_group_name(kGroupCpu | kGroupMem) == nullptr);
         assert(metric_group_name(1u << 16) == nullptr);
         assert(std::string(metric_detail_name(kDetailMounts)) == "fs.mounts");
-        assert(metric_detail_name(0) == nullptr && metric_detail_name(1u << 4) == nullptr);
+        assert(std::string(metric_detail_name(kDetailProcesses)) == "proc.top");
+        assert(metric_detail_name(0) == nullptr && metric_detail_name(1u << 5) == nullptr);
         for (uint32_t bit = 1; bit <= kGroupsAll; bit <<= 1) {
             assert(metric_group_bit(metric_group_name(bit)) == bit);
         }

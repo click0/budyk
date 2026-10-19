@@ -173,12 +173,14 @@ typedef struct {
 } budyk_netstat_ctx_c;
 
 // Per-entity detail (spec §2.1): each core, disk, interface and local
-// filesystem. Not stored in the rings; the daemon serves the latest to
+// filesystem, and the top processes. Not stored in the rings; the daemon serves the latest to
 // the dashboard and the rules. One instance lives across ticks: besides
 // the lists it keeps each entity's previous counters for the rates, so
 // zero it once and pass the same one every time.
 #define BUDYK_MAX_CORES    1024
 #define BUDYK_MAX_ENTITIES 64     /* disks, interfaces, filesystems each */
+#define BUDYK_TOP_EACH     10     /* the top processes by CPU, and by RSS */
+#define BUDYK_MAX_TRACKED_PROCS 8192   /* processes whose CPU time is kept for a rate */
 
 typedef struct {
     double total_percent;
@@ -220,6 +222,34 @@ typedef struct {
     double   inodes_used_percent;
 } budyk_mount_c;
 
+/* One of the top processes. Kernel threads are left out. */
+typedef struct {
+    int32_t  pid;
+    char     name[32];             /* comm, as the kernel has it */
+    char     state;                /* as ps(1) shows it: R S D T Z ... */
+    uint32_t threads;
+    double   cpu_percent;          /* of one CPU, over the last interval */
+    uint64_t rss_bytes;
+} budyk_process_c;
+
+/* One process as a collector read it: what the tracker needs. */
+typedef struct {
+    int32_t  pid;
+    uint64_t start;                /* start time (any unit): tells a reused pid */
+    uint64_t cpu;                  /* cumulative CPU time, in cpu_per_sec units */
+    uint64_t rss_bytes;
+    uint32_t threads;
+    char     state;
+    char     name[32];
+} budyk_proc_read_c;
+
+/* A process's CPU time at the previous tick, by pid. */
+typedef struct {
+    int32_t  pid;
+    uint64_t start;
+    uint64_t cpu;
+} budyk_proc_prev_c;
+
 /* An entity's cumulative counters at the previous tick, by name. */
 typedef struct {
     char     name[32];
@@ -233,25 +263,50 @@ typedef struct {
      * the collectors. */
     uint32_t         collected;
     uint32_t         baseline;
-    uint32_t         ncores;
+    /* How many of each list this tick has; the 32-bit fields go
+     * together, so the struct is not padded between them. */
+    uint32_t         ncores, ndisks, nifaces, nmounts, nprocs;
+    /* For the rates: entries in disk_prev / iface_prev, in each
+     * proc_track, and in the candidates. */
+    uint32_t         ndisk_prev, niface_prev;
+    uint32_t         nproc_track[2];
+    uint32_t         ntop_cpu, ntop_rss;
+
     budyk_core_c     cores[BUDYK_MAX_CORES];
-    uint32_t         ndisks;
     budyk_disk_dev_c disks[BUDYK_MAX_ENTITIES];
-    uint32_t         nifaces;
     budyk_iface_c    ifaces[BUDYK_MAX_ENTITIES];
-    uint32_t         nmounts;
     budyk_mount_c    mounts[BUDYK_MAX_ENTITIES];
+    /* The union of the top BUDYK_TOP_EACH by CPU and by RSS, by CPU
+     * then RSS, largest first. */
+    budyk_process_c  procs[2 * BUDYK_TOP_EACH];
 
     /* Across ticks, for the rates. */
     uint64_t            core_prev[BUDYK_MAX_CORES][7];   /* 6 parts, total */
-    uint8_t             core_has_prev[BUDYK_MAX_CORES];
     budyk_entity_prev_c disk_prev[BUDYK_MAX_ENTITIES];
-    uint32_t            ndisk_prev;
     uint64_t            disk_prev_ns;
     budyk_entity_prev_c iface_prev[BUDYK_MAX_ENTITIES];
-    uint32_t            niface_prev;
     uint64_t            iface_prev_ns;
+    /* Processes: the previous read and the one being made, by pid
+     * (proc_track[proc_cur] is the previous), and the candidates. */
+    budyk_proc_prev_c   proc_track[2][BUDYK_MAX_TRACKED_PROCS];
+    uint64_t            proc_prev_ns;
+    uint64_t            proc_now_ns;
+    budyk_process_c     top_cpu[BUDYK_TOP_EACH];
+    budyk_process_c     top_rss[BUDYK_TOP_EACH];
+    uint8_t             core_has_prev[BUDYK_MAX_CORES];
+    uint8_t             proc_cur;
 } budyk_detail_c;
+
+/* The process tracker (src/collector/detail.c), driven by the platform
+ * process collectors: begin, add each process read, end. CPU% is the
+ * change in a process's CPU time since the previous read (same pid and
+ * start time) over the time between the reads; a process seen for the
+ * first time, or one past BUDYK_MAX_TRACKED_PROCS, reads 0.
+ * `cpu_per_sec` is the unit of budyk_proc_read_c::cpu: clock ticks per
+ * second (Linux), 1000000 (FreeBSD, microseconds). */
+void budyk_procs_begin(budyk_detail_c* d, uint64_t now_ns);
+void budyk_procs_add  (budyk_detail_c* d, const budyk_proc_read_c* p, double cpu_per_sec);
+void budyk_procs_end  (budyk_detail_c* d);
 
 /* The previous counters of entity `name` in `prev` (n entries), or NULL
  * if it had none: a device that just appeared gets a baseline, not a
@@ -291,9 +346,14 @@ int budyk_collect_network_linux(budyk_net_ctx_c*  ctx, budyk_sample_c* s);
 int budyk_collect_disk_linux_ex   (budyk_disk_ctx_c* ctx, budyk_sample_c* s, budyk_detail_c* d);
 int budyk_collect_network_linux_ex(budyk_net_ctx_c*  ctx, budyk_sample_c* s, budyk_detail_c* d);
 int budyk_collect_proc_linux   (budyk_sample_c* s);
+// The same, and the top processes in d (not kernel threads) when d is
+// not NULL.
+int budyk_collect_proc_linux_ex(budyk_sample_c* s, budyk_detail_c* d);
 // Parsers behind the collectors, exported for the fixture tests.
-// One /proc/<pid>/stat line: its state letter and num_threads.
+// One /proc/<pid>/stat line: its state letter and num_threads; or all
+// the tracker needs, and the process flags (PF_KTHREAD: 0x00200000).
 int  budyk_linux_parse_proc_stat(const char* line, char* state, uint32_t* threads);
+int  budyk_linux_parse_proc_stat_ex(const char* line, budyk_proc_read_c* out, uint32_t* flags);
 // Undo the octal escapes (\040 ...) of a /proc/self/mounts field, in place.
 void budyk_linux_unescape_mount(char* s);
 int budyk_collect_entropy_linux(budyk_sample_c* s);
@@ -321,6 +381,7 @@ int budyk_collect_cpu_freebsd_ex    (budyk_cpu_ctx_c*  ctx, budyk_sample_c* s, b
 int budyk_collect_disk_freebsd_ex   (budyk_disk_ctx_c* ctx, budyk_sample_c* s, budyk_detail_c* d);
 int budyk_collect_network_freebsd_ex(budyk_net_ctx_c*  ctx, budyk_sample_c* s, budyk_detail_c* d);
 int budyk_collect_proc_freebsd   (budyk_sample_c* s);
+int budyk_collect_proc_freebsd_ex(budyk_sample_c* s, budyk_detail_c* d);
 int budyk_collect_entropy_freebsd(budyk_sample_c* s);
 int budyk_collect_self_freebsd   (budyk_sample_c* s);
 int budyk_collect_thermal_freebsd(budyk_sample_c* s);

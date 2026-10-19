@@ -214,7 +214,8 @@ std::string sample_to_json(const Sample& s) {
 
 std::string detail_to_json(const budyk_detail_c& d) {
     std::string out;
-    out.reserve(256 + d.ncores * 160 + (d.ndisks + d.nifaces) * 200 + d.nmounts * 320);
+    out.reserve(256 + d.ncores * 160 + (d.ndisks + d.nifaces) * 200 + d.nmounts * 320 +
+                d.nprocs * 160);
     out.push_back('{');
     append_names(&out, "collected", d.collected, metric_detail_name, kDetailAll);
     if (d.baseline != 0) append_names(&out, "baseline", d.baseline, metric_detail_name, kDetailAll);
@@ -276,6 +277,20 @@ std::string detail_to_json(const budyk_detail_c& d) {
         append_kv_uint  (&out, "inodes_total",        x.inodes_total);        out.push_back(',');
         append_kv_uint  (&out, "inodes_used",         x.inodes_used);         out.push_back(',');
         append_kv_double(&out, "inodes_used_percent", x.inodes_used_percent);
+        out.push_back('}');
+    }
+    out.append("],\"processes\":[");
+    for (uint32_t i = 0; i < d.nprocs; ++i) {
+        const budyk_process_c& p = d.procs[i];
+        const char state[2] = { p.state, '\0' };
+        if (i > 0) out.push_back(',');
+        out.push_back('{');
+        append_kv_int   (&out, "pid",         p.pid);          out.push_back(',');
+        append_kv_str   (&out, "name",        p.name);         out.push_back(',');
+        append_kv_str   (&out, "state",       state);          out.push_back(',');
+        append_kv_uint  (&out, "threads",     p.threads);      out.push_back(',');
+        append_kv_double(&out, "cpu_percent", p.cpu_percent);  out.push_back(',');
+        append_kv_uint  (&out, "rss_bytes",   p.rss_bytes);
         out.push_back('}');
     }
     out.append("]}");

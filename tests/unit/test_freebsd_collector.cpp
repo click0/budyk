@@ -14,9 +14,20 @@
 #include <cstdio>
 #include <cstring>
 
+#include <ctime>
 #include <memory>
 
 #include <unistd.h>
+
+namespace {
+
+uint64_t now_ns() {
+    struct timespec ts{};
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL + static_cast<uint64_t>(ts.tv_nsec);
+}
+
+} // namespace
 
 int main() {
     // 1. CPU delta — first call baselines (0%), second call yields a
@@ -331,6 +342,33 @@ int main() {
         assert(budyk_collect_fs_freebsd_ex(&s, d.get()) == 0);
         assert(d->nmounts == s.fs.count && d->nmounts >= 1);
         assert(d->mounts[0].mount[0] == '/' && d->mounts[0].total_bytes > 0);
+    }
+
+    // 17. The top processes: the second read lists some, largest CPU
+    //     first, each with a pid, a name and a state letter; no system
+    //     process (the kernel, idle) among them; this test itself, busy
+    //     between the reads, has a CPU time.
+    {
+        std::unique_ptr<budyk_detail_c> d(new budyk_detail_c());
+        budyk_sample_c s;
+        std::memset(&s, 0, sizeof(s));
+        s.timestamp_nanos = now_ns();
+        assert(budyk_collect_proc_freebsd_ex(&s, d.get()) == 0);
+        volatile double spin = 0;
+        const uint64_t until = now_ns() + 300000000ULL;
+        while (now_ns() < until) spin = spin + 1.0;
+        s.timestamp_nanos = now_ns();
+        assert(budyk_collect_proc_freebsd_ex(&s, d.get()) == 0);
+        assert(d->nprocs >= 1 && d->nprocs <= 2 * BUDYK_TOP_EACH);
+        bool me = false;
+        for (uint32_t i = 0; i < d->nprocs; ++i) {
+            const budyk_process_c& p = d->procs[i];
+            assert(p.pid > 0 && p.name[0] != '\0' && p.state != '\0');
+            assert(std::strcmp(p.name, "idle") != 0 && std::strcmp(p.name, "kernel") != 0);
+            if (i > 0) assert(d->procs[i - 1].cpu_percent >= p.cpu_percent);
+            if (p.pid == getpid()) me = p.cpu_percent > 10.0;
+        }
+        assert(me);
     }
 
     std::printf("test_freebsd_collector: PASS\n");

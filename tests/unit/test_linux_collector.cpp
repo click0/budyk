@@ -212,7 +212,9 @@ int main() {
     }
 
     // 7f. The /proc/<pid>/stat parser: comm may hold spaces and ')';
-    //     num_threads is field 20. A truncated line is refused.
+    //     num_threads is field 20. A line cut before it is refused; one
+    //     cut after it reads 0 for the rest. The whole line: pid, comm
+    //     (at most 31 bytes kept), flags, utime + stime, starttime, rss.
     {
         char st = 0;
         uint32_t th = 0;
@@ -222,6 +224,21 @@ int main() {
         assert(st == 'S' && th == 7);
         assert(budyk_linux_parse_proc_stat("1 (init) R 0 1 1 0 -1", &st, &th) != 0);
         assert(budyk_linux_parse_proc_stat("no parens here", &st, &th) != 0);
+
+        budyk_proc_read_c r;
+        uint32_t flags = 0;
+        assert(budyk_linux_parse_proc_stat_ex(
+            "4242 (my (odd) proc) R 1 42 42 0 -1 2097216 100 0 0 0 250 70 9 9 20 0 3 0 777 "
+            "123456 1500 18446744073709551615 1 1\n", &r, &flags) == 0);
+        assert(r.pid == 4242 && std::string(r.name) == "my (odd) proc" && r.state == 'R');
+        assert(flags == 2097216 && (flags & 0x00200000u) != 0);
+        assert(r.cpu == 320 && r.threads == 3 && r.start == 777);
+        assert(r.rss_bytes == 1500ULL * static_cast<uint64_t>(sysconf(_SC_PAGESIZE)));
+        assert(budyk_linux_parse_proc_stat_ex(
+            "7 (abcdefghijklmnopqrstuvwxyz0123456789) S 1 1 1 0 -1 0 0 0 0 0 1 1 0 0 20 0 1\n",
+            &r, &flags) == 0);
+        assert(std::string(r.name) == "abcdefghijklmnopqrstuvwxyz01234" && r.start == 0 &&
+               r.rss_bytes == 0 && r.cpu == 2);
     }
 
     // 7g. Processes against a fixture /proc: one of each state (I and P
@@ -246,6 +263,114 @@ int main() {
         assert(s.proc.total == 8 && s.proc.running == 1 && s.proc.sleeping == 3);
         assert(s.proc.blocked == 1 && s.proc.stopped == 2 && s.proc.zombie == 1);
         assert(s.proc.threads == 1 + 2 + 3 + 4 + 5 + 6 + 7 + 8);
+    }
+
+    // 7g2. The top processes against a fixture /proc: CPU% from the
+    //      change in utime + stime over the time between reads (clock
+    //      ticks, sysconf(_SC_CLK_TCK)); kernel threads left out; a pid
+    //      reused (another starttime) starts from 0; an idle process is
+    //      listed for its RSS; largest CPU first.
+    {
+        Fixture fx;
+        const long tck  = sysconf(_SC_CLK_TCK);
+        const long page = sysconf(_SC_PAGESIZE);
+        // pid, comm, state, flags, utime, starttime, rss pages
+        auto proc = [&](int pid, const char* comm, char st, unsigned flags, long utime,
+                        long start, long rss) {
+            char line[512];
+            std::snprintf(line, sizeof(line),
+                          "%d (%s) %c 1 1 1 0 -1 %u 0 0 0 0 %ld 0 0 0 20 0 1 0 %ld 1000 %ld\n",
+                          pid, comm, st, flags, utime, start, rss);
+            fx.file(std::to_string(pid) + "/stat", line);
+        };
+        proc(10, "busy one", 'R', 0, 100, 5, 10);
+        proc(11, "kworker/0:1", 'I', 0x00200000u, 100, 5, 0);
+        proc(12, "fat", 'S', 0, 50, 5, 100000);
+        proc(13, "reused", 'S', 0, 400, 5, 20);
+        budyk_linux_set_proc_root(fx.root.c_str());
+        std::unique_ptr<budyk_detail_c> d(new budyk_detail_c());
+        budyk_sample_c s;
+        std::memset(&s, 0, sizeof(s));
+        s.timestamp_nanos = 1000000000ULL;
+        assert(budyk_collect_proc_linux_ex(&s, d.get()) == 0);
+        assert(s.proc.total == 4);
+        assert(d->nprocs == 3);                       // no kernel thread; nothing busy yet
+        for (uint32_t i = 0; i < d->nprocs; ++i) assert(d->procs[i].cpu_percent == 0.0);
+        assert(d->procs[0].pid == 12);                // by RSS
+        // Two seconds on: 10 used 1 s of CPU (tck ticks), 12 none, 13 is
+        // a new process under the old pid.
+        proc(10, "busy one", 'R', 0, 100 + tck, 5, 10);
+        proc(11, "kworker/0:1", 'I', 0x00200000u, 100 + 10 * tck, 5, 0);
+        proc(13, "reused", 'S', 0, 400 + tck, 9, 20);
+        s.timestamp_nanos += 2000000000ULL;
+        assert(budyk_collect_proc_linux_ex(&s, d.get()) == 0);
+        assert(d->nprocs == 3);
+        assert(d->procs[0].pid == 10 && std::string(d->procs[0].name) == "busy one");
+        assert(near(d->procs[0].cpu_percent, 50.0) && d->procs[0].state == 'R');
+        assert(d->procs[0].rss_bytes == 10ULL * static_cast<uint64_t>(page));
+        assert(d->procs[1].pid == 12 && d->procs[1].cpu_percent == 0.0);
+        assert(d->procs[2].pid == 13 && d->procs[2].cpu_percent == 0.0);   // reused: no rate
+        for (uint32_t i = 0; i < d->nprocs; ++i) assert(d->procs[i].pid != 11);
+        // Without d: the counts only.
+        assert(budyk_collect_proc_linux_ex(&s, nullptr) == 0 && s.proc.total == 4);
+    }
+
+    // 7g3. The tracker itself: the top BUDYK_TOP_EACH by CPU and by RSS,
+    //      each process once, by CPU then RSS; a process past
+    //      BUDYK_MAX_TRACKED_PROCS has no rate; reads in any pid order.
+    {
+        std::unique_ptr<budyk_detail_c> d(new budyk_detail_c());
+        auto read = [&](uint64_t ns, int count, uint64_t cpu_step) {
+            budyk_procs_begin(d.get(), ns);
+            for (int i = count; i >= 1; --i) {              // descending pids
+                budyk_proc_read_c r;
+                std::memset(&r, 0, sizeof(r));
+                r.pid       = i;
+                r.start     = 1;
+                r.cpu       = static_cast<uint64_t>(i) * cpu_step;   // more CPU for higher pids
+                r.rss_bytes = static_cast<uint64_t>(count - i + 1) * 1000; // more RSS for lower pids
+                r.state     = 'S';
+                std::snprintf(r.name, sizeof(r.name), "p%d", i);
+                budyk_procs_add(d.get(), &r, 100.0);
+            }
+            budyk_procs_end(d.get());
+        };
+        read(1000000000ULL, 50, 0);
+        assert(d->nprocs == BUDYK_TOP_EACH);                // RSS only: none busy
+        read(2000000000ULL, 50, 100);                      // pid i used i s in 1 s
+        assert(d->nprocs == 2 * BUDYK_TOP_EACH);
+        assert(d->procs[0].pid == 50 && near(d->procs[0].cpu_percent, 5000.0));
+        assert(d->procs[BUDYK_TOP_EACH - 1].pid == 41);
+        assert(d->procs[BUDYK_TOP_EACH].pid == 10 && d->procs[2 * BUDYK_TOP_EACH - 1].pid == 1);
+        for (uint32_t i = 1; i < d->nprocs; ++i) {
+            assert(d->procs[i - 1].cpu_percent >= d->procs[i].cpu_percent);
+        }
+        // Both tops at once: the union holds each once.
+        budyk_procs_begin(d.get(), 3000000000ULL);
+        budyk_proc_read_c big;
+        std::memset(&big, 0, sizeof(big));
+        big.pid = 7; big.start = 1; big.cpu = 7 * 200; big.rss_bytes = 1ULL << 40;
+        budyk_procs_add(d.get(), &big, 100.0);
+        budyk_procs_end(d.get());
+        assert(d->nprocs == 1 && d->procs[0].pid == 7);
+
+        // More processes than tracked: the ones read past the limit
+        // (here the last five, pids 5..1, listed for their RSS) read 0.
+        const int many = BUDYK_MAX_TRACKED_PROCS + 5;
+        read(4000000000ULL, many, 0);
+        read(5000000000ULL, many, 100);
+        assert(d->nproc_track[d->proc_cur] == BUDYK_MAX_TRACKED_PROCS);
+        assert(d->procs[0].pid == many && d->procs[0].cpu_percent > 0.0);
+        int untracked = 0;
+        for (uint32_t i = 0; i < d->nprocs; ++i) {
+            if (d->procs[i].pid <= 5) {
+                assert(d->procs[i].cpu_percent == 0.0);
+                ++untracked;
+            } else if (d->procs[i].pid <= 10) {
+                assert(d->procs[i].cpu_percent > 0.0);
+            }
+        }
+        assert(untracked == 5);
     }
 
     // 7h. TCP / UDP against a fixture: the snmp columns are looked up by

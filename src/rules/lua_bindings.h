@@ -12,8 +12,9 @@
 // rawset() onto a proxy, so neither outlives the tick.
 //
 // With `d`, the per-entity detail goes in as read-only collections inside
-// the groups: cpu.cores (an array), disk.devices, net.interfaces and
-// fs.mounts (keyed by name / mount point), those in d->collected. Item
+// the groups: cpu.cores and proc.top (arrays), disk.devices,
+// net.interfaces and fs.mounts (keyed by name / mount point), those in
+// d->collected. Item
 // tables are reused while the item is there and dropped when it goes.
 //
 // A group the sample lacks (s.groups) and a list `d` lacks (or every list,

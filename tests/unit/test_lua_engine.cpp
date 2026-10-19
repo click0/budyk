@@ -1328,6 +1328,38 @@ int main() {
         ::rmdir(dir);
     }
 
+    // N+6. proc.top: the top processes as a read-only array (pid, name,
+    //      state, threads, cpu_percent, rss_bytes); not collected without
+    //      the list.
+    {
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        assert(e.load_string(
+            "watch('hog', { cooldown = 0, action = 'log', when = function()\n"
+            "  for _, p in ipairs(proc.top) do\n"
+            "    if p.cpu_percent > 90 and p.name == 'stress' and p.state == 'R' then return true end\n"
+            "  end\n"
+            "  return false\n"
+            "end })\n"
+            "watch('fat', { cooldown = 0, action = 'log', when = function()\n"
+            "  return #proc.top == 2 and proc.top[2].rss_bytes > 1e9 and proc.top[2].pid == 2\n"
+            "    and proc.top[2].threads == 4\n"
+            "end })\n"
+            "watch('ro', { cooldown = 0, when = function() proc.top[1].pid = 0 return true end })\n") == 0);
+        std::unique_ptr<budyk_detail_c> d(new budyk_detail_c());
+        d->collected = kDetailAll;
+        d->nprocs = 2;
+        d->procs[0] = budyk_process_c{ 1, "stress", 'R', 1, 99.5, 1000 };
+        d->procs[1] = budyk_process_c{ 2, "db", 'S', 4, 0.5, 2ULL << 30 };
+        const Sample x = mk(10, 50, 0, 0);
+        assert(e.eval_tick(x, d.get()) == 2);
+        assert(e.rules()[2].last_error.find("proc.top[1].pid is read-only") != std::string::npos);
+        d->collected = kDetailAll & ~kDetailProcesses;
+        assert(e.eval_tick(x, d.get()) == 0);
+        assert(e.rules()[0].last_skip.find("proc.top is not collected at this level") != std::string::npos);
+        e.shutdown();
+    }
+
     std::printf("test_lua_engine: PASS\n");
     return 0;
 }

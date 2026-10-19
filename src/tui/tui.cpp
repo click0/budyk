@@ -286,6 +286,59 @@ std::vector<LevelInfo> parse_levels(const std::string& body) {
     return out;
 }
 
+std::vector<ProcessRow> parse_processes(const std::string& body) {
+    std::vector<ProcessRow> out;
+    size_t i = body.find("\"processes\":[");
+    if (i == std::string::npos) return out;
+    i += 13;
+    // The end of the string that starts at body[at] (the opening quote):
+    // the index of its closing quote, past escapes; npos if cut off.
+    auto string_end = [&](size_t at) {
+        for (size_t k = at + 1; k < body.size(); ++k) {
+            if (body[k] == '\\') { ++k; continue; }
+            if (body[k] == '"') return k;
+        }
+        return std::string::npos;
+    };
+    std::vector<ProcessRow> rows;
+    while (i < body.size()) {
+        while (i < body.size() && (body[i] == ',' || body[i] == ' ')) ++i;
+        if (i >= body.size()) return out;
+        if (body[i] == ']') return rows;
+        if (body[i] != '{') return out;
+        ProcessRow row;
+        ++i;
+        while (i < body.size() && body[i] != '}') {
+            if (body[i] == ',' || body[i] == ' ') { ++i; continue; }
+            if (body[i] != '"') return out;
+            const size_t kend = string_end(i);
+            if (kend == std::string::npos || kend + 1 >= body.size() || body[kend + 1] != ':') return out;
+            const std::string key = body.substr(i + 1, kend - i - 1);
+            i = kend + 2;
+            if (i < body.size() && body[i] == '"') {
+                const size_t vend = string_end(i);
+                if (vend == std::string::npos) return out;
+                const std::string v = json_unescape(body.substr(i + 1, vend - i - 1));
+                if (key == "name")  row.name  = v;
+                if (key == "state") row.state = v;
+                i = vend + 1;
+            } else {
+                char* end = nullptr;
+                const double v = std::strtod(body.c_str() + i, &end);
+                if (end == body.c_str() + i) return out;
+                if (key == "pid")         row.pid = static_cast<long>(v);
+                if (key == "cpu_percent") row.cpu_percent = v;
+                if (key == "rss_bytes")   row.rss_bytes = v;
+                i = static_cast<size_t>(end - body.c_str());
+            }
+        }
+        if (i >= body.size()) return out;
+        ++i;                                   // '}'
+        rows.push_back(row);
+    }
+    return out;
+}
+
 std::string level_label(const std::vector<LevelInfo>& levels, int id) {
     for (const auto& lv : levels) {
         if (lv.id != id) continue;
@@ -470,6 +523,18 @@ int tui_run(const char* host, int port, std::string (*ask_password)()) {
                            fs_used, bar(fs_used, barw).c_str(), fs_count);
             if (has(13, "Uptime", "uptime"))
                 ::mvprintw(13, 0, "Uptime %s", fmt_uptime(uptime).c_str());
+
+            // The top processes, as many as the window has rows for.
+            const auto top = tui_detail::parse_processes(b);
+            if (!top.empty() && LINES > 17) {
+                ::mvprintw(15, 0, "%-24s %8s %2s %7s %9s", "process", "pid", "", "CPU", "RSS");
+                for (size_t k = 0; k < top.size() && 16 + static_cast<int>(k) < LINES - 1; ++k) {
+                    const auto& p = top[k];
+                    ::mvprintw(16 + static_cast<int>(k), 0, "%-24.24s %8ld %2.2s %6.1f%% %9s",
+                               p.name.c_str(), p.pid, p.state.c_str(), p.cpu_percent,
+                               fmt_bytes(static_cast<uint64_t>(p.rss_bytes)).c_str());
+                }
+            }
         }
         ::refresh();
 

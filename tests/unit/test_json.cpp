@@ -181,8 +181,22 @@ int main() {
         assert(json_escape(std::string("\x01\x1f", 2)) == "\\u0001\\u001f");
         assert(json_escape("\xD1\x83") == "\xD1\x83");                 // у, as is
         assert(json_escape("/") == "/");
-        const std::string all = std::string("q\"b\\\x01\n\xE2\x82\xAC", 8);
+        const std::string all = std::string("q\"b\\\x01\n\xE2\x82\xAC", 9);
         assert(json_unescape(json_escape(all)) == all);
+        // Not UTF-8 (a process name or a mount point can be any bytes):
+        // each byte that starts no well-formed sequence is \ufffd, so the
+        // JSON, and a WebSocket text frame of it, stays valid UTF-8.
+        assert(json_escape("a\xFF" "b") == "a\\ufffdb");
+        assert(json_escape("\xE2\x82") == "\\ufffd\\ufffd");             // cut short
+        assert(json_escape("\xC0\xAF") == "\\ufffd\\ufffd");             // overlong '/'
+        assert(json_escape("\xE0\x80\xAF") == "\\ufffd\\ufffd\\ufffd");   // overlong, 3 bytes
+        assert(json_escape("\xE2\x82" "A") == "\\ufffd\\ufffdA");         // third byte not a continuation
+        assert(json_escape("\xED\xA0\x80") == "\\ufffd\\ufffd\\ufffd");   // a surrogate
+        assert(json_escape("\xF4\x90\x80\x80") == "\\ufffd\\ufffd\\ufffd\\ufffd");  // > U+10FFFF
+        assert(json_escape("\xF0\x9F\x98\x80\xEF\xBF\xBD") == "\xF0\x9F\x98\x80\xEF\xBF\xBD");
+        assert(json_escape("\xE0\xA0\x80\xF0\x90\x80\x80") == "\xE0\xA0\x80\xF0\x90\x80\x80");
+        assert(json_escape("\x80") == "\\ufffd");
+        assert(json_unescape(json_escape("x\xFE")) == "x\xEF\xBF\xBD");
     }
 
     // 6. json_get_string: the login body as the SPA and the TUI send
@@ -249,10 +263,22 @@ int main() {
 
         d->ncores = d->ndisks = d->nifaces = d->nmounts = 0;
         assert(detail_to_json(*d) ==
-               "{\"collected\":[],\"cores\":[],\"disks\":[],\"interfaces\":[],\"filesystems\":[]}");
+               "{\"collected\":[],\"cores\":[],\"disks\":[],\"interfaces\":[],\"filesystems\":[],"
+               "\"processes\":[]}");
         d->collected = kDetailAll;
         assert(contains(detail_to_json(*d), "{\"collected\":[\"cpu.cores\",\"disk.devices\","
-                                            "\"net.interfaces\",\"fs.mounts\"],\"cores\":[]"));
+                                            "\"net.interfaces\",\"fs.mounts\",\"proc.top\"],\"cores\":[]"));
+        // The processes: names escaped (not UTF-8 included), the state a
+        // letter.
+        d->nprocs = 2;
+        d->procs[0] = budyk_process_c{ 77, "bad\xFF\"name", 'R', 3, 12.5, 4096 };
+        d->procs[1] = budyk_process_c{ 1, "init", '\0', 1, 0.0, 0 };
+        assert(contains(detail_to_json(*d),
+                        "\"processes\":[{\"pid\":77,\"name\":\"bad\\ufffd\\\"name\",\"state\":\"R\","
+                        "\"threads\":3,\"cpu_percent\":12.5,\"rss_bytes\":4096},"
+                        "{\"pid\":1,\"name\":\"init\",\"state\":\"\",\"threads\":1,"
+                        "\"cpu_percent\":0,\"rss_bytes\":0}]}"));
+        d->nprocs = 0;
         d->collected = kDetailDisks | kDetailMounts;
         assert(contains(detail_to_json(*d), "{\"collected\":[\"disk.devices\",\"fs.mounts\"],\"cores\""));
         d->baseline = kDetailCores | kDetailInterfaces;

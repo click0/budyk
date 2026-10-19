@@ -8,9 +8,11 @@
 #include <sys/time.h>
 
 #include <errno.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 /* Uptime: kern.boottime returns a `struct timeval` for the moment the
  * kernel started; subtracting it from the current monotonic-but-on-the-
@@ -66,6 +68,27 @@ int budyk_collect_load_freebsd(budyk_sample_c* s) {
 #include <sys/timex.h>    /* ntp_adjtime */
 
 int budyk_collect_proc_freebsd(budyk_sample_c* s) {
+    return budyk_collect_proc_freebsd_ex(s, NULL);
+}
+
+/* A process's state as ps(1) shows it. */
+static char state_letter(int stat) {
+    switch (stat) {
+        case SRUN:   return 'R';
+        case SSLEEP: return 'S';
+        case SWAIT:  return 'W';
+        case SLOCK:  return 'L';
+        case SSTOP:  return 'T';
+        case SZOMB:  return 'Z';
+        case SIDL:   return 'I';
+        default:     return '?';
+    }
+}
+
+/* With d, also the top processes: CPU time from ki_runtime (µs), told
+ * apart from a reused pid by ki_start; system processes (P_SYSTEM: the
+ * kernel, idle, interrupt threads) left out, as top(1) does without -S. */
+int budyk_collect_proc_freebsd_ex(budyk_sample_c* s, budyk_detail_c* d) {
     if (s == NULL) return -EINVAL;
     memset(&s->proc, 0, sizeof(s->proc));
 
@@ -87,8 +110,11 @@ int budyk_collect_proc_freebsd(budyk_sample_c* s) {
     if (procs == NULL) return -ENOMEM;
 
     const size_t n = bytes / sizeof(struct kinfo_proc);
+    const uint64_t page = (uint64_t)getpagesize();
+    if (d != NULL) budyk_procs_begin(d, s->timestamp_nanos);
     for (size_t i = 0; i < n; ++i) {
-        switch (procs[i].ki_stat) {
+        const struct kinfo_proc* kp = &procs[i];
+        switch (kp->ki_stat) {
             case SRUN:                         ++s->proc.running;  break;
             case SSLEEP: case SWAIT: case SIDL: ++s->proc.sleeping; break;
             case SLOCK:                        ++s->proc.blocked;  break;
@@ -96,8 +122,20 @@ int budyk_collect_proc_freebsd(budyk_sample_c* s) {
             case SZOMB:                        ++s->proc.zombie;   break;
             default:                           break;
         }
-        s->proc.threads += (uint32_t)procs[i].ki_numthreads;
+        s->proc.threads += (uint32_t)kp->ki_numthreads;
+        if (d == NULL || (kp->ki_flag & P_SYSTEM) != 0) continue;
+        budyk_proc_read_c r;
+        memset(&r, 0, sizeof(r));
+        r.pid       = (int32_t)kp->ki_pid;
+        r.start     = (uint64_t)kp->ki_start.tv_sec * 1000000u + (uint64_t)kp->ki_start.tv_usec;
+        r.cpu       = (uint64_t)kp->ki_runtime;
+        r.rss_bytes = (uint64_t)kp->ki_rssize * page;
+        r.threads   = (uint32_t)kp->ki_numthreads;
+        r.state     = state_letter(kp->ki_stat);
+        snprintf(r.name, sizeof(r.name), "%s", kp->ki_comm);
+        budyk_procs_add(d, &r, 1.0e6);
     }
+    if (d != NULL) budyk_procs_end(d);
     free(procs);
     s->proc.total = (uint32_t)n;
     return 0;

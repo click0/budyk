@@ -47,6 +47,19 @@ int  sample_in_list(const std::string& body, const char* key, const char* name);
 // A sample without a "groups" list (an older daemon) has every group.
 bool sample_has_group(const std::string& body, const char* group);
 
+// One of the top processes in the "detail" of an /api/samples body.
+struct ProcessRow {
+    long        pid = 0;
+    std::string name;
+    std::string state;
+    double      cpu_percent = 0.0;
+    double      rss_bytes   = 0.0;
+};
+
+// The "processes" list of an /api/samples body, in its order (largest
+// CPU first); names unescaped. Empty if there is none or it is cut off.
+std::vector<ProcessRow> parse_processes(const std::string& body);
+
 // One row of GET /api/levels.
 struct LevelInfo {
     int         id          = 0;

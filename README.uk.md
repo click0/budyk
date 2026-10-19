@@ -98,8 +98,8 @@ budyk serve (один процес на сервер)
   пам'ять, swap, середнє навантаження, дисковий I/O, мережа, процеси за
   станами, TCP і UDP, заповнення файлових систем (місце та inode),
   синхронізація годинника, ентропія, температура, аптайм, а також власні
-  CPU та RSS budyk; у реальному часі — кожне ядро, диск, інтерфейс і
-  файлова система.
+  CPU та RSS budyk; у реальному часі — кожне ядро, диск, інтерфейс,
+  файлова система й найактивніші процеси за CPU та за пам'яттю.
 - **Сховище в кільцевих файлах:** окремий файл обмеженого розміру для
   кожного рівня, тож детальні дані 1 Гц із напружених періодів або тих,
   коли хтось дивився, лежать поруч із рідкими 5-хвилинними вибірками.
@@ -295,7 +295,7 @@ collection:
 |-------|------------|
 | `minimal` | `cpu`, `mem`, `swap`, `load`, `uptime` |
 | `standard` | усі групи: наведені вище і `disk`, `net`, `proc`, `entropy`, `self`, `thermal`, `tcp`, `udp`, `fs`, `clock` |
-| `full` | `standard` і списки окремих об'єктів `cpu.cores`, `disk.devices`, `net.interfaces`, `fs.mounts` |
+| `full` | `standard` і списки окремих об'єктів `cpu.cores`, `disk.devices`, `net.interfaces`, `fs.mounts`, `proc.top` |
 
 У списку можна називати набори, групи й списки. Кожен набір містить
 `minimal` (з ним звіряються пороги), а список тягне за собою свою групу
@@ -431,9 +431,13 @@ watch("swap_under_load", {
 (`read_bytes_per_sec`, `write_bytes_per_sec`, `reads_per_sec`,
 `writes_per_sec`, `busy_percent`), `net.interfaces["eth0"]`
 (`rx/tx_bytes_per_sec`, `rx/tx_packets_per_sec`, `rx/tx_errors_per_sec`,
-`rx_drops_per_sec`, `up`) і `fs.mounts["/var"]` (`type`, `device`,
+`rx_drops_per_sec`, `up`), `fs.mounts["/var"]` (`type`, `device`,
 `total_bytes`, `used_bytes`, `avail_bytes`, `used_percent`,
-`inodes_total`, `inodes_used`, `inodes_used_percent`). Пристрою, якого
+`inodes_total`, `inodes_used`, `inodes_used_percent`) і `proc.top` —
+масив із 10 процесів, що найбільше навантажують CPU, і 10 найбільших за
+пам'яттю, кожен один раз, найактивніші першими (`pid`, `name`, `state`,
+`threads`, `cpu_percent` — частка одного CPU за останній інтервал,
+`rss_bytes`; потоки ядра не входять). Пристрою, якого
 вже немає, відповідає `nil`; обходити — через `ipairs` / `pairs`:
 
 ```lua
