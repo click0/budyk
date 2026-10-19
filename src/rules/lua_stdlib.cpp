@@ -27,31 +27,84 @@ budyk::LuaEngine* engine_from(lua_State* L) {
     return eng;
 }
 
-int opt_int_field(lua_State* L, int tbl, const char* key, int fallback) {
-    lua_getfield(L, tbl, key);
-    int v = fallback;
-    if (lua_isnumber(L, -1)) v = static_cast<int>(lua_tointeger(L, -1));
-    lua_pop(L, 1);
-    return v;
+int l_alert(lua_State* L);      // defined below; watch() recognises them as actions
+int l_escalate(lua_State* L);
+
+// What an action value names: a function to call, one of the built-in
+// actions, or nothing valid. `alert` and `escalate` (the builtins
+// themselves) mean the built-in actions, not a call with no arguments.
+enum class ActionKind { Function, Alert, Log, Escalate, Invalid };
+ActionKind action_kind(lua_State* L, int idx) {
+    switch (lua_type(L, idx)) {
+        case LUA_TFUNCTION: {
+            const lua_CFunction f = lua_tocfunction(L, idx);
+            if (f == l_alert)    return ActionKind::Alert;
+            if (f == l_escalate) return ActionKind::Escalate;
+            return ActionKind::Function;
+        }
+        case LUA_TSTRING: {
+            const char* tag = lua_tostring(L, idx);
+            if (std::strcmp(tag, "alert")    == 0) return ActionKind::Alert;
+            if (std::strcmp(tag, "log")      == 0) return ActionKind::Log;
+            if (std::strcmp(tag, "escalate") == 0) return ActionKind::Escalate;
+            return ActionKind::Invalid;
+        }
+        default:
+            return ActionKind::Invalid;
+    }
 }
 
-int l_alert(lua_State* L);   // defined below; watch() recognises it as an action
+// Push the action at `idx` as an entry of a rule's action list: the
+// function itself, or the built-in's tag.
+void push_action(lua_State* L, int idx, ActionKind k) {
+    switch (k) {
+        case ActionKind::Alert:    lua_pushliteral(L, "alert");    break;
+        case ActionKind::Log:      lua_pushliteral(L, "log");      break;
+        case ActionKind::Escalate: lua_pushliteral(L, "escalate"); break;
+        default:                   lua_pushvalue(L, idx);          break;
+    }
+}
 
-// watch(name, opts) — registers a rule. opts:
-//   when      — required function; the rule fires when it returns true
-//   action    — optional:
-//                 function  called with no arguments on fire
-//                 "alert"   alert(name, severity, message)   (the default)
-//                 "log"     print "[budyk] <message>"
-//               `action = alert` (the builtin itself) means "alert", so
-//               the rule's severity/message are used instead of calling
-//               alert() with no arguments.
+// opts[key] as a whole number in lo..hi, or `fallback` when absent.
+// False if it is there but not such a number (a string that reads as
+// one counts, as everywhere in Lua).
+bool opt_count_field(lua_State* L, int tbl, const char* key, lua_Integer lo,
+                     lua_Integer hi, lua_Integer fallback, lua_Integer* out) {
+    lua_getfield(L, tbl, key);
+    bool ok = true;
+    *out = fallback;
+    if (!lua_isnil(L, -1)) {
+        int isnum = 0;
+        const lua_Integer v = lua_tointegerx(L, -1, &isnum);
+        ok = isnum != 0 && v >= lo && v <= hi;
+        if (ok) *out = v;
+    }
+    lua_pop(L, 1);
+    return ok;
+}
+
+// watch(name, opts) — registers a rule (spec §3.6.2). opts:
+//   when      — required function; true fires (after for_ticks), false
+//               or no value resets the streak, nil skips the tick and
+//               keeps it (spec §3.6.5)
+//   action    — optional, run when the rule fires; one action or a
+//               sequence of them, run in order:
+//                 alert / "alert"        alert(name, severity, message)
+//                                        (the default)
+//                 "log"                  print "[budyk] <message>"
+//                 escalate / "escalate"  keep L3 on for 60 s
+//                 a function             called with no arguments; this
+//                                        includes exec("/path") written
+//                                        in the rules file (see l_exec)
 //   severity  — "info" / "warning" (default) / "critical"; "alert" only
 //   message   — string; default is the rule name
-//   for_ticks — consecutive true evaluations needed to fire (default 1)
-//   cooldown  — ticks to skip after firing (default 0)
-// Anything else in action / severity is an error at load time, so a
-// misconfigured rule fails loudly instead of silently doing nothing.
+//   for_ticks — consecutive true evaluations needed to fire (1 by
+//               default, up to 1 000 000; 0 means 1)
+//   cooldown  — ticks to skip after firing (spec §3.6.4: by default as
+//               many as for_ticks; 0 for none)
+// Anything else in action / severity / for_ticks / cooldown is an error
+// at load time, so a misconfigured rule fails loudly instead of silently
+// doing nothing.
 int l_watch(lua_State* L) {
     const char* name = luaL_checkstring(L, 1);
     luaL_checktype(L, 2, LUA_TTABLE);
@@ -65,30 +118,29 @@ int l_watch(lua_State* L) {
         return luaL_error(L, "watch(%s): 'when' must be a function", name);
     }
 
-    enum class Action { Function, Alert, Log, Invalid };
-    Action action = Action::Invalid;
     lua_getfield(L, 2, "action");
-    switch (lua_type(L, -1)) {
-        case LUA_TNIL:
-            action = Action::Alert;
-            break;
-        case LUA_TFUNCTION:
-            action = lua_tocfunction(L, -1) == l_alert ? Action::Alert
-                                                       : Action::Function;
-            break;
-        case LUA_TSTRING: {
-            const char* tag = lua_tostring(L, -1);
-            if      (std::strcmp(tag, "alert") == 0) action = Action::Alert;
-            else if (std::strcmp(tag, "log")   == 0) action = Action::Log;
-            break;
+    const int action_idx  = lua_gettop(L);
+    const int action_type = lua_type(L, action_idx);
+    lua_Integer n_actions = 1;
+    if (action_type == LUA_TTABLE) {
+        n_actions = static_cast<lua_Integer>(lua_rawlen(L, action_idx));
+        if (n_actions == 0) {
+            return luaL_error(L, "watch(%s): 'action' is an empty list", name);
         }
-        default:
-            break;
-    }
-    lua_pop(L, 1);
-    if (action == Action::Invalid) {
+        for (lua_Integer i = 1; i <= n_actions; ++i) {
+            lua_rawgeti(L, action_idx, i);
+            const bool ok = action_kind(L, -1) != ActionKind::Invalid;
+            lua_pop(L, 1);
+            if (!ok) {
+                return luaL_error(L,
+                    "watch(%s): action[%d] must be a function, alert, escalate, "
+                    "\"alert\", \"log\" or \"escalate\"", name, static_cast<int>(i));
+            }
+        }
+    } else if (action_type != LUA_TNIL && action_kind(L, action_idx) == ActionKind::Invalid) {
         return luaL_error(L,
-            "watch(%s): 'action' must be a function, \"alert\" or \"log\"", name);
+            "watch(%s): 'action' must be a function, alert, escalate, \"alert\", "
+            "\"log\", \"escalate\" or a list of them", name);
     }
 
     budyk::AlertSeverity severity = budyk::AlertSeverity::Warning;
@@ -110,15 +162,25 @@ int l_watch(lua_State* L) {
         return luaL_error(L, "watch(%s): 'message' must be a string", name);
     }
 
+    // for_ticks = 0 has always meant 1; it still does, cooldown default
+    // included.
+    lua_Integer for_ticks = 1, cooldown_ticks = 0;
+    if (!opt_count_field(L, 2, "for_ticks", 0, 1000000, 1, &for_ticks)) {
+        return luaL_error(L, "watch(%s): 'for_ticks' must be a whole number from 1 to 1000000",
+                          name);
+    }
+    if (for_ticks == 0) for_ticks = 1;
+    if (!opt_count_field(L, 2, "cooldown", 0, 1000000, for_ticks, &cooldown_ticks)) {
+        return luaL_error(L, "watch(%s): 'cooldown' must be a whole number from 0 to 1000000",
+                          name);
+    }
+
     auto* eng = engine_from(L);
     if (eng == nullptr) {
         return luaL_error(L, "watch: engine not bound");
     }
 
     // Nothing below raises.
-    const int for_ticks      = opt_int_field(L, 2, "for_ticks", 1);
-    const int cooldown_ticks = opt_int_field(L, 2, "cooldown",  0);
-
     std::string message = name;
     if (msg_type == LUA_TSTRING) {
         lua_getfield(L, 2, "message");
@@ -127,18 +189,26 @@ int l_watch(lua_State* L) {
     }
 
     lua_getfield(L, 2, "when");
-    const int when_ref   = luaL_ref(L, LUA_REGISTRYINDEX);
-    int       action_ref = LUA_REFNIL;
-    if (action == Action::Function) {
-        lua_getfield(L, 2, "action");
-        action_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    const int when_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    lua_createtable(L, static_cast<int>(n_actions), 0);          // the action list
+    if (action_type == LUA_TNIL) {
+        lua_pushliteral(L, "alert");
+        lua_rawseti(L, -2, 1);
+    } else if (action_type == LUA_TTABLE) {
+        for (lua_Integer i = 1; i <= n_actions; ++i) {
+            lua_rawgeti(L, action_idx, i);
+            push_action(L, -1, action_kind(L, -1));
+            lua_rawseti(L, -3, i);
+            lua_pop(L, 1);
+        }
+    } else {
+        push_action(L, action_idx, action_kind(L, action_idx));
+        lua_rawseti(L, -2, 1);
     }
-    const char* action_tag = action == Action::Alert ? "alert"
-                           : action == Action::Log   ? "log"
-                           : "";
+    const int actions_ref = luaL_ref(L, LUA_REGISTRYINDEX);
 
-    eng->add_rule(name, when_ref, action_ref, action_tag, severity, message,
-                  for_ticks, cooldown_ticks);
+    eng->add_rule(name, when_ref, actions_ref, severity, message,
+                  static_cast<int>(for_ticks), static_cast<int>(cooldown_ticks));
     return 0;
 }
 
@@ -159,7 +229,7 @@ int l_alert(lua_State* L) {
     budyk::AlertSeverity sev = budyk::AlertSeverity::Warning;
     budyk::parse_severity(sev_str, &sev);
 
-    const int ok = eng->alerts().dispatch(sev, name, msg ? msg : "");
+    const int ok = eng->raise_alert(sev, name, msg ? msg : "");
     lua_pushinteger(L, ok);
     return 1;
 }
@@ -185,7 +255,8 @@ int l_escalate(lua_State* L) {
     return 1;
 }
 
-// Does the work of exec(). Returns 1 (result table pushed) or -1 with a
+// Does the work of exec(). Returns 1 (result table pushed), 0 while the
+// rules file loads (checked, nothing run, nothing pushed), or -1 with a
 // message in err. It never raises: luaL_error longjmps past C++
 // destructors, and this function owns std::string / std::vector objects,
 // so l_exec raises only after they are gone. Raw table access keeps
@@ -263,6 +334,10 @@ int exec_impl(lua_State* L, budyk::LuaEngine* eng, char* err, size_t err_cap) {
             return -1;
         }
     }
+
+    // While the rules file loads, exec() runs nothing: the checks above
+    // pass, and the caller (l_exec) hands back the command as an action.
+    if (eng->loading()) return 0;
 
     // Optional second argument: a timeout in seconds, or a table
     //   { timeout = <seconds>, wait = <bool> }.
@@ -363,6 +438,13 @@ int exec_impl(lua_State* L, budyk::LuaEngine* eng, char* err, size_t err_cap) {
     return 1;
 }
 
+// exec(cmd [, timeout | { timeout, wait }]) — see exec_impl. Written in
+// the rules file itself (outside when() and the actions), it runs
+// nothing: it checks the command as it would run it and returns a
+// function that runs it, so `action = { alert, exec("/path") }` and
+// `action = exec("/path")` work as spec §3.6.2 writes them.
+int deferred_exec(lua_State* L);
+
 int l_exec(lua_State* L) {
     auto* eng = engine_from(L);
     if (eng == nullptr || !eng->exec_enabled()) {
@@ -371,7 +453,21 @@ int l_exec(lua_State* L) {
     char err[512] = "";
     const int n = exec_impl(L, eng, err, sizeof(err));
     if (n < 0) return luaL_error(L, "%s", err);
+    if (n == 0) {                       // loading: the command as an action
+        lua_settop(L, 2);
+        lua_pushcclosure(L, deferred_exec, 2);
+        return 1;
+    }
     return n;
+}
+
+// The action exec() returned while loading: runs exec() with the
+// arguments it was given (upvalues 1 and 2) when the rule fires.
+int deferred_exec(lua_State* L) {
+    lua_settop(L, 0);
+    lua_pushvalue(L, lua_upvalueindex(1));
+    lua_pushvalue(L, lua_upvalueindex(2));
+    return l_exec(L);
 }
 
 // Shared implementation of freeze() and unfreeze(). `stop == true` sends

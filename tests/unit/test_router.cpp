@@ -11,6 +11,7 @@
 #include "web/http_util.h"
 
 #include <atomic>
+#include <deque>
 #include <cassert>
 #include <cstdio>
 #include <cstdlib>
@@ -32,6 +33,7 @@ struct World {
     WebSocketHub           ws;
     Scheduler              sched;
     std::atomic<uint64_t>  last_poll{0};
+    std::deque<AlertEvent> alerts;
     int                    wakes = 0;
     std::string            dir;
     HttpHandler            handler;
@@ -51,6 +53,7 @@ struct World {
         d.poller_window_ns = 5ULL * 1000000000ULL;
         d.wake = [this] { ++wakes; };
         d.version = "9.9.9-test";
+        d.recent_alerts = &alerts;
         handler = make_router(d);
     }
     ~World() {
@@ -126,6 +129,7 @@ int main() {
 
         assert(w.handler(get("/api/samples")).status == 401);
         assert(w.handler(get("/api/levels")).status  == 401);
+        assert(w.handler(get("/api/alerts")).status  == 401);
         assert(w.handler(get("/api/range")).status   == 401);
 
         assert(w.handler(post("/api/auth/login", "{}")).status == 400);
@@ -297,6 +301,21 @@ int main() {
                            "\"builtin\":false,\"collects\":true,"
                            "\"metrics\":[\"cpu\",\"mem\",\"swap\",\"load\",\"disk\",\"uptime\","
                            "\"disk.devices\"]}]\n"));
+    }
+
+    // 9. /api/alerts: what the serve loop keeps, oldest first; none yet
+    //    is an empty list.
+    {
+        World w;
+        w.init();
+        HttpResponse r = w.handler(get("/api/alerts"));
+        assert(r.status == 200 && r.body == "{\"count\":0,\"alerts\":[]}\n");
+        w.alerts.push_back(AlertEvent{1, "warning", "a", "first"});
+        w.alerts.push_back(AlertEvent{2, "critical", "b", "second"});
+        r = w.handler(get("/api/alerts"));
+        assert(r.status == 200 && r.content_type == "application/json");
+        assert(has(r.body, "{\"count\":2,\"alerts\":[{\"ts\":1,\"severity\":\"warning\","
+                           "\"rule\":\"a\",\"message\":\"first\"},{\"ts\":2,"));
     }
 
     std::printf("test_router: PASS\n");

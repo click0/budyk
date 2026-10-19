@@ -92,7 +92,7 @@ storage:
 #   - name: high_cpu
 #     when: "cpu.total_percent > 90"   # spliced verbatim into Lua
 #     for_ticks: 5                     # consecutive hits before firing
-#     cooldown: 10                     # ticks to wait after firing
+#     cooldown: 10                     # ticks to wait after firing (default: for_ticks)
 #     severity: warning                # info / warning / critical
 #     action: alert                    # alert | log
 #     message: "CPU pegged"            # alert body; defaults to name

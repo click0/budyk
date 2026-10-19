@@ -223,6 +223,28 @@ int main() {
         assert(rc < 0);
     }
 
+    // 14. Without a cooldown a YAML rule gets the engine's default, as
+    //     long as its for_ticks (spec §3.6.4); cooldown: 0 is kept.
+    {
+        const char* y =
+            "- name: slow\n"
+            "  when: \"cpu.total_percent > 90\"\n"
+            "  for_ticks: 3\n"
+            "- name: every\n"
+            "  when: \"cpu.total_percent > 90\"\n"
+            "  cooldown: 0\n";
+        std::string lua;
+        assert(yaml_rules_to_lua(y, &lua) == 0);
+        assert(!contains(lua, "cooldown = 3"));
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        assert(e.load_string(lua.c_str()) == 0);
+        assert(e.rule_count() == 2);
+        assert(e.rules()[0].for_ticks == 3 && e.rules()[0].cooldown_ticks == 3);
+        assert(e.rules()[1].for_ticks == 1 && e.rules()[1].cooldown_ticks == 0);
+        e.shutdown();
+    }
+
     std::printf("test_yaml_rules: PASS\n");
     return 0;
 }

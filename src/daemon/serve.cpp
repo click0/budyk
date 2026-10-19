@@ -296,6 +296,8 @@ int cmd_serve(int argc, char* argv[], const char* version) {
     // The newest sample's per-entity detail as JSON, for the WebSocket
     // frame and /api/samples. Written by this thread under hot_mtx.
     std::string latest_detail;
+    // The latest alerts, for /api/alerts; under hot_mtx too.
+    std::deque<budyk::AlertEvent> recent_alerts;
 
     budyk::Scheduler sched(cfg.scheduler);
 
@@ -474,6 +476,7 @@ int cmd_serve(int argc, char* argv[], const char* version) {
     deps.hot              = &hot;
     deps.hot_mtx          = &hot_mtx;
     deps.latest_detail    = &latest_detail;
+    deps.recent_alerts    = &recent_alerts;
     deps.tm               = &tm;
     deps.sessions         = &sessions;
     deps.limiter          = &login_limiter;
@@ -677,6 +680,16 @@ int cmd_serve(int argc, char* argv[], const char* version) {
         for (const auto& e : engine.take_escalations()) {
             sched.request_by_name(e.level, now_realtime_ns() +
                 static_cast<uint64_t>(e.seconds) * kNsPerSec);
+        }
+        // Alerts go to the dashboards as they happen (spec §3.6.4) and
+        // stay for /api/alerts.
+        if (std::vector<budyk::AlertEvent> fired = engine.take_alerts(); !fired.empty()) {
+            {
+                std::lock_guard<std::mutex> g(hot_mtx);
+                for (auto& a : fired) recent_alerts.push_back(a);
+                while (recent_alerts.size() > budyk::kRecentAlerts) recent_alerts.pop_front();
+            }
+            if (ws.size() > 0) ws.broadcast(budyk::alerts_to_json(fired.data(), fired.size()));
         }
 
         housekeeping();

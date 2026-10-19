@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #pragma once
 #include "config/config.h"
+#include "core/alert_event.h"
 #include "hot_buffer/hot_buffer.h"
 #include "scheduler/scheduler.h"
 #include "storage/tier_manager.h"
@@ -11,6 +12,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <mutex>
 
@@ -29,6 +31,9 @@ struct RouterDeps {
     // The newest sample's detail JSON (detail_to_json), under hot_mtx;
     // /api/samples adds it. Optional.
     const std::string*     latest_detail = nullptr;
+    // The latest alerts (the last kRecentAlerts, oldest first), under
+    // hot_mtx; /api/alerts returns them. Optional.
+    const std::deque<AlertEvent>* recent_alerts = nullptr;
     TierManager*           tm           = nullptr;
     SessionStore*          sessions     = nullptr;
     LoginLimiter*          limiter      = nullptr;
@@ -45,8 +50,11 @@ struct RouterDeps {
     const char*            version      = "";
 };
 
+// How many alerts the daemon keeps for /api/alerts (RAM only).
+constexpr size_t kRecentAlerts = 100;
+
 // The daemon's HTTP routes: the SPA, /api/health, auth, samples, range,
-// levels and the WebSocket upgrade.
+// levels, alerts and the WebSocket upgrade.
 HttpHandler make_router(const RouterDeps& deps);
 
 } // namespace budyk

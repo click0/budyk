@@ -289,6 +289,19 @@ int main() {
         }
     }
 
+    // 10. alerts_to_json: oldest first, the strings escaped.
+    {
+        const AlertEvent a[] = {
+            { 5, "critical", "disk \"full\"", "line1\nline2" },
+            { 6, "info", "x", "" },
+        };
+        const std::string j = alerts_to_json(a, 2);
+        assert(j == "{\"count\":2,\"alerts\":[{\"ts\":5,\"severity\":\"critical\","
+                    "\"rule\":\"disk \\\"full\\\"\",\"message\":\"line1\\nline2\"},"
+                    "{\"ts\":6,\"severity\":\"info\",\"rule\":\"x\",\"message\":\"\"}]}\n");
+        assert(alerts_to_json(nullptr, 0) == "{\"count\":0,\"alerts\":[]}\n");
+    }
+
     std::printf("test_json: PASS\n");
     return 0;
 }

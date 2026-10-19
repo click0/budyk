@@ -40,6 +40,14 @@ h1 .host { color: var(--muted); margin-left: .6rem; font-weight: 400; }
 .err { color: var(--crit); font-size: .85rem; }
 .hidden { display: none !important; }
 .row.off { opacity: .45; }
+.alerts { max-width: 64rem; margin-top: 1.2rem; }
+.alerts h2 { font-size: .95rem; font-weight: 600; margin: 0 0 .5rem 0; }
+.alerts table { width:100%; border-collapse: collapse; font-size:.85rem; }
+.alerts td { padding:.2rem .5rem; border-top: 1px solid var(--bar); vertical-align: top; }
+.alerts td.when { color: var(--muted); white-space: nowrap; }
+.alerts .critical { color: var(--crit); }
+.alerts .warning  { color: var(--warn); }
+.alerts .info     { color: var(--muted); }
 .status { color: var(--muted); margin-top: 1rem; font-size: .85rem; }
 .detail { max-width: 64rem; margin-top: 1.6rem; }
 .detail h2 { font-size: .95rem; font-weight: 600; margin: 1rem 0 .5rem 0; }
@@ -98,6 +106,11 @@ h1 .host { color: var(--muted); margin-left: .6rem; font-weight: 400; }
     <div class="row" data-group="uptime"><span class="label">Uptime</span>   <span class="muted" id="uptime">--</span>      <span class="value">&nbsp;</span></div>
   </div>
   <div class="status" id="status">connecting&hellip;</div>
+
+  <div class="alerts hidden" id="alertsBox">
+    <h2>Alerts</h2>
+    <table><tbody id="alerts"></tbody></table>
+  </div>
 
   <div class="detail hidden" id="detail">
     <h2>Cores</h2>
@@ -613,6 +626,27 @@ function renderDetail(d) {
   }, notCollected(d, "fs.mounts"));
 }
 
+// Alerts the rules raised: the latest from /api/alerts when the page
+// opens, then each as the WebSocket brings it. Newest first; the rule
+// names and messages are the rules', so they go in as text.
+const ALERTS_MAX = 20;
+let alertList = [];
+function addAlerts(arr) {
+  if (!Array.isArray(arr) || arr.length === 0) return;
+  alertList = alertList.concat(arr).slice(-ALERTS_MAX);
+  $("alertsBox").classList.remove("hidden");
+  const tb = $("alerts");
+  tb.replaceChildren();
+  for (const a of alertList.slice().reverse()) {
+    const tr = document.createElement("tr");
+    cell(tr, fmtClock(Number(a.ts) / 1e6), "when");
+    cell(tr, a.severity || "", a.severity || "");
+    cell(tr, a.rule || "");
+    cell(tr, a.message || "", "muted");
+    tb.appendChild(tr);
+  }
+}
+
 let ws = null;
 function openWs() {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
@@ -622,6 +656,7 @@ function openWs() {
   ws.onmessage = (e) => {
     try {
       const doc = JSON.parse(e.data);
+      if (doc.alerts) { addAlerts(doc.alerts); return; }
       const arr = doc.samples || [];
       if (arr.length) render(arr[arr.length - 1]);
       renderDetail(doc.detail);
@@ -644,6 +679,10 @@ async function start() {
   try {
     const lr = await fetch("/api/levels", { credentials: "same-origin" });
     if (lr.ok) for (const lv of await lr.json()) levels[lv.id] = lv;
+  } catch (_) {}
+  try {
+    const ar = await fetch("/api/alerts", { credentials: "same-origin" });
+    if (ar.ok) addAlerts((await ar.json()).alerts);
   } catch (_) {}
   // Wire + populate the history chart (independent of the live WS feed).
   wireHistoryControls();

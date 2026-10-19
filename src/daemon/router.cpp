@@ -239,6 +239,25 @@ HttpHandler make_router(const RouterDeps& d) {
             }
         }
 
+        // The latest alerts the rules raised (RAM only): what a dashboard
+        // shows when it opens; new ones arrive over the WebSocket.
+        if (req.method == "GET" && req.path == "/api/alerts") {
+            if (!authed(req)) {
+                return budyk::HttpResponse{
+                    401, "application/json", "{\"error\":\"unauthenticated\"}\n"};
+            }
+            std::vector<budyk::AlertEvent> snap;
+            if (d.recent_alerts != nullptr) {
+                std::lock_guard<std::mutex> g(*d.hot_mtx);
+                snap.assign(d.recent_alerts->begin(), d.recent_alerts->end());
+            }
+            budyk::HttpResponse r;
+            r.status       = 200;
+            r.content_type = "application/json";
+            r.body         = budyk::alerts_to_json(snap.data(), snap.size());
+            return r;
+        }
+
         // Level table, so clients can name the `level` id carried by every
         // sample: [{"id","name","interval_ms","priority","builtin",
         // "collects","metrics"}, ...]; "collects" is false for L1 and L2 in
