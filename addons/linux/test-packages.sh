@@ -52,8 +52,7 @@ grep -q '^ReadWritePaths=/var/lib/budyk' /usr/lib/systemd/system/budyk.service &
 # The daemon as budyk, the packaged config, another port.
 sed "s/^port: 8080/port: $PORT/" /etc/budyk/config.yaml > /tmp/budyk-test.yaml
 chmod 0644 /tmp/budyk-test.yaml
-if command -v runuser >/dev/null; then RUN="runuser -u budyk --"; else RUN="su -s /bin/sh budyk -c"; fi
-$RUN /usr/bin/budyk serve --config /tmp/budyk-test.yaml > /tmp/budyk-test.log 2>&1 &
+runuser -u budyk -- /usr/bin/budyk serve --config /tmp/budyk-test.yaml > /tmp/budyk-test.log 2>&1 &
 DPID=$!
 i=0
 until curl -s -o /dev/null "http://127.0.0.1:$PORT/api/health"; do
@@ -97,7 +96,7 @@ dpkg -P budyk >/dev/null
 # --- .rpm -----------------------------------------------------------------
 if docker info >/dev/null 2>&1; then
     if docker run --rm -v "$OUT:/pkg:ro" fedora:41 sh -c "
-        dnf -y -q install /pkg/$(basename "$RPM") procps-ng curl >/dev/null &&
+        dnf -y -q install /pkg/$(basename "$RPM") procps-ng curl util-linux >/dev/null &&
         /pkg/check-installed.sh 18991 $VER &&
         rpm -e budyk && [ ! -e /usr/bin/budyk ] && echo 'ok   rpm -e: the binary gone'"; then
         ok ".rpm installed, ran and removed in Fedora"
