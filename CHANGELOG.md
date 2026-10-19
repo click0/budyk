@@ -25,7 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   key in `base.txz`, each package against the catalogue. CI builds both
   for 14.4, runs clang-tidy on the FreeBSD side of the code (until now
   left out) and runs the smoke scripts with the cross-compiled amd64
-  binary on FreeBSD 15.0.
+  binary on FreeBSD 15.1.
+- **FreeBSD aarch64 release binaries**: `budyk-<version>-freebsd14.4-aarch64`
+  (and `-debug`), cross-compiled, and run through the smoke scripts in an
+  emulated arm64 FreeBSD 14.4 before the release is published.
 - **Linux packages** (spec M9): a `.deb` and an `.rpm` of the static
   binary in every release, built by `addons/linux/mkpkg.sh`. They install
   `/usr/bin/budyk`, `/etc/budyk/config.yaml` and `rules.lua` (conffiles,
@@ -34,8 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   service to `systemctl enable --now budyk`. CI installs both (the .rpm
   in a Fedora container), runs the daemon as `budyk`, under systemd for
   the .deb, and removes and purges them (`addons/linux/test-packages.sh`);
-  the release job does the same before publishing. A release now has 16
-  files.
+  the release job does the same before publishing.
 - **ICMP** (spec §2.1, "TCP/UDP/ICMP counters"): messages in and out,
   errors in and destination unreachable received, per second, over
   IPv4 (Linux: the `Icmp:` pair of `/proc/net/snmp`; FreeBSD:
@@ -79,6 +81,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **FreeBSD 14.4 and 15.1** replace 14.2 and 15.0 (both past their end of
+  life) in CI and in the release: the tarballs are
+  `freebsd14.4-amd64` and `freebsd15.1-amd64`, built on the oldest
+  supported release of each branch, so they run on every later one. With
+  the aarch64 tarballs and the Linux packages a release has 20 files.
 - **Records grow to 542 bytes (codec v9)** for ICMP. A ring of 0.7
   (502-byte records) or 0.6 (270) is converted when the daemon starts,
   as on the 0.7 upgrade; `tests/smoke/upgrade.sh` now runs against the

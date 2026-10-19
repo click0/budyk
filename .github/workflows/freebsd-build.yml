@@ -3,7 +3,7 @@ name: FreeBSD Build (full)
 # Full build + ctest on a FreeBSD matrix: the port's configuration
 # (shared, as addons/freebsd/Makefile builds it) and the release one
 # (static, as release.yml ships it), plus the smoke scripts against the
-# static binary and, on 15.0, against the amd64 binary cross-compiled on
+# static binary and, on 15.1, against the amd64 binary cross-compiled on
 # the Linux host (cmake/toolchains/).
 # Runs on:
 #   * push to main       (gates mainline);
@@ -40,17 +40,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        freebsd-version: ['14.2', '15.0']
+        freebsd-version: ['14.4', '15.1']
     name: FreeBSD ${{ matrix.freebsd-version }} full
     steps:
       - uses: actions/checkout@v4
 
       # The amd64 binary cross-compiled on this Linux host against the
       # sysroot of 14.4, the oldest supported 14.x (cmake/toolchains/), for
-      # the smoke scripts on 15.0 below: what an upgraded host runs. The
+      # the smoke scripts on 15.1 below: what an upgraded host runs. The
       # sysroot and the build tree stay out of the directory the VM gets.
       - name: Cross-compile for FreeBSD amd64 on the Linux host
-        if: matrix.freebsd-version == '15.0'
+        if: matrix.freebsd-version == '15.1'
         run: |
           set -ex
           .github/scripts/apt-install.sh cmake clang lld llvm
@@ -65,7 +65,7 @@ jobs:
           file budyk-cross
 
       - name: Build + test on FreeBSD
-        uses: cross-platform-actions/action@v1.0.0
+        uses: cross-platform-actions/action@v1.6.0
         timeout-minutes: 45
         with:
           operating_system: freebsd

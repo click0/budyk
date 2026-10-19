@@ -102,7 +102,7 @@ jobs:
   # Cross-compiled for FreeBSD with clang and lld (cmake/toolchains/),
   # against the sysroot of 14.4, the oldest supported 14.x: the static
   # release configuration, tests included, for amd64 and aarch64. The
-  # FreeBSD workflow runs the amd64 binary on FreeBSD 15.0.
+  # FreeBSD workflow runs the amd64 binary on FreeBSD 15.1.
   freebsd-cross:
     runs-on: ubuntu-latest
     timeout-minutes: 15
