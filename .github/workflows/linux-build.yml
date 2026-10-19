@@ -306,7 +306,8 @@ jobs:
 
   # cppcheck + clang-tidy (checks in .clang-tidy). Any finding fails the
   # job; suppress a false positive inline with a comment saying why.
-  # The whitespace rules from .editorconfig are checked here too.
+  # The whitespace rules from .editorconfig are checked here too, and
+  # the Doxygen API reference is built (no warnings) and kept.
   static-analysis:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -340,6 +341,23 @@ jobs:
           # tested by the FreeBSD workflows instead.
           git ls-files 'src/*.cpp' 'src/*.c' | grep -v '/freebsd/' \
             | xargs clang-tidy -p build --quiet
+
+      # The API reference of the headers (cmake/docs.cmake): any Doxygen
+      # warning fails the target.
+      - name: Doxygen (no warnings)
+        run: |
+          set -e
+          .github/scripts/apt-install.sh doxygen
+          doxygen --version
+          cmake -B build
+          cmake --build build --target docs
+
+      - name: Upload the API reference
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-reference
+          path: build/docs/html/
+          retention-days: 14
 
   # Line coverage (gcov/lcov) over the unit tests plus the serve smoke
   # test, which is what covers main.cpp. Spec §5 item 10: core/ and

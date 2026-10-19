@@ -180,6 +180,10 @@ cmake --install build      # binary, example config, rules, man page
 The build is fully static by default. Pass `-DSTATIC_LINK=OFF` to link
 against shared libraries instead.
 
+With Doxygen installed, `cmake --build build --target docs` writes the
+API reference of the headers in `src/` to `build/docs/html/index.html`.
+CI builds it on every push and keeps it as the `api-reference` artifact.
+
 ### Cross-compiling for FreeBSD
 
 A Linux host with clang and lld (`apt install clang lld llvm`) builds the

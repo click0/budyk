@@ -12,24 +12,24 @@ namespace budyk {
 
 enum class AnomalyState { NORMAL, ELEVATED, CRITICAL };
 
-// collection.mode (spec §3.4.4):
-//   Adaptive  the levels as below
-//   Always    L3 is always active (a level of higher priority still wins)
-//   OnDemand  thresholds raise no level and escalate nothing; L1 and L2
-//             collect nothing (see Scheduler::collects()), so the daemon
-//             collects only while a client, a custom level or escalate()
-//             holds a level above them
+/// collection.mode (spec §3.4.4):
+///   Adaptive  the levels as below
+///   Always    L3 is always active (a level of higher priority still wins)
+///   OnDemand  thresholds raise no level and escalate nothing; L1 and L2
+///             collect nothing (see Scheduler::collects()), so the daemon
+///             collects only while a client, a custom level or escalate()
+///             holds a level above them
 enum class CollectionMode { Adaptive, Always, OnDemand };
 
-// A user-defined collection level (collection.levels in the config).
+/// A user-defined collection level (collection.levels in the config).
 struct CustomLevel {
-    uint8_t     id          = 0;   // kFirstCustomLevel + index, set by the loader
+    uint8_t     id          = 0;   ///< kFirstCustomLevel + index, set by the loader
     std::string name;
-    int         interval_ms = 0;   // gap between ticks while this level runs
-    int         priority    = 0;   // highest active priority wins
-    std::string when;              // Lua expression; empty = only escalate()
-    int         hold_sec    = 0;   // stay active this long after `when` was true
-    int         storage_mb  = 50;  // size of the level's own ring file
+    int         interval_ms = 0;   ///< gap between ticks while this level runs
+    int         priority    = 0;   ///< highest active priority wins
+    std::string when;              ///< Lua expression; empty = only escalate()
+    int         hold_sec    = 0;   ///< stay active this long after `when` was true
+    int         storage_mb  = 50;  ///< size of the level's own ring file
     MetricSet   metrics     = metric_set_full();
 };
 
@@ -41,8 +41,8 @@ struct SchedulerConfig {
     int  hysteresis_sec    = 300;
     int  grace_period_sec  = 60;
     bool l2_always_on      = false;
-    // An anomaly that has held on every tick for this long escalates to
-    // L3 (spec §3.4.1, "escalation from L2"); 0 turns that off.
+    /// An anomaly that has held on every tick for this long escalates to
+    /// L3 (spec §3.4.1, "escalation from L2"); 0 turns that off.
     int  escalate_after_sec = 300;
 
     double escalation_load_1m      = 4.0;
@@ -52,7 +52,7 @@ struct SchedulerConfig {
     double critical_cpu_percent    = 95.0;
     double critical_swap_percent   = 80.0;
 
-    // What each level collects (collection.<level>.metrics).
+    /// What each level collects (`collection.<level>.metrics`).
     MetricSet l1_metrics = metric_set_standard();
     MetricSet l2_metrics = metric_set_full();
     MetricSet l3_metrics = metric_set_full();
@@ -60,23 +60,23 @@ struct SchedulerConfig {
     std::vector<CustomLevel> custom_levels;
 };
 
-// Adaptive level scheduler (spec §3.4). The current sample's
-// timestamp_nanos is the scheduler's clock — `tick()` is fully
-// deterministic and unit-testable without wall-clock access.
-//
-// Each level is active or not; the active level with the highest
-// priority wins, ties going to the shorter interval:
-//   L1  priority  0   always active (the fallback)
-//   L2  priority 20   a threshold is crossed, then for `hysteresis`
-//                     (not in on-demand mode)
-//   L3  priority 30   a client is connected, then for `grace_period`;
-//                     or the anomaly has held on every tick for
-//                     `escalate_after`, then while it lasts and for
-//                     `grace_period` after its last tick (not in
-//                     on-demand mode); in always mode, all the time
-//   custom levels     their configured priority, active while requested
-// Any level can also be requested until a deadline (a custom level's
-// `when` condition, or escalate() from a rule).
+/// Adaptive level scheduler (spec §3.4). The current sample's
+/// timestamp_nanos is the scheduler's clock — `tick()` is fully
+/// deterministic and unit-testable without wall-clock access.
+///
+/// Each level is active or not; the active level with the highest
+/// priority wins, ties going to the shorter interval:
+///   L1  priority  0   always active (the fallback)
+///   L2  priority 20   a threshold is crossed, then for `hysteresis`
+///                     (not in on-demand mode)
+///   L3  priority 30   a client is connected, then for `grace_period`;
+///                     or the anomaly has held on every tick for
+///                     `escalate_after`, then while it lasts and for
+///                     `grace_period` after its last tick (not in
+///                     on-demand mode); in always mode, all the time
+///   custom levels     their configured priority, active while requested
+/// Any level can also be requested until a deadline (a custom level's
+/// `when` condition, or escalate() from a rule).
 class Scheduler {
 public:
     static constexpr int kPriorityL1 = 0;
@@ -85,53 +85,53 @@ public:
 
     explicit Scheduler(const SchedulerConfig& cfg);
 
-    // Updates the anomaly / client state from `current` and returns the
-    // level selected for it.
+    /// Updates the anomaly / client state from `current` and returns the
+    /// level selected for it.
     Level tick(const Sample& current);
 
-    // The level that would be selected at `now_ns` from the current state
-    // and requests, without taking a new sample. The serve loop uses it
-    // after the rules have run, so an escalate() shortens the next sleep.
+    /// The level that would be selected at `now_ns` from the current state
+    /// and requests, without taking a new sample. The serve loop uses it
+    /// after the rules have run, so an escalate() shortens the next sleep.
     Level select(uint64_t now_ns) const;
 
-    // The level that wins between `a` and `b`: higher priority, then the
-    // shorter interval. The serve loop sleeps at higher(sample level,
-    // select(now)) — the sample's level holds until the next tick
-    // re-checks it, so a `when` with hold 0 isn't dropped before the sleep.
+    /// The level that wins between `a` and `b`: higher priority, then the
+    /// shorter interval. The serve loop sleeps at higher(sample level,
+    /// select(now)) — the sample's level holds until the next tick
+    /// re-checks it, so a `when` with hold 0 isn't dropped before the sleep.
     Level higher(Level a, Level b) const;
 
-    // Keep `level` active through `until_ns` (a later deadline replaces an
-    // earlier one; an earlier one is ignored). Unknown ids are ignored.
+    /// Keep `level` active through `until_ns` (a later deadline replaces an
+    /// earlier one; an earlier one is ignored). Unknown ids are ignored.
     void request(Level level, uint64_t until_ns);
-    // Same, by level name ("L1".."L3" or a custom name). False if unknown.
+    /// Same, by level name ("L1".."L3" or a custom name). False if unknown.
     bool request_by_name(const std::string& name, uint64_t until_ns);
 
-    // Level table lookups. Unknown ids fall back to L1's values / "?".
+    /// Level table lookups. Unknown ids fall back to L1's values / "?".
     int         interval_ms(Level lv) const;
     int         priority(Level lv)    const;
     const char* level_name(Level lv)  const;
-    // The metric set the level collects.
+    /// The metric set the level collects.
     const MetricSet& metrics(Level lv) const;
-    // False for L1 and L2 in on-demand mode: the serve loop sleeps through
-    // them without collecting.
+    /// False for L1 and L2 in on-demand mode: the serve loop sleeps through
+    /// them without collecting.
     bool        collects(Level lv)    const;
     CollectionMode mode()             const;
-    // Level for a name ("L1".."L3", case-insensitive, or a custom name);
-    // returns false if there is none.
+    /// Level for a name ("L1".."L3", case-insensitive, or a custom name);
+    /// returns false if there is none.
     bool        level_by_name(const std::string& name, Level* out) const;
     const std::vector<CustomLevel>& custom_levels() const;
 
     void client_connected();
     void client_disconnected();
-    // Replaces the count outright. The serve loop calls this before every
-    // tick with the number of clients it can actually see, so the count
-    // can't drift the way paired connected/disconnected calls can.
+    /// Replaces the count outright. The serve loop calls this before every
+    /// tick with the number of clients it can actually see, so the count
+    /// can't drift the way paired connected/disconnected calls can.
     void set_client_count(int n);
 
     Level        current_level()   const;
     AnomalyState current_anomaly() const;
     int          client_count()    const;
-    // True while a sustained anomaly holds L3 (see escalate_after_sec).
+    /// True while a sustained anomaly holds L3 (see escalate_after_sec).
     bool         escalated()       const;
 
 private:
@@ -143,10 +143,10 @@ private:
     uint64_t         last_client_active_ns_;
     bool             had_anomaly_;
     bool             had_clients_;
-    // The current run of anomalous ticks: whether there is one, when it
-    // started, and whether it has lasted escalate_after. Before that, one
-    // normal tick ends the run; after it, the run (and L3) ends once the
-    // anomaly has been gone for grace_period.
+    /// The current run of anomalous ticks: whether there is one, when it
+    /// started, and whether it has lasted escalate_after. Before that, one
+    /// normal tick ends the run; after it, the run (and L3) ends once the
+    /// anomaly has been gone for grace_period.
     bool             in_anomaly_run_       = false;
     uint64_t         anomaly_run_start_ns_ = 0;
     bool             escalated_            = false;

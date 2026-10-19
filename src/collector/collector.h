@@ -3,6 +3,6 @@
 #include "core/metric_source.h"
 
 namespace budyk {
-// Factory — returns platform-specific MetricSource
+/// Factory — returns platform-specific MetricSource
 MetricSource* create_collector();
 } // namespace budyk

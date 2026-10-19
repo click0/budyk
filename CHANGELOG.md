@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **API reference** (spec §5 item 12): `cmake --build build --target docs`
+  runs Doxygen over the headers in `src/` (HTML in `build/docs/html`). The
+  header comments that describe a declaration are now Doxygen comments
+  (`///`, `///<`, `/// @file`). Any warning fails the target. CI builds it
+  and keeps the HTML as the `api-reference` artifact.
 - **Cross-compiling for FreeBSD** (spec §5 item 8): on a Linux host with
   clang and lld, `cmake --toolchain cmake/toolchains/freebsd-amd64.cmake`
   (or `freebsd-aarch64.cmake`) with `-DFREEBSD_SYSROOT=DIR` builds the

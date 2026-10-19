@@ -5,15 +5,15 @@
 
 namespace budyk {
 
-// Write `body` to a fresh private temporary file and return its path in
-// `path_out` (cap bytes). The file is created by mkostemp(3), so it is
-// mode 0600, never pre-existing and close-on-exec while it is written;
-// it lives in $TMPDIR when set, else /tmp, and is named <prefix>XXXXXX.
-// Used for what must not travel on a command line: curl bodies, header
-// files, netrc and -K config files, LLM prompts. The caller unlinks it.
-// False on any failure, with errno set (ENAMETOOLONG when the path does
-// not fit in `cap`: size the buffer PATH_MAX); the path is then not
-// meaningful.
+/// Write `body` to a fresh private temporary file and return its path in
+/// `path_out` (cap bytes). The file is created by mkostemp(3), so it is
+/// mode 0600, never pre-existing and close-on-exec while it is written;
+/// it lives in $TMPDIR when set, else /tmp, and is named `<prefix>XXXXXX`.
+/// Used for what must not travel on a command line: curl bodies, header
+/// files, netrc and -K config files, LLM prompts. The caller unlinks it.
+/// False on any failure, with errno set (ENAMETOOLONG when the path does
+/// not fit in `cap`: size the buffer PATH_MAX); the path is then not
+/// meaningful.
 bool write_private_tmp(const char* prefix, const std::string& body,
                        char* path_out, size_t cap);
 

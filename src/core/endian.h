@@ -5,10 +5,11 @@
 
 namespace budyk {
 
-// Little-endian field access for the on-disk formats (the sample codec,
-// the record framing, the ring file header). Byte order is fixed so a
-// ring written on one host reads on another; memcpy keeps it free of
-// alignment assumptions.
+/// @file
+/// Little-endian field access for the on-disk formats (the sample codec,
+/// the record framing, the ring file header). Byte order is fixed so a
+/// ring written on one host reads on another; memcpy keeps it free of
+/// alignment assumptions.
 
 inline uint32_t to_le32(uint32_t v) {
 #if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__

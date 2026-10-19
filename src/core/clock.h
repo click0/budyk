@@ -5,8 +5,8 @@
 
 namespace budyk {
 
-// Wall-clock time in nanoseconds since the epoch: the timestamp every
-// sample carries and that the HTTP range queries are expressed in.
+/// Wall-clock time in nanoseconds since the epoch: the timestamp every
+/// sample carries and that the HTTP range queries are expressed in.
 inline uint64_t now_realtime_ns() {
     struct timespec ts{};
     ::clock_gettime(CLOCK_REALTIME, &ts);
