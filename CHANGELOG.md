@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Cross-compiling for FreeBSD** (spec §5 item 8): on a Linux host with
+  clang and lld, `cmake --toolchain cmake/toolchains/freebsd-amd64.cmake`
+  (or `freebsd-aarch64.cmake`) with `-DFREEBSD_SYSROOT=DIR` builds the
+  FreeBSD binary, static or shared, tests included.
+  `cmake/toolchains/freebsd-sysroot.sh VERSION ARCH DIR` makes the
+  sysroot from the release's `base.txz` and the `lua54`, `libyaml` and
+  `libargon2` packages, and checks every download: `base.txz` against the
+  release's `MANIFEST`, the package catalogue's signature against the pkg
+  key in `base.txz`, each package against the catalogue. CI builds both
+  for 14.4, runs clang-tidy on the FreeBSD side of the code (until now
+  left out) and runs the smoke scripts with the cross-compiled amd64
+  binary on FreeBSD 15.0.
 - **Linux packages** (spec M9): a `.deb` and an `.rpm` of the static
   binary in every release, built by `addons/linux/mkpkg.sh`. They install
   `/usr/bin/budyk`, `/etc/budyk/config.yaml` and `rules.lua` (conffiles,

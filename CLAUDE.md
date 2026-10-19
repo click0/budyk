@@ -113,6 +113,8 @@ tests/smoke/       — serve.sh (HTTP, WS, SIGHUP, fd check), crash.sh (SIGKILL 
                      modes.sh (per-level metric sets, always / on-demand)
 addons/            — FreeBSD port + rc.d, systemd unit, Docker; the .deb and
                      .rpm (addons/linux/mkpkg.sh, test-packages.sh)
+cmake/toolchains/  — cross-compiling for FreeBSD on Linux: freebsd-sysroot.sh
+                     (base.txz + packages, checked), freebsd-{amd64,aarch64}.cmake
 docs/              — spec (en/uk), man page
 ```
 
@@ -120,7 +122,7 @@ docs/              — spec (en/uk), man page
 
 ```sh
 cmake -B build                           # Release unless -DCMAKE_BUILD_TYPE says otherwise;
-                                         # the host platform is detected,
+                                         # the platform is CMAKE_SYSTEM_NAME (host or toolchain),
                                          # -DBUDYK_PLATFORM=linux|freebsd only checks it matches
 cmake --build build -j
 ctest --test-dir build                   # unit tests
@@ -132,6 +134,8 @@ tests/smoke/fsck.sh build/src/budyk      # fsck, start-up recovery, the data_dir
 tests/smoke/upgrade.sh build/src/budyk OLD/budyk  # rings of an older release converted
 tests/smoke/modes.sh build/src/budyk     # metric sets per level, always / on-demand
 tests/check_whitespace.sh                # trailing blanks, tabs, CR, final newline
+cmake/toolchains/freebsd-sysroot.sh 14.4 amd64 SYSROOT   # then, on Linux:
+cmake -B build-fbsd --toolchain cmake/toolchains/freebsd-amd64.cmake -DFREEBSD_SYSROOT=SYSROOT
 ```
 
 CI (see `.github/workflows/linux-build.yml`) adds `-DENABLE_WERROR=ON`, builds
@@ -141,9 +145,11 @@ together with the smoke scripts, under ThreadSanitizer
 (`-DSTATIC_LINK=OFF -DENABLE_TSAN=ON`) with the serve smoke test, runs
 cppcheck, clang-tidy (checks in `.clang-tidy`) and
 `tests/check_whitespace.sh`, gates line coverage of `core/` and `storage/`
-at 85% (`tests/coverage_report.py`), and on FreeBSD 14.2 and 15.0 (clang)
-builds and tests both the shared (port) and the static (release)
-configuration and runs the smoke scripts on the static binary. Everything
+at 85% (`tests/coverage_report.py`), cross-compiles for FreeBSD 14.4 amd64
+and aarch64 and runs clang-tidy on the FreeBSD side of the code, and on
+FreeBSD 14.2 and 15.0 (clang) builds and tests both the shared (port) and
+the static (release) configuration and runs the smoke scripts on the
+static binary (on 15.0 also on the cross-compiled amd64 one). Everything
 must be green before a merge. Warnings are `-Wall -Wextra -Wshadow -Wconversion -Wsign-conversion`
 on every target; a new implicit sign or width change is a build error in CI
 (GCC and clang both).
@@ -247,7 +253,7 @@ on every target; a new implicit sign or width change is a build error in CI
 
 - The per-entity detail (cores, disks, interfaces, filesystems, top
   processes) is live only: not in the rings, so not in the history.
-- No Doxygen, no cross-compilation toolchains, FreeBSD 13 not in CI.
+- No Doxygen, FreeBSD 13 not in CI.
 
 ### Kept on purpose for later milestones (do not remove as dead code)
 

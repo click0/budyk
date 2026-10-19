@@ -185,6 +185,25 @@ cmake --install build      # бінарник, приклад конфігура
 За замовчуванням збірка повністю статична. Щоб лінкувати зі спільними
 бібліотеками, додайте `-DSTATIC_LINK=OFF`.
 
+### Крос-компіляція для FreeBSD
+
+На Linux із clang і lld (`apt install clang lld llvm`) можна зібрати
+бінарник для FreeBSD, amd64 або aarch64, на sysroot з релізу FreeBSD:
+
+```sh
+cmake/toolchains/freebsd-sysroot.sh 14.4 aarch64 ~/sysroot-14.4-aarch64
+cmake -B build-freebsd --toolchain cmake/toolchains/freebsd-aarch64.cmake \
+      -DFREEBSD_SYSROOT=$HOME/sysroot-14.4-aarch64
+cmake --build build-freebsd -j
+```
+
+Скрипт завантажує `base.txz` релізу та пакети `lua54`, `libyaml` і
+`libargon2` і перевіряє кожен файл: `base.txz` — за `MANIFEST` релізу,
+каталог пакетів — за ключем підпису pkg із `base.txz`, кожен пакет — за
+каталогом. Бінарник, зібраний для 14.4, працює на новіших 14.x і на 15.x.
+Тести збираються, але запускаються лише на FreeBSD; CI запускає
+smoke-скрипти з крос-зібраним бінарником amd64 на FreeBSD 15.0.
+
 ### Запуск як служби
 
 - **FreeBSD:** заготовка порту та rc.d-скрипт лежать у
@@ -580,6 +599,7 @@ disk_full: ...`), надходить на відкриті панелі (там 
 ## Платформи
 
 - **FreeBSD 14.2, 15.0:** основна платформа, збирається і тестується в CI.
+- **FreeBSD aarch64:** крос-компілюється в CI, але там не запускається.
 - **Linux:** збирається і тестується в CI на Ubuntu.
 
 Інші версії та системи не тестуються. Для NetBSD і OpenBSD колектора

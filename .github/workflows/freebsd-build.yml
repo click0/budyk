@@ -3,7 +3,8 @@ name: FreeBSD Build (full)
 # Full build + ctest on a FreeBSD matrix: the port's configuration
 # (shared, as addons/freebsd/Makefile builds it) and the release one
 # (static, as release.yml ships it), plus the smoke scripts against the
-# static binary.
+# static binary and, on 15.0, against the amd64 binary cross-compiled on
+# the Linux host (cmake/toolchains/).
 # Runs on:
 #   * push to main       (gates mainline);
 #   * pull_request → main (gates merge);
@@ -43,6 +44,25 @@ jobs:
     name: FreeBSD ${{ matrix.freebsd-version }} full
     steps:
       - uses: actions/checkout@v4
+
+      # The amd64 binary cross-compiled on this Linux host against the
+      # sysroot of 14.4, the oldest supported 14.x (cmake/toolchains/), for
+      # the smoke scripts on 15.0 below: what an upgraded host runs. The
+      # sysroot and the build tree stay out of the directory the VM gets.
+      - name: Cross-compile for FreeBSD amd64 on the Linux host
+        if: matrix.freebsd-version == '15.0'
+        run: |
+          set -ex
+          .github/scripts/apt-install.sh cmake clang lld llvm
+          cmake/toolchains/freebsd-sysroot.sh 14.4 amd64 "$RUNNER_TEMP/sysroot"
+          cmake -B "$RUNNER_TEMP/build-cross" \
+            --toolchain cmake/toolchains/freebsd-amd64.cmake \
+            -DFREEBSD_SYSROOT="$RUNNER_TEMP/sysroot" \
+            -DBUILD_TESTS=OFF \
+            -DENABLE_WERROR=ON
+          cmake --build "$RUNNER_TEMP/build-cross" -j"$(nproc)"
+          cp "$RUNNER_TEMP/build-cross/src/budyk" budyk-cross
+          file budyk-cross
 
       - name: Build + test on FreeBSD
         uses: cross-platform-actions/action@v1.0.0
@@ -109,6 +129,19 @@ jobs:
             tests/smoke/fsck.sh build-static/src/budyk
             tests/smoke/modes.sh build-static/src/budyk
             echo "::endgroup::"
+
+            if [ -e budyk-cross ]; then
+              echo "::group::Smoke tests (the binary cross-compiled on Linux for 14.4)"
+              file budyk-cross
+              ./budyk-cross version
+              tests/smoke/serve.sh ./budyk-cross
+              tests/smoke/crash.sh ./budyk-cross
+              tests/smoke/warm_grace.sh ./budyk-cross
+              tests/smoke/escalate.sh ./budyk-cross
+              tests/smoke/fsck.sh ./budyk-cross
+              tests/smoke/modes.sh ./budyk-cross
+              echo "::endgroup::"
+            fi
 
             echo "::group::Disk usage"
             df -h
