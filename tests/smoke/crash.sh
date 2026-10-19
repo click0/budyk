@@ -16,6 +16,9 @@
 #   tests/smoke/crash.sh path/to/budyk [port] [rounds]
 
 set -eu
+# Tenths of a second to wait for the daemon to answer: SMOKE_START_WAIT
+# seconds (default 5); an emulated VM needs more.
+START_TRIES=$(( ${SMOKE_START_WAIT:-5} * 10 ))
 BIN=${1:?usage: crash.sh path/to/budyk [port] [rounds]}
 PORT=${2:-18766}
 ROUNDS=${3:-8}
@@ -38,7 +41,7 @@ start() {
     i=0
     until curl -s -o /dev/null "http://127.0.0.1:$PORT/api/health"; do
         i=$((i + 1))
-        [ "$i" -lt 50 ] || { echo "FAIL: daemon did not start"; cat "$DIR/log"; exit 1; }
+        [ "$i" -lt "$START_TRIES" ] || { echo "FAIL: daemon did not start"; cat "$DIR/log"; exit 1; }
         sleep 0.1
     done
 }

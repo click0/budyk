@@ -366,12 +366,29 @@ jobs:
             sudo pkg install -y curl python3
             file budyk-aarch64
             ./budyk-aarch64 version
-            tests/smoke/serve.sh ./budyk-aarch64
-            tests/smoke/crash.sh ./budyk-aarch64
-            tests/smoke/warm_grace.sh ./budyk-aarch64
-            tests/smoke/escalate.sh ./budyk-aarch64
-            tests/smoke/fsck.sh ./budyk-aarch64
-            tests/smoke/modes.sh ./budyk-aarch64
+
+            # How long the daemon takes to answer on the emulated CPU.
+            d=$(mktemp -d)
+            printf 'data_dir: %s\nlisten: 127.0.0.1\nport: 18999\n' "$d" > "$d/config.yaml"
+            t0=$(date +%s)
+            ./budyk-aarch64 serve --config "$d/config.yaml" > "$d/log" 2>&1 &
+            pid=$!
+            until curl -s -o /dev/null http://127.0.0.1:18999/api/health; do
+              [ $(( $(date +%s) - t0 )) -lt 300 ] || break
+              sleep 1
+            done
+            echo "the daemon answered after $(( $(date +%s) - t0 )) s"
+            curl -s http://127.0.0.1:18999/api/health
+            cat "$d/log"
+            kill -TERM "$pid"
+            wait "$pid" || true
+
+            export SMOKE_START_WAIT=120
+            failed=
+            for t in serve crash warm_grace escalate fsck modes; do
+              tests/smoke/$t.sh ./budyk-aarch64 || failed="$failed $t"
+            done
+            [ -z "$failed" ] || { echo "FAIL:$failed"; exit 1; }
 
       - name: Upload artefacts
         uses: actions/upload-artifact@v4
