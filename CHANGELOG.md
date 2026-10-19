@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-10-19
+
+Rules work as spec §3.6 describes: `cooldown` defaults to `for_ticks`,
+a `when()` that returns `nil` skips the tick without losing the streak,
+`action` can be a list, and alerts reach the dashboard (a WebSocket
+frame, an Alerts panel and `/api/alerts`). New readings: the top
+processes by CPU and by memory (live), ICMP counters, and the host's
+name. A release now carries Linux `.deb` and `.rpm` packages and
+FreeBSD aarch64 binaries, and the FreeBSD builds move to 14.4 and 15.1.
+budyk cross-compiles for FreeBSD on Linux, and `--target docs` builds an
+API reference with Doxygen. Fixed: budyk now runs on arm64 (an
+unaligned atomic in the ring header raised SIGBUS), a descriptor could
+leak into an alert or `exec()` child, and a process name that is not
+UTF-8 broke the dashboard. **Upgrade notes:** a record grows to 542
+bytes (codec v9), and the rings of an older budyk are converted when the
+daemon first starts; a 0.7 daemon does not open the converted rings, so
+to go back, move them aside. A rule that relied on the old `cooldown`
+default of 0 now fires once and then waits as long as it took to fire;
+set `cooldown = 0` for the old behaviour. The FreeBSD tarballs are named
+`freebsd14.4-amd64`, `freebsd15.1-amd64` and `freebsd14.4-aarch64`.
+
 ### Added
 
 - **API reference** (spec §5 item 12): `cmake --build build --target docs`
@@ -803,6 +824,7 @@ it turned up two untested storage paths, which are now covered.
   opened, and init with the original size works again. tier_manager.cpp
   coverage went from 84.3% to 94.4%.
 
+[0.8.0]: https://github.com/click0/budyk/releases/tag/v0.8.0
 [0.7.0]: https://github.com/click0/budyk/releases/tag/v0.7.0
 [0.6.5]: https://github.com/click0/budyk/releases/tag/v0.6.5
 [0.6.4]: https://github.com/click0/budyk/releases/tag/v0.6.4
