@@ -48,6 +48,8 @@ void TierAggregator::reset() {
     for (double& v : cpu_part_sum_) v = 0.0;
     for (double& v : tcp_rate_sum_) v = 0.0;
     for (double& v : udp_rate_sum_) v = 0.0;
+    for (double& v : icmp_rate_sum_) v = 0.0;
+    icmp_present_ = false;
     proc_max_    = ProcessStats{};
     tcp_         = TcpStats{};
     udp_present_ = false;
@@ -146,6 +148,12 @@ void TierAggregator::add(const Sample& s) {
         for (int i = 0; i < 4; ++i) udp_rate_sum_[i] += rates[i];
         udp_present_ = udp_present_ || s.udp.present;
     }
+    if ((g & kGroupIcmp) != 0) {
+        const double rates[4] = { s.icmp.in_msgs_per_sec, s.icmp.out_msgs_per_sec,
+                                  s.icmp.in_errors_per_sec, s.icmp.in_dest_unreachs_per_sec };
+        for (int i = 0; i < 4; ++i) icmp_rate_sum_[i] += rates[i];
+        icmp_present_ = icmp_present_ || s.icmp.present;
+    }
     if ((g & kGroupFs) != 0) {
         fs_max_.max_used_percent        = std::max(fs_max_.max_used_percent, s.fs.max_used_percent);
         fs_max_.max_inodes_used_percent = std::max(fs_max_.max_inodes_used_percent,
@@ -238,6 +246,11 @@ bool TierAggregator::fold(Sample* out) {
     r.udp.no_port_per_sec       = udp_rate_sum_[2] * inv_n(kGroupUdp);
     r.udp.in_errors_per_sec     = udp_rate_sum_[3] * inv_n(kGroupUdp);
     r.udp.present               = udp_present_;
+    r.icmp.in_msgs_per_sec          = icmp_rate_sum_[0] * inv_n(kGroupIcmp);
+    r.icmp.out_msgs_per_sec         = icmp_rate_sum_[1] * inv_n(kGroupIcmp);
+    r.icmp.in_errors_per_sec        = icmp_rate_sum_[2] * inv_n(kGroupIcmp);
+    r.icmp.in_dest_unreachs_per_sec = icmp_rate_sum_[3] * inv_n(kGroupIcmp);
+    r.icmp.present                  = icmp_present_;
     r.fs.max_used_percent        = fs_max_.max_used_percent;
     r.fs.max_inodes_used_percent = fs_max_.max_inodes_used_percent;
     r.fs.present                 = fs_max_.present;

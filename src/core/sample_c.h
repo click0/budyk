@@ -87,6 +87,13 @@ typedef struct {
     double   in_errors_per_sec;
     uint8_t  present;
 } budyk_udp_c;
+typedef struct {
+    double   in_msgs_per_sec;
+    double   out_msgs_per_sec;
+    double   in_errors_per_sec;
+    double   in_dest_unreachs_per_sec;
+    uint8_t  present;
+} budyk_icmp_c;
 
 /* Local filesystems (pseudo, read-only and network ones are skipped):
  * how many, and the fullest by space and by inodes. */
@@ -139,6 +146,7 @@ typedef struct {
     budyk_thermal_c thermal;
     budyk_tcp_c     tcp;
     budyk_udp_c     udp;
+    budyk_icmp_c    icmp;
     budyk_fs_c      fs;
     budyk_clock_c   clock;
     double          uptime_seconds;
@@ -168,6 +176,7 @@ typedef struct {
     uint64_t tcp_active_opens, tcp_passive_opens, tcp_retransmits;
     uint64_t tcp_in_segments, tcp_out_segments, tcp_in_errors;
     uint64_t udp_in, udp_out, udp_no_port, udp_in_errors;
+    uint64_t icmp_in, icmp_out, icmp_in_errors, icmp_in_unreach;
     uint64_t prev_ns;
     int      has_prev;
 } budyk_netstat_ctx_c;

@@ -44,7 +44,7 @@ void make_ring(const std::string& path, uint8_t tier, uint64_t cap, Level level,
                uint64_t ts0, uint64_t n) {
     RingFile r;
     assert(r.open(path.c_str(), tier, static_cast<uint32_t>(kRec), cap) == 0);
-    uint8_t buf[512];
+    uint8_t buf[1024];
     for (uint64_t i = 0; i < n; ++i) {
         Sample s{};
         s.timestamp_nanos = ts0 + i;
@@ -72,7 +72,7 @@ void set_write_idx(const std::string& path, uint64_t v) {
 
 // Rewrites the record in `slot` as `s` (a valid record).
 void put_record(const std::string& path, uint64_t slot, const Sample& s) {
-    uint8_t buf[512];
+    uint8_t buf[1024];
     size_t len = 0;
     assert(record_encode(s, buf, sizeof(buf), &len) == 0);
     poke(path, static_cast<off_t>(64 + slot * kRec), buf, len);
@@ -83,30 +83,33 @@ void flip_byte(const std::string& path, uint64_t slot) {
     poke(path, static_cast<off_t>(64 + slot * kRec + 40), &x, 1);
 }
 
-// A record as budyk 0.6 wrote it: codec v7 (the first 256 bytes of a v8
-// payload, whose fields only append), version 7, its own CRC.
+// A record as an older budyk wrote it: a codec `version` payload of
+// `payload` bytes (the first bytes of this version's, whose fields only
+// append), its own CRC. budyk 0.6 wrote v7 (256), 0.7 v8 (488).
 constexpr size_t kV7Payload = 256;
-std::vector<uint8_t> v7_record(const Sample& s) {
+constexpr size_t kV8Payload = 488;
+std::vector<uint8_t> old_record(const Sample& s, uint8_t version, size_t payload_size) {
     uint8_t payload[1024];
     size_t  len = 0;
     assert(sample_encode(&s, payload, sizeof(payload), &len) == 0);
-    payload[8] = 7; payload[9] = payload[10] = payload[11] = 0;   // version
-    std::vector<uint8_t> rec(kRecordHeaderSize + kV7Payload, 0);
+    payload[8] = version; payload[9] = payload[10] = payload[11] = 0;
+    std::vector<uint8_t> rec(kRecordHeaderSize + payload_size, 0);
     for (int i = 0; i < 8; ++i) rec[static_cast<size_t>(i)] = static_cast<uint8_t>(s.timestamp_nanos >> (8 * i));
     rec[8] = static_cast<uint8_t>(s.level);
     rec[9] = s.folded ? kRecordFolded : 0;
-    std::memcpy(rec.data() + kRecordHeaderSize, payload, kV7Payload);
+    std::memcpy(rec.data() + kRecordHeaderSize, payload, payload_size);
     uint32_t c = crc32c(rec.data(), 10);
-    c = crc32c(rec.data() + kRecordHeaderSize, kV7Payload, c);
+    c = crc32c(rec.data() + kRecordHeaderSize, payload_size, c);
     for (int i = 0; i < 4; ++i) rec[10 + static_cast<size_t>(i)] = static_cast<uint8_t>(c >> (8 * i));
     return rec;
 }
 
-// A ring of v7 records (270 bytes), `n` of them at ts0, ts0 + 1, ...
+// A ring of older records, `n` of them at ts0, ts0 + 1, ...: v7 (270
+// bytes) unless told otherwise.
 void make_v7_ring(const std::string& path, uint8_t tier, uint64_t cap, Level level,
-                  uint64_t ts0, uint64_t n) {
+                  uint64_t ts0, uint64_t n, uint8_t version = 7, size_t payload = kV7Payload) {
     RingFile r;
-    assert(r.open(path.c_str(), tier, static_cast<uint32_t>(kRecordHeaderSize + kV7Payload), cap) == 0);
+    assert(r.open(path.c_str(), tier, static_cast<uint32_t>(kRecordHeaderSize + payload), cap) == 0);
     for (uint64_t i = 0; i < n; ++i) {
         Sample s{};
         s.timestamp_nanos = ts0 + i;
@@ -114,7 +117,12 @@ void make_v7_ring(const std::string& path, uint8_t tier, uint64_t cap, Level lev
         s.cpu.total_percent = static_cast<double>(i);
         s.proc.total = 100 + static_cast<uint32_t>(i);
         s.folded = (i % 2) == 1;
-        const auto rec = v7_record(s);
+        s.tcp.present = true;
+        s.tcp.established = 7;
+        s.icmp.present = true;                    // not in a v7 / v8 payload
+        s.icmp.in_msgs_per_sec = 5.0;
+        s.groups = kGroupsAll & ~uint32_t(kGroupIcmp) & ~uint32_t(kGroupDisk);
+        const auto rec = old_record(s, version, payload);
         assert(r.append(rec.data(), rec.size()) == 0);
     }
     r.close();
@@ -331,6 +339,29 @@ int main() {
         assert(convert_ring((d + "/tier3.ring").c_str(), 3, static_cast<uint32_t>(kRec), 64,
                             &kept, &dropped) == 0);
         assert(kept == 5 && dropped == 1);
+        rmrf(d);
+    }
+
+    // 8b. A v8 ring (budyk 0.7, 502-byte records) converts the same way:
+    //     every v8 field intact, the groups as stored, ICMP (new in v9)
+    //     zero; fsck calls it an older format first.
+    {
+        const std::string d = tmp_dir(), p = d + "/tier2.ring";
+        make_v7_ring(p, 2, 16, Level::L2, 2000, 5, 8, kV8Payload);
+        RingCheck c = check(p, false);
+        assert(c.older_format && !c.errors());
+        uint64_t kept = 0, dropped = 0;
+        assert(convert_ring(p.c_str(), 2, static_cast<uint32_t>(kRec), 16, &kept, &dropped) == 0);
+        assert(kept == 5 && dropped == 0);
+        RingFile r;
+        assert(r.open_read_only(p.c_str(), 2, static_cast<uint32_t>(kRec), 16) == 0);
+        std::vector<uint8_t> buf(kRec);
+        Sample s{};
+        assert(r.read_at(4, buf.data(), buf.size()) == 0 && record_decode(buf.data(), buf.size(), &s) == 0);
+        assert(s.timestamp_nanos == 2004 && s.proc.total == 104 && s.tcp.present && s.tcp.established == 7);
+        assert(s.groups == (kGroupsAll & ~uint32_t(kGroupIcmp) & ~uint32_t(kGroupDisk)));
+        assert(!s.icmp.present && s.icmp.in_msgs_per_sec == 0.0);
+        r.close();
         rmrf(d);
     }
 

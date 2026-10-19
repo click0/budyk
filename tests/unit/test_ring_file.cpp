@@ -46,7 +46,7 @@ int main() {
     // 2. record_encode / record_decode roundtrip.
     {
         Sample in = make_sample(0x1122334455667788ULL, Level::L3, 1.25);
-        uint8_t buf[512] = {0};
+        uint8_t buf[1024] = {0};
         size_t  len = 0;
         assert(record_encode(in, buf, sizeof(buf), &len) == 0);
         assert(len == rsize);
@@ -61,7 +61,7 @@ int main() {
     // 3. CRC mismatch — flipped payload byte is rejected.
     {
         Sample in = make_sample(1000, Level::L2, 0.5);
-        uint8_t buf[512] = {0};
+        uint8_t buf[1024] = {0};
         size_t  len = 0;
         assert(record_encode(in, buf, sizeof(buf), &len) == 0);
         buf[kRecordHeaderSize + 20] ^= 0x01;
@@ -72,7 +72,7 @@ int main() {
     // 4. CRC mismatch — flipped header byte (ts) is rejected.
     {
         Sample in = make_sample(1000, Level::L2, 0.5);
-        uint8_t buf[512] = {0};
+        uint8_t buf[1024] = {0};
         size_t  len = 0;
         assert(record_encode(in, buf, sizeof(buf), &len) == 0);
         buf[0] ^= 0xFF;
@@ -104,7 +104,7 @@ int main() {
 
             for (uint64_t i = 0; i < 5; ++i) {
                 Sample s = make_sample((i + 1) * 1000, Level::L3, 0.1 * static_cast<double>(i + 1));
-                uint8_t rec[512] = {0};
+                uint8_t rec[1024] = {0};
                 size_t  len = 0;
                 assert(record_encode(s, rec, sizeof(rec), &len) == 0);
                 assert(rf.append(rec, rsize) == 0);
@@ -121,7 +121,7 @@ int main() {
             assert(rf.write_index() == 5);
 
             for (uint64_t i = 0; i < 5; ++i) {
-                uint8_t rec[512] = {0};
+                uint8_t rec[1024] = {0};
                 assert(rf.read_at(i, rec, rsize) == 0);
                 Sample out{};
                 assert(record_decode(rec, rsize, &out) == 0);
@@ -147,7 +147,7 @@ int main() {
 
         for (uint64_t i = 0; i < 9; ++i) {
             Sample s = make_sample((i + 1) * 100, Level::L2, 0.0);
-            uint8_t rec[512] = {0};
+            uint8_t rec[1024] = {0};
             size_t  len = 0;
             assert(record_encode(s, rec, sizeof(rec), &len) == 0);
             assert(rf.append(rec, rsize) == 0);
@@ -161,7 +161,7 @@ int main() {
         struct Expect { uint64_t slot; uint64_t ts; };
         Expect exp[] = { {1, 6 * 100}, {2, 7 * 100}, {3, 8 * 100}, {0, 9 * 100} };
         for (const auto& e : exp) {
-            uint8_t rec[512] = {0};
+            uint8_t rec[1024] = {0};
             assert(rf.read_at(e.slot, rec, rsize) == 0);
             Sample out{};
             assert(record_decode(rec, rsize, &out) == 0);
@@ -238,7 +238,7 @@ int main() {
         RingFile rf;
         assert(rf.open(path, 3, (uint32_t)rsize, 2) == 0);
 
-        uint8_t rec[512] = {0};
+        uint8_t rec[1024] = {0};
         assert(rf.read_at(5, rec, rsize) != 0);  // index >= capacity
         assert(rf.read_at(0, rec, rsize - 1) != 0);  // wrong length
         rf.close();
@@ -261,7 +261,7 @@ int main() {
         RingFile rw;
         assert(rw.open(path, 1, (uint32_t)rsize, 4) == 0);
         assert(rw.tier() == 1);
-        uint8_t rec[512] = {0};
+        uint8_t rec[1024] = {0};
         size_t len = 0;
         assert(record_encode(make_sample(10, Level::L3, 1.0), rec, sizeof(rec), &len) == 0);
         assert(rw.append(rec, len) == 0);
@@ -269,7 +269,7 @@ int main() {
         assert(ro.open_read_only(path, 2, (uint32_t)rsize, 4) == -10);   // wrong tier
         assert(ro.open_read_only(path, 1, (uint32_t)rsize, 4) == 0);
         assert(ro.write_index() == 1 && ro.tier() == 1);
-        uint8_t back[512] = {0};
+        uint8_t back[1024] = {0};
         assert(ro.read_at(0, back, rsize) == 0 && std::memcmp(back, rec, rsize) == 0);
         assert(ro.append(rec, len) == -1);
         assert(ro.advance_write_index(1) == -1);

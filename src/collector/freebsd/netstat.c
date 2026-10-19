@@ -1,8 +1,9 @@
 /* SPDX-License-Identifier: BSD-3-Clause */
-/* collector/freebsd/netstat.c — TCP / UDP counters from
+/* collector/freebsd/netstat.c — TCP / UDP / ICMP counters from
  * net.inet.tcp.stats (struct tcpstat), net.inet.tcp.states (sockets per
- * TCP state) and net.inet.udp.stats (struct udpstat), as netstat -s
- * reads them. Covers IPv4 and IPv6: the stacks share these counters. */
+ * TCP state), net.inet.udp.stats (struct udpstat) and net.inet.icmp.stats
+ * (struct icmpstat), as netstat -s reads them. TCP and UDP cover IPv4 and
+ * IPv6 (the stacks share these counters); ICMP is IPv4's. */
 
 #include "core/sample_c.h"
 
@@ -16,6 +17,10 @@
 #include <netinet/tcp_var.h>
 #include <netinet/udp.h>
 #include <netinet/udp_var.h>
+#include <netinet/in_systm.h>
+#include <netinet/ip.h>
+#include <netinet/ip_icmp.h>
+#include <netinet/icmp_var.h>
 
 #include <errno.h>
 #include <string.h>
@@ -30,6 +35,7 @@ int budyk_collect_netstat_freebsd(budyk_netstat_ctx_c* ctx, budyk_sample_c* s) {
     if (ctx == NULL || s == NULL) return -EINVAL;
     memset(&s->tcp, 0, sizeof(s->tcp));
     memset(&s->udp, 0, sizeof(s->udp));
+    memset(&s->icmp, 0, sizeof(s->icmp));
 
     struct tcpstat tcps;
     size_t len = sizeof(tcps);
@@ -45,6 +51,21 @@ int budyk_collect_netstat_freebsd(budyk_netstat_ctx_c* ctx, budyk_sample_c* s) {
     len = sizeof(udps);
     memset(&udps, 0, sizeof(udps));
     const int udp_ok = sysctlbyname("net.inet.udp.stats", &udps, &len, NULL, 0) == 0;
+
+    struct icmpstat icmps;
+    len = sizeof(icmps);
+    memset(&icmps, 0, sizeof(icmps));
+    const int icmp_ok = sysctlbyname("net.inet.icmp.stats", &icmps, &len, NULL, 0) == 0;
+    /* Errors in: what icmp_input() dropped as malformed; messages in:
+     * those it took, by type, and the errors, as Linux counts InMsgs. */
+    const uint64_t ierr = (uint64_t)icmps.icps_badcode + (uint64_t)icmps.icps_tooshort +
+                          (uint64_t)icmps.icps_checksum + (uint64_t)icmps.icps_badlen;
+    uint64_t iin = ierr, iout = 0;
+    for (int t = 0; t <= ICMP_MAXTYPE; ++t) {
+        iin  += (uint64_t)icmps.icps_inhist[t];
+        iout += (uint64_t)icmps.icps_outhist[t];
+    }
+    const uint64_t iunr = (uint64_t)icmps.icps_inhist[ICMP_UNREACH];
 
     const uint64_t act   = (uint64_t)tcps.tcps_connattempt;
     const uint64_t pas   = (uint64_t)tcps.tcps_accepts;
@@ -86,6 +107,16 @@ int budyk_collect_netstat_freebsd(budyk_netstat_ctx_c* ctx, budyk_sample_c* s) {
         }
     }
 
+    if (icmp_ok) {
+        s->icmp.present = 1;
+        if (have_prev) {
+            s->icmp.in_msgs_per_sec          = rate(iin,  ctx->icmp_in,         dns);
+            s->icmp.out_msgs_per_sec         = rate(iout, ctx->icmp_out,        dns);
+            s->icmp.in_errors_per_sec        = rate(ierr, ctx->icmp_in_errors,  dns);
+            s->icmp.in_dest_unreachs_per_sec = rate(iunr, ctx->icmp_in_unreach, dns);
+        }
+    }
+
     ctx->tcp_active_opens  = act;
     ctx->tcp_passive_opens = pas;
     ctx->tcp_retransmits   = retr;
@@ -96,7 +127,11 @@ int budyk_collect_netstat_freebsd(budyk_netstat_ctx_c* ctx, budyk_sample_c* s) {
     ctx->udp_out           = uout;
     ctx->udp_no_port       = unop;
     ctx->udp_in_errors     = uerr;
+    ctx->icmp_in           = iin;
+    ctx->icmp_out          = iout;
+    ctx->icmp_in_errors    = ierr;
+    ctx->icmp_in_unreach   = iunr;
     ctx->prev_ns           = s->timestamp_nanos;
     ctx->has_prev          = 1;
-    return tcp_ok || udp_ok ? 0 : -errno;
+    return tcp_ok || udp_ok || icmp_ok ? 0 : -errno;
 }

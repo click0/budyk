@@ -162,6 +162,14 @@ int main() {
         assert(parse_processes("{\"processes\":[{\"pid\":x}]}").empty());
     }
 
+    // 8. health_hostname: the name /api/health gives, unescaped.
+    {
+        assert(health_hostname("{\"status\":\"ok\",\"version\":\"1\",\"hostname\":\"db-1\"}\n") == "db-1");
+        assert(health_hostname("{\"hostname\":\"a\\\"b\"}") == "a\"b");
+        assert(health_hostname("{\"status\":\"ok\"}").empty());
+        assert(health_hostname("{\"hostname\":\"cut").empty());
+    }
+
     std::printf("test_tui: PASS\n");
     return 0;
 }

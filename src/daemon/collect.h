@@ -32,7 +32,7 @@ struct CollectContext {
 //
 // s->groups and ctx->detail->collected then say what this tick has:
 // what was read (file_watch is the serve loop's to add), and not the rates
-// read for the first time in a row: cpu, disk, net, tcp, udp and the
+// read for the first time in a row: cpu, disk, net, tcp, udp, icmp and the
 // cores, disks, interfaces and processes lists, whose first read is a
 // baseline (on the first tick, or after a level that did not read them).
 // A group the

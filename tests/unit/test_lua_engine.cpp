@@ -1360,6 +1360,26 @@ int main() {
         e.shutdown();
     }
 
+    // N+7. icmp: read-only like the other groups; not collected without
+    //      the group.
+    {
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        assert(e.load_string(
+            "watch('flood', { cooldown = 0, action = 'log', when = function()\n"
+            "  return icmp.present and icmp.in_msgs_per_sec > 1000 and icmp.in_dest_unreachs_per_sec == 3\n"
+            "end })\n") == 0);
+        Sample x = mk(10, 50, 0, 0);
+        x.icmp.present = true;
+        x.icmp.in_msgs_per_sec = 5000;
+        x.icmp.in_dest_unreachs_per_sec = 3;
+        assert(e.eval_tick(x) == 1);
+        clear_groups(&x, kGroupIcmp);
+        assert(e.eval_tick(x) == 0);
+        assert(e.rules()[0].last_skip.find("icmp is not collected at this level") != std::string::npos);
+        e.shutdown();
+    }
+
     std::printf("test_lua_engine: PASS\n");
     return 0;
 }

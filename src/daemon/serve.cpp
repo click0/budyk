@@ -486,6 +486,10 @@ int cmd_serve(int argc, char* argv[], const char* version) {
     deps.poller_window_ns = kPollerWindowNs;
     deps.wake             = [] { wake_collection_loop(); };
     deps.version          = version;
+    {
+        char name[256] = "";
+        if (::gethostname(name, sizeof(name) - 1) == 0) deps.hostname = name;
+    }
     const HttpHandler router = make_router(deps);
     if (const int hrc = http.start(cfg.listen_addr, cfg.listen_port, router); hrc != 0) {
         std::fprintf(stderr,

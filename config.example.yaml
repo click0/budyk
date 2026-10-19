@@ -24,9 +24,9 @@ collection:
   #   minimal   cpu, mem, swap, load, uptime (in every set: the thresholds
   #             read them)
   #   standard  every group: also disk, net, proc, entropy, self, thermal,
-  #             tcp, udp, fs, clock
+  #             tcp, udp, icmp, fs, clock
   #   full      standard and the lists cpu.cores, disk.devices,
-  #             net.interfaces, fs.mounts
+  #             net.interfaces, fs.mounts, proc.top
   # e.g. [standard, cpu.cores] or [disk, net.interfaces]; a list brings its
   # group. A rule that reads what its level does not collect is skipped
   # for that tick (collected("disk") tells).

@@ -339,6 +339,17 @@ std::vector<ProcessRow> parse_processes(const std::string& body) {
     return out;
 }
 
+std::string health_hostname(const std::string& body) {
+    const std::string key = "\"hostname\":\"";
+    const size_t at = body.find(key);
+    if (at == std::string::npos) return "";
+    for (size_t k = at + key.size(); k < body.size(); ++k) {
+        if (body[k] == '\\') { ++k; continue; }
+        if (body[k] == '"') return json_unescape(body.substr(at + key.size(), k - at - key.size()));
+    }
+    return "";
+}
+
 std::string level_label(const std::vector<LevelInfo>& levels, int id) {
     for (const auto& lv : levels) {
         if (lv.id != id) continue;
@@ -412,6 +423,15 @@ int tui_run(const char* host, int port, std::string (*ask_password)()) {
     };
     fetch_levels();
 
+    // The host's name for the title line (/api/health needs no login).
+    std::string hostname;
+    {
+        tui_detail::HttpReply hr;
+        if (http_request(host, port, "GET", "/api/health", "", "", &hr) == 0 && hr.status == 200) {
+            hostname = tui_detail::health_hostname(hr.body);
+        }
+    }
+
     // --- ncurses init --------------------------------------------------------
     ::initscr();
     ::cbreak();
@@ -436,7 +456,8 @@ int tui_run(const char* host, int port, std::string (*ask_password)()) {
         }
 
         ::erase();
-        ::mvprintw(0, 0, "budyk tui  %s:%d   q=quit", host, port);
+        ::mvprintw(0, 0, "budyk tui  %s%s%s:%d   q=quit", hostname.c_str(),
+                   hostname.empty() ? "" : "  ", host, port);
         ::mvprintw(0, COLS - 12, "tick #%d", tick);
 
         if (rc != 0) {
@@ -518,19 +539,25 @@ int tui_run(const char* host, int port, std::string (*ask_password)()) {
                            procs, blocked, zombies, iowait);
             if (has(11, "TCP", "tcp"))
                 ::mvprintw(11, 0, "TCP    %.0f established   %.1f retransmits/s", estab, retr);
-            if (has(12, "FS", "fs"))
-                ::mvprintw(12, 0, "FS     fullest %5.1f%% %s of %.0f",
+            if (has(12, "ICMP", "icmp"))
+                ::mvprintw(12, 0, "ICMP   in %.1f/s  out %.1f/s   %.1f errors/s   %.1f unreachable/s",
+                           sample_number(b, "icmp", "in_msgs_per_sec"),
+                           sample_number(b, "icmp", "out_msgs_per_sec"),
+                           sample_number(b, "icmp", "in_errors_per_sec"),
+                           sample_number(b, "icmp", "in_dest_unreachs_per_sec"));
+            if (has(13, "FS", "fs"))
+                ::mvprintw(13, 0, "FS     fullest %5.1f%% %s of %.0f",
                            fs_used, bar(fs_used, barw).c_str(), fs_count);
-            if (has(13, "Uptime", "uptime"))
-                ::mvprintw(13, 0, "Uptime %s", fmt_uptime(uptime).c_str());
+            if (has(14, "Uptime", "uptime"))
+                ::mvprintw(14, 0, "Uptime %s", fmt_uptime(uptime).c_str());
 
             // The top processes, as many as the window has rows for.
             const auto top = tui_detail::parse_processes(b);
-            if (!top.empty() && LINES > 17) {
-                ::mvprintw(15, 0, "%-24s %8s %2s %7s %9s", "process", "pid", "", "CPU", "RSS");
-                for (size_t k = 0; k < top.size() && 16 + static_cast<int>(k) < LINES - 1; ++k) {
+            if (!top.empty() && LINES > 18) {
+                ::mvprintw(16, 0, "%-24s %8s %2s %7s %9s", "process", "pid", "", "CPU", "RSS");
+                for (size_t k = 0; k < top.size() && 17 + static_cast<int>(k) < LINES - 1; ++k) {
                     const auto& p = top[k];
-                    ::mvprintw(16 + static_cast<int>(k), 0, "%-24.24s %8ld %2.2s %6.1f%% %9s",
+                    ::mvprintw(17 + static_cast<int>(k), 0, "%-24.24s %8ld %2.2s %6.1f%% %9s",
                                p.name.c_str(), p.pid, p.state.c_str(), p.cpu_percent,
                                fmt_bytes(static_cast<uint64_t>(p.rss_bytes)).c_str());
                 }

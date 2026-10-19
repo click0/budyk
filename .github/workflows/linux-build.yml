@@ -177,6 +177,20 @@ jobs:
           tar xzf "$RUNNER_TEMP/old.tar.gz" -C "$RUNNER_TEMP"
           tests/smoke/upgrade.sh build/src/budyk "$RUNNER_TEMP/budyk-0.6.4-linux-amd64/budyk"
 
+      # And the v0.7.0 release's (502-byte records, codec v8).
+      - name: Rings of v0.7.0 converted on start
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -e
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/old070.tar.gz" \
+            https://github.com/click0/budyk/releases/download/v0.7.0/budyk-0.7.0-linux-amd64.tar.gz
+          echo "d2525b3eb154ecb527c2f49723d5a91312b51e486bef2c3b2d56e6ece65db4ed  $RUNNER_TEMP/old070.tar.gz" \
+            | sha256sum -c -
+          tar xzf "$RUNNER_TEMP/old070.tar.gz" -C "$RUNNER_TEMP"
+          tests/smoke/upgrade.sh build/src/budyk "$RUNNER_TEMP/budyk-0.7.0-linux-amd64/budyk" 18786
+
   # ThreadSanitizer: the collector tick, the HTTP thread and the Workers
   # share the hot buffer, the rings, the hub and the session store. Every
   # unit test plus the serve smoke test; any report fails the job.

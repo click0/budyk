@@ -48,6 +48,8 @@ struct RouterDeps {
     // WebSocket upgrade) so the collection loop steps up to L3 at once.
     std::function<void()>  wake;
     const char*            version      = "";
+    // This host's name (gethostname), in /api/health.
+    std::string            hostname;
 };
 
 // How many alerts the daemon keeps for /api/alerts (RAM only).

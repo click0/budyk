@@ -270,7 +270,7 @@ int main() {
         assert(std::fabs(s.cpu.total_percent - (100.0 - s.cpu.idle_percent)) < 1e-6);
     }
 
-    // 13. TCP / UDP from the netstat sysctls: present, rates zero on the
+    // 13. TCP / UDP / ICMP from the netstat sysctls: present, rates zero on the
     //     baseline call and non-negative after.
     {
         budyk_netstat_ctx_c ctx;
@@ -279,11 +279,12 @@ int main() {
         std::memset(&s, 0, sizeof(s));
         s.timestamp_nanos = 1'000'000'000ULL;
         assert(budyk_collect_netstat_freebsd(&ctx, &s) == 0);
-        assert(s.tcp.present && s.udp.present);
-        assert(s.tcp.in_segments_per_sec == 0.0);
+        assert(s.tcp.present && s.udp.present && s.icmp.present);
+        assert(s.tcp.in_segments_per_sec == 0.0 && s.icmp.in_msgs_per_sec == 0.0);
         s.timestamp_nanos = 2'000'000'000ULL;
         assert(budyk_collect_netstat_freebsd(&ctx, &s) == 0);
         assert(s.tcp.in_segments_per_sec >= 0.0 && s.udp.in_datagrams_per_sec >= 0.0);
+        assert(s.icmp.in_msgs_per_sec >= 0.0 && s.icmp.in_errors_per_sec >= 0.0);
         assert(budyk_collect_netstat_freebsd(nullptr, &s) != 0);
     }
 

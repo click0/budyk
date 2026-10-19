@@ -190,6 +190,15 @@ std::string sample_to_json(const Sample& s) {
     out.append(s.udp.present ? "true" : "false");
     out.append("},");
 
+    out.append("\"icmp\":{");
+    append_kv_double(&out, "in_msgs_per_sec",          s.icmp.in_msgs_per_sec);          out.push_back(',');
+    append_kv_double(&out, "out_msgs_per_sec",         s.icmp.out_msgs_per_sec);         out.push_back(',');
+    append_kv_double(&out, "in_errors_per_sec",        s.icmp.in_errors_per_sec);        out.push_back(',');
+    append_kv_double(&out, "in_dest_unreachs_per_sec", s.icmp.in_dest_unreachs_per_sec); out.push_back(',');
+    out.append("\"present\":");
+    out.append(s.icmp.present ? "true" : "false");
+    out.append("},");
+
     out.append("\"fs\":{");
     append_kv_uint  (&out, "count",                   s.fs.count);                   out.push_back(',');
     append_kv_double(&out, "max_used_percent",        s.fs.max_used_percent);        out.push_back(',');

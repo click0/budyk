@@ -201,7 +201,8 @@ on every target; a new implicit sign or width change is a build error in CI
    byte (bit 0: folded) and a CRC32C; each level has its own ring;
    `write_idx` is advanced only after the `pwrite`. A codec version only
    appends fields; a ring of smaller (older) records is converted on start
-   (`convert_ring()`, tests/smoke/upgrade.sh against v0.6.4). On start
+   (`convert_ring()`, tests/smoke/upgrade.sh against v0.6.4 and v0.7.0;
+   codec v9, 542-byte records, since ICMP). On start
    `TierManager::init()` also counts in a record that reached its slot but
    not the index (`count_unindexed()`), so a daemon crash loses no stored
    record (`tests/smoke/crash.sh`, `fsck.sh`). `budyk serve` holds an

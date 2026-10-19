@@ -315,8 +315,8 @@ int TierManager::store(const Sample& s) {
 }
 
 int TierManager::append(RingFile* ring, const Sample& s) {
-    // Headroom over the current record size (14 + 488 = 502 for codec
-    // v8); record_encode() refuses rather than overflow if it ever grows
+    // Headroom over the current record size (14 + 528 = 542 for codec
+    // v9); record_encode() refuses rather than overflow if it ever grows
     // past this.
     uint8_t buf[1024];
     size_t  len = 0;

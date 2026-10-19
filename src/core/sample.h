@@ -79,6 +79,18 @@ struct UdpStats {
     bool     present;
 };
 
+// ICMP over IPv4 (the kernel's Icmp MIB; ICMPv6 is another protocol and
+// not counted here): messages in and out, errors in (bad checksum, too
+// short, bad code or length), destination unreachable received, per
+// second.
+struct IcmpStats {
+    double   in_msgs_per_sec;
+    double   out_msgs_per_sec;
+    double   in_errors_per_sec;
+    double   in_dest_unreachs_per_sec;
+    bool     present;
+};
+
 // Local filesystems (spec §2.1; pseudo, read-only and network ones are
 // skipped): how many, and the fullest by space and by inodes.
 struct FsStats {
@@ -116,9 +128,10 @@ enum MetricGroup : uint32_t {
     kGroupUdp       = 1u << 13,
     kGroupFs        = 1u << 14,
     kGroupClock     = 1u << 15,
+    kGroupIcmp      = 1u << 16,
 };
 constexpr uint32_t kGroupsV7  = (1u << 12) - 1;    // cpu .. uptime
-constexpr uint32_t kGroupsAll = (1u << 16) - 1;
+constexpr uint32_t kGroupsAll = (1u << 17) - 1;
 
 // Entropy pool state — L3 / active tier (spec §3.3.3).
 // On platforms without an entropy_avail surface (currently FreeBSD),
@@ -178,6 +191,7 @@ struct Sample {
     FileWatchSample file_watch;
     TcpStats   tcp;
     UdpStats   udp;
+    IcmpStats  icmp;
     FsStats    fs;
     ClockStats clock;
     uint32_t   groups;        // MetricGroup bits

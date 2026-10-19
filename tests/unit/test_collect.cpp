@@ -9,12 +9,17 @@
 
 #include <cassert>
 #include <cstdio>
+#include <string>
+
+#include <sys/stat.h>
+#include <unistd.h>
 
 using namespace budyk;
 
 namespace {
 
-constexpr uint32_t kRates = kGroupCpu | kGroupDisk | kGroupNet | kGroupTcp | kGroupUdp;
+constexpr uint32_t kRates = kGroupCpu | kGroupDisk | kGroupNet | kGroupTcp | kGroupUdp |
+                           kGroupIcmp;
 
 Sample tick(CollectContext* ctx, const MetricSet& set) {
     Sample s{};
@@ -66,8 +71,9 @@ int main() {
     // 4. Back to full: what minimal did not read has only its baseline
     //    (cpu did read, so it stays); the gauges are back at once.
     s = tick(&ctx, metric_set_full());
-    assert(s.groups == (kGroupsSelectable & ~(kGroupDisk | kGroupNet | kGroupTcp | kGroupUdp)));
-    assert(s.baseline == (kGroupDisk | kGroupNet | kGroupTcp | kGroupUdp));
+    assert(s.groups == (kGroupsSelectable & ~(kGroupDisk | kGroupNet | kGroupTcp | kGroupUdp |
+                                              kGroupIcmp)));
+    assert(s.baseline == (kGroupDisk | kGroupNet | kGroupTcp | kGroupUdp | kGroupIcmp));
     assert(s.disk.read_bytes_per_sec == 0 && s.disk.device_count == 0);
     assert(s.proc.total > 0);
     assert(ctx.detail->collected == kDetailMounts);
@@ -81,13 +87,51 @@ int main() {
     s = tick(&ctx, metric_set_full());
     assert(s.groups == kGroupsSelectable && ctx.detail->collected == kDetailMounts);
 
-    // 6. A list brings its group; tcp brings udp (one read).
+    // 6. A list brings its group; tcp brings udp and icmp (one read).
     CollectContext c2;
     tick(&c2, MetricSet{kGroupsMinimal | kGroupTcp, kDetailDisks});
     s = tick(&c2, MetricSet{kGroupsMinimal | kGroupTcp, kDetailDisks});
-    assert(s.groups == (kGroupsMinimal | kGroupTcp | kGroupUdp | kGroupDisk));
+    assert(s.groups == (kGroupsMinimal | kGroupTcp | kGroupUdp | kGroupIcmp | kGroupDisk));
     assert(c2.detail->collected == kDetailDisks);
     assert(c2.last_groups == s.groups && c2.last_detail == kDetailDisks);
+
+#if defined(BUDYK_LINUX)
+    // 7. What the collectors read reaches the sample: ICMP from a fixture
+    //    /proc/net/snmp, every field, as rates over the 2 s between ticks.
+    {
+        char tmpl[] = "/tmp/budyk_collect_XXXXXX";
+        const char* dir = ::mkdtemp(tmpl);
+        assert(dir != nullptr);
+        const std::string net = std::string(dir) + "/net";
+        assert(::mkdir(net.c_str(), 0700) == 0);
+        auto snmp = [&](unsigned in, unsigned out, unsigned err, unsigned unr) {
+            FILE* f = std::fopen((net + "/snmp").c_str(), "w");
+            assert(f != nullptr);
+            std::fprintf(f, "Icmp: InMsgs InErrors InDestUnreachs OutMsgs\nIcmp: %u %u %u %u\n",
+                         in, err, unr, out);
+            std::fclose(f);
+        };
+        budyk_linux_set_proc_root(dir);
+        CollectContext c3;
+        const MetricSet set{kGroupsMinimal | kGroupIcmp, 0};
+        snmp(100, 10, 2, 4);
+        Sample x{};
+        x.timestamp_nanos = 1000000000ULL;
+        collect_one(&x, &c3, set);
+        assert((x.baseline & kGroupIcmp) != 0);
+        snmp(300, 50, 6, 24);
+        x = Sample{};
+        x.timestamp_nanos = 3000000000ULL;
+        collect_one(&x, &c3, set);
+        budyk_linux_set_proc_root(nullptr);
+        assert((x.groups & kGroupIcmp) != 0 && x.icmp.present);
+        assert(x.icmp.in_msgs_per_sec == 100.0 && x.icmp.out_msgs_per_sec == 20.0);
+        assert(x.icmp.in_errors_per_sec == 2.0 && x.icmp.in_dest_unreachs_per_sec == 10.0);
+        ::unlink((net + "/snmp").c_str());
+        ::rmdir(net.c_str());
+        ::rmdir(dir);
+    }
+#endif
 
     std::printf("test_collect: PASS\n");
     return 0;

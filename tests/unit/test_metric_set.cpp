@@ -53,7 +53,8 @@ int main() {
         assert(same(parse({"minimal", "clock", "clock"}),
                     MetricSet{kGroupsMinimal | kGroupClock, 0}));
         const char* groups[] = { "cpu", "mem", "swap", "load", "uptime", "disk", "net", "proc",
-                                 "entropy", "self", "thermal", "tcp", "udp", "fs", "clock" };
+                                 "entropy", "self", "thermal", "tcp", "udp", "fs", "clock",
+                                 "icmp" };
         std::vector<std::string> every(std::begin(groups), std::end(groups));
         assert(same(parse(every), metric_set_standard()));
     }
@@ -80,7 +81,8 @@ int main() {
         assert(std::string(metric_group_name(kGroupClock)) == "clock");
         assert(metric_group_name(0) == nullptr);
         assert(metric_group_name(kGroupCpu | kGroupMem) == nullptr);
-        assert(metric_group_name(1u << 16) == nullptr);
+        assert(std::string(metric_group_name(kGroupIcmp)) == "icmp");
+        assert(metric_group_name(1u << 17) == nullptr);
         assert(std::string(metric_detail_name(kDetailMounts)) == "fs.mounts");
         assert(std::string(metric_detail_name(kDetailProcesses)) == "proc.top");
         assert(metric_detail_name(0) == nullptr && metric_detail_name(1u << 5) == nullptr);
@@ -120,6 +122,7 @@ int main() {
         full.file_watch.watched_count = 9;     full.uptime_seconds = 9;
         full.tcp.established = 9;              full.udp.in_datagrams_per_sec = 9;
         full.fs.count = 9;                     full.clock.offset_ms = 9;
+        full.icmp.in_msgs_per_sec = 9;
         // A value per group, as a number, to compare before and after.
         auto value = [](const Sample& s, uint32_t bit) -> double {
             switch (bit) {
@@ -139,6 +142,7 @@ int main() {
                 case kGroupUdp:       return s.udp.in_datagrams_per_sec;
                 case kGroupFs:        return s.fs.count;
                 case kGroupClock:     return s.clock.offset_ms;
+                case kGroupIcmp:      return s.icmp.in_msgs_per_sec;
             }
             return -1;
         };

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #pragma once
 // Expose a Sample to Lua as global tables (cpu, mem, swap, load, disk,
-// net, proc, entropy, self_, thermal, tcp, udp, fs, clock) plus
+// net, proc, entropy, self_, thermal, tcp, udp, icmp, fs, clock) plus
 // uptime_seconds.
 //
 // Each global is a read-only proxy over a data table: assigning a field

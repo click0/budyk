@@ -45,7 +45,7 @@ MetricSet metric_set_full();
 
 // Parses a set from the names given: set names (above), group names
 // ("cpu", "mem", "swap", "load", "uptime", "disk", "net", "proc",
-// "entropy", "self", "thermal", "tcp", "udp", "fs", "clock") and
+// "entropy", "self", "thermal", "tcp", "udp", "fs", "clock", "icmp") and
 // collection names ("cpu.cores", "disk.devices",
 // "net.interfaces", "fs.mounts", "proc.top"), case-sensitive. The result is their
 // union plus the minimal set; a collection brings its group with it.

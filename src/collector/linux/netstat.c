@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: BSD-3-Clause */
-/* collector/linux/netstat.c — TCP / UDP counters from /proc/net/snmp
- * and /proc/net/sockstat (all address families: the kernel's TCP and
- * UDP MIB counters are shared by IPv4 and IPv6). */
+/* collector/linux/netstat.c — TCP / UDP / ICMP counters from
+ * /proc/net/snmp and /proc/net/sockstat (all address families for TCP
+ * and UDP, whose MIB counters IPv4 and IPv6 share; ICMP is IPv4's). */
 
 #include "core/sample_c.h"
 
@@ -49,12 +49,14 @@ int budyk_collect_netstat_linux(budyk_netstat_ctx_c* ctx, budyk_sample_c* s) {
     if (ctx == NULL || s == NULL) return -EINVAL;
     memset(&s->tcp, 0, sizeof(s->tcp));
     memset(&s->udp, 0, sizeof(s->udp));
+    memset(&s->icmp, 0, sizeof(s->icmp));
 
     char path[512];
     snprintf(path, sizeof(path), "%s/net/snmp", budyk_linux_proc_root());
     FILE* f = fopen(path, "r");
     if (f == NULL) return -errno;
     char tcp_n[1024] = "", tcp_v[1024] = "", udp_n[1024] = "", udp_v[1024] = "";
+    char icmp_n[1024] = "", icmp_v[1024] = "";
     char line[1024];
     while (fgets(line, sizeof(line), f) != NULL) {
         if (strncmp(line, "Tcp: ", 5) == 0) {
@@ -63,6 +65,9 @@ int budyk_collect_netstat_linux(budyk_netstat_ctx_c* ctx, budyk_sample_c* s) {
         } else if (strncmp(line, "Udp: ", 5) == 0) {
             if (udp_n[0] == '\0') snprintf(udp_n, sizeof(udp_n), "%s", line + 5);
             else                  snprintf(udp_v, sizeof(udp_v), "%s", line + 5);
+        } else if (strncmp(line, "Icmp: ", 6) == 0) {       /* not "IcmpMsg:" */
+            if (icmp_n[0] == '\0') snprintf(icmp_n, sizeof(icmp_n), "%s", line + 6);
+            else                   snprintf(icmp_v, sizeof(icmp_v), "%s", line + 6);
         }
     }
     fclose(f);
@@ -83,6 +88,13 @@ int budyk_collect_netstat_linux(budyk_netstat_ctx_c* ctx, budyk_sample_c* s) {
         snmp_value(udp_n, udp_v, "OutDatagrams", &uout) &&
         snmp_value(udp_n, udp_v, "NoPorts",      &unoport) &&
         snmp_value(udp_n, udp_v, "InErrors",     &uerr);
+
+    unsigned long long iin = 0, iout = 0, ierr = 0, iunr = 0;
+    const int icmp_ok =
+        snmp_value(icmp_n, icmp_v, "InMsgs",         &iin)  &&
+        snmp_value(icmp_n, icmp_v, "OutMsgs",        &iout) &&
+        snmp_value(icmp_n, icmp_v, "InErrors",       &ierr) &&
+        snmp_value(icmp_n, icmp_v, "InDestUnreachs", &iunr);
 
     /* TIME_WAIT sockets: /proc/net/sockstat, "TCP: inuse N orphan N tw N ...". */
     unsigned long long tw = 0;
@@ -121,6 +133,16 @@ int budyk_collect_netstat_linux(budyk_netstat_ctx_c* ctx, budyk_sample_c* s) {
         }
     }
 
+    if (icmp_ok) {
+        s->icmp.present = 1;
+        if (have_prev) {
+            s->icmp.in_msgs_per_sec          = rate(iin,  ctx->icmp_in,         dns);
+            s->icmp.out_msgs_per_sec         = rate(iout, ctx->icmp_out,        dns);
+            s->icmp.in_errors_per_sec        = rate(ierr, ctx->icmp_in_errors,  dns);
+            s->icmp.in_dest_unreachs_per_sec = rate(iunr, ctx->icmp_in_unreach, dns);
+        }
+    }
+
     ctx->tcp_active_opens  = act;
     ctx->tcp_passive_opens = pas;
     ctx->tcp_retransmits   = retr;
@@ -131,7 +153,11 @@ int budyk_collect_netstat_linux(budyk_netstat_ctx_c* ctx, budyk_sample_c* s) {
     ctx->udp_out           = uout;
     ctx->udp_no_port       = unoport;
     ctx->udp_in_errors     = uerr;
+    ctx->icmp_in           = iin;
+    ctx->icmp_out          = iout;
+    ctx->icmp_in_errors    = ierr;
+    ctx->icmp_in_unreach   = iunr;
     ctx->prev_ns           = s->timestamp_nanos;
     ctx->has_prev          = 1;
-    return tcp_ok || udp_ok ? 0 : -ENODATA;
+    return tcp_ok || udp_ok || icmp_ok ? 0 : -ENODATA;
 }

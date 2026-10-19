@@ -19,6 +19,7 @@ void clear_groups(Sample* s, uint32_t groups) {
     if ((groups & kGroupUptime)    != 0) s->uptime_seconds = 0.0;
     if ((groups & kGroupTcp)       != 0) s->tcp        = TcpStats{};
     if ((groups & kGroupUdp)       != 0) s->udp        = UdpStats{};
+    if ((groups & kGroupIcmp)      != 0) s->icmp       = IcmpStats{};
     if ((groups & kGroupFs)        != 0) s->fs         = FsStats{};
     if ((groups & kGroupClock)     != 0) s->clock      = ClockStats{};
     s->groups &= ~groups;

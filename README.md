@@ -96,7 +96,7 @@ single dashboard that combines servers isn't part of budyk yet.
 
 - **Metrics:** CPU (with user / system / iowait / irq / steal),
   memory, swap, load average, disk I/O, network, processes by state,
-  TCP and UDP, filesystem usage (space and inodes), clock sync,
+  TCP, UDP and ICMP, filesystem usage (space and inodes), clock sync,
   entropy, temperature, uptime, and budyk's own CPU/RSS; live, each
   core, disk, interface and filesystem, and the top processes by CPU
   and by memory.
@@ -288,7 +288,7 @@ collection:
 | Set | Holds |
 |-----|-------|
 | `minimal` | `cpu`, `mem`, `swap`, `load`, `uptime` |
-| `standard` | every group: the above and `disk`, `net`, `proc`, `entropy`, `self`, `thermal`, `tcp`, `udp`, `fs`, `clock` |
+| `standard` | every group: the above and `disk`, `net`, `proc`, `entropy`, `self`, `thermal`, `tcp`, `udp`, `icmp`, `fs`, `clock` |
 | `full` | `standard` and the per-entity lists `cpu.cores`, `disk.devices`, `net.interfaces`, `fs.mounts`, `proc.top` |
 
 A list may name sets, groups and lists. Every set includes `minimal`
@@ -413,6 +413,7 @@ Metrics are refreshed every tick as globals:
 | `thermal` | `max_celsius`, `sensor_count`, `present` |
 | `tcp` | `established`, `time_wait`, `active_opens_per_sec`, `passive_opens_per_sec`, `retransmits_per_sec`, `in_segments_per_sec`, `out_segments_per_sec`, `in_errors_per_sec`, `present` |
 | `udp` | `in_datagrams_per_sec`, `out_datagrams_per_sec`, `no_port_per_sec`, `in_errors_per_sec`, `present` |
+| `icmp` | `in_msgs_per_sec`, `out_msgs_per_sec`, `in_errors_per_sec`, `in_dest_unreachs_per_sec`, `present` (ICMP over IPv4) |
 | `fs` | `count`, `max_used_percent`, `max_inodes_used_percent`, `present` |
 | `clock` | `offset_ms`, `max_error_ms`, `synced`, `present` |
 | `self_` | `rss_bytes`, `peak_rss_bytes`, `cpu_user_seconds`, `cpu_system_seconds` |
@@ -527,7 +528,7 @@ needs.
 
 | Method | Path | Auth | Returns |
 |--------|------|------|---------|
-| `GET` | `/api/health` | no | status, version |
+| `GET` | `/api/health` | no | status, version, hostname |
 | `POST` | `/api/auth/login` | no | body `{"password": "..."}`; sets the `budyk_session` cookie |
 | `POST` | `/api/auth/logout` | no | clears the session |
 | `GET` | `/api/samples` | yes | recent samples from the in-memory buffer |

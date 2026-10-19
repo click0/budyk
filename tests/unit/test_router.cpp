@@ -53,6 +53,7 @@ struct World {
         d.poller_window_ns = 5ULL * 1000000000ULL;
         d.wake = [this] { ++wakes; };
         d.version = "9.9.9-test";
+        d.hostname = "db\"1";                // escaped in the JSON
         d.recent_alerts = &alerts;
         handler = make_router(d);
     }
@@ -95,15 +96,16 @@ bool has(const std::string& s, const char* needle) { return s.find(needle) != st
 } // namespace
 
 int main() {
-    // 1. Public routes: the SPA, /api/health with the version, 404 for
-    //    the rest, and a method that doesn't match.
+    // 1. Public routes: the SPA, /api/health with the version and the
+    //    hostname, 404 for the rest, and a method that doesn't match.
     {
         World w; w.init();
         HttpResponse r = w.handler(get("/"));
         assert(r.status == 200 && has(r.content_type, "text/html") && has(r.body, "<html"));
         assert(w.handler(get("/index.html")).status == 200);
         r = w.handler(get("/api/health"));
-        assert(r.status == 200 && r.body == "{\"status\":\"ok\",\"version\":\"9.9.9-test\"}\n");
+        assert(r.status == 200 &&
+               r.body == "{\"status\":\"ok\",\"version\":\"9.9.9-test\",\"hostname\":\"db\\\"1\"}\n");
         assert(!has(r.body, "data_dir"));
         assert(w.handler(get("/nope")).status == 404);
         assert(w.handler(post("/api/health", "")).status == 404);
@@ -295,7 +297,7 @@ int main() {
                            "\"builtin\":true,\"collects\":false,\"metrics\":[\"cpu\","));
         assert(has(r.body, "\"name\":\"L3\",\"interval_ms\":1000,\"priority\":30,"
                            "\"builtin\":true,\"collects\":true,\"metrics\":[\"cpu\","));
-        assert(has(r.body, "\"tcp\",\"udp\",\"fs\",\"clock\",\"cpu.cores\",\"disk.devices\","
+        assert(has(r.body, "\"tcp\",\"udp\",\"fs\",\"clock\",\"icmp\",\"cpu.cores\",\"disk.devices\","
                            "\"net.interfaces\",\"fs.mounts\",\"proc.top\"]}"));
         assert(has(r.body, "{\"id\":4,\"name\":\"burst\",\"interval_ms\":300,\"priority\":40,"
                            "\"builtin\":false,\"collects\":true,"

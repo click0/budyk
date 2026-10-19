@@ -549,6 +549,14 @@ void budyk_lua_bind_sample(lua_State* L, const budyk::Sample& s, const budyk_det
     set_boolean(L, "present",               s.udp.present);
     lua_pop(L, 1);
 
+    push_group_data(L, "icmp", state_of(s.groups, s.baseline, budyk::kGroupIcmp));
+    set_number (L, "in_msgs_per_sec",          s.icmp.in_msgs_per_sec);
+    set_number (L, "out_msgs_per_sec",         s.icmp.out_msgs_per_sec);
+    set_number (L, "in_errors_per_sec",        s.icmp.in_errors_per_sec);
+    set_number (L, "in_dest_unreachs_per_sec", s.icmp.in_dest_unreachs_per_sec);
+    set_boolean(L, "present",                  s.icmp.present);
+    lua_pop(L, 1);
+
     // fs — local filesystems: how many, the fullest by space and inodes.
     push_group_data(L, "fs", state_of(s.groups, s.baseline, budyk::kGroupFs));
     set_integer(L, "count",                   static_cast<lua_Integer>(s.fs.count));
