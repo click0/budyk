@@ -13,9 +13,6 @@
 # CI passes the v0.6.4 Linux release binary as the older one.
 
 set -eu
-# Tenths of a second to wait for the daemon to answer: SMOKE_START_WAIT
-# seconds (default 5); an emulated VM needs more.
-START_TRIES=$(( ${SMOKE_START_WAIT:-5} * 10 ))
 BIN=${1:?usage: upgrade.sh path/to/budyk path/to/older/budyk [port]}
 OLD=${2:?usage: upgrade.sh path/to/budyk path/to/older/budyk [port]}
 PORT=${3:-18770}
@@ -40,7 +37,7 @@ run() {   # run <binary>: start it on the config and wait for HTTP
     i=0
     until curl -s -o /dev/null "http://127.0.0.1:$PORT/api/health"; do
         i=$((i + 1))
-        [ "$i" -lt "$START_TRIES" ] || { echo "daemon did not start"; cat "$DIR/log"; exit 1; }
+        [ "$i" -lt 50 ] || { echo "daemon did not start"; cat "$DIR/log"; exit 1; }
         sleep 0.1
     done
 }

@@ -17,9 +17,6 @@
 #   tests/smoke/modes.sh path/to/budyk [port]
 
 set -eu
-# Tenths of a second to wait for the daemon to answer: SMOKE_START_WAIT
-# seconds (default 5); an emulated VM needs more.
-START_TRIES=$(( ${SMOKE_START_WAIT:-5} * 10 ))
 BIN=${1:?usage: modes.sh path/to/budyk [port]}
 PORT=${2:-18770}
 DIR=$(mktemp -d)
@@ -34,7 +31,7 @@ start() {   # start <run>: the daemon on $DIR/<run>.yaml, log in $DIR/<run>.log
     i=0
     until curl -s -o /dev/null "$URL/api/health"; do
         i=$((i + 1))
-        [ "$i" -lt "$START_TRIES" ] || { echo "daemon did not start"; cat "$DIR/$1.log"; exit 1; }
+        [ "$i" -lt 50 ] || { echo "daemon did not start"; cat "$DIR/$1.log"; exit 1; }
         sleep 0.1
     done
 }

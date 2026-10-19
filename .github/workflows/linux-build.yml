@@ -102,10 +102,11 @@ jobs:
   # Cross-compiled for FreeBSD with clang and lld (cmake/toolchains/),
   # against the sysroot of 14.4, the oldest supported 14.x: the static
   # release configuration, tests included, for amd64 and aarch64. The
-  # FreeBSD workflow runs the amd64 binary on FreeBSD 15.1.
+  # FreeBSD workflow runs the amd64 binary on FreeBSD 15.1; the aarch64
+  # binary and unit tests run here, in an emulated arm64 FreeBSD 14.4.
   freebsd-cross:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -128,12 +129,12 @@ jobs:
       - name: Configure and build
         run: |
           set -ex
-          cmake -B build \
+          cmake -B "$RUNNER_TEMP/build" \
             --toolchain cmake/toolchains/freebsd-${{ matrix.arch }}.cmake \
             -DFREEBSD_SYSROOT="$RUNNER_TEMP/sysroot" \
             -DBUILD_TESTS=ON \
             -DENABLE_WERROR=ON
-          cmake --build build -j"$(nproc)"
+          cmake --build "$RUNNER_TEMP/build" -j"$(nproc)"
 
       - name: Check the binary
         run: |
@@ -142,9 +143,57 @@ jobs:
             amd64)   machine=x86-64 ;;
             aarch64) machine="ARM aarch64" ;;
           esac
-          file build/src/budyk
-          file build/src/budyk | grep "$machine" | grep "(FreeBSD)" \
+          file "$RUNNER_TEMP/build/src/budyk"
+          file "$RUNNER_TEMP/build/src/budyk" | grep "$machine" | grep "(FreeBSD)" \
             | grep "statically linked" | grep -q "for FreeBSD $FREEBSD_VERSION"
+
+      # x86 forgives an unaligned access and arm64 does not (SIGBUS), and
+      # nothing else in CI runs on arm64: the unit tests and the smoke
+      # scripts, on FreeBSD arm64. The VM gets the sources and arm/ (the
+      # build tree is outside the workspace).
+      - name: Stage the aarch64 binary and tests for the VM
+        if: matrix.arch == 'aarch64'
+        run: |
+          set -ex
+          mkdir arm
+          cp "$RUNNER_TEMP/build/src/budyk" arm/
+          cp "$RUNNER_TEMP"/build/tests/test_* arm/
+
+      - name: Unit and smoke tests on FreeBSD arm64 (emulated)
+        if: matrix.arch == 'aarch64'
+        uses: cross-platform-actions/action@v1.6.0
+        timeout-minutes: 25
+        with:
+          operating_system: freebsd
+          architecture: arm64
+          version: '14.4'
+          shell: sh
+          memory: 4G
+          cpu_count: 3
+          run: |
+            set -e
+            uname -a
+            sudo pkg install -y curl python3
+            failed=
+            for t in arm/test_*; do
+              case "$t" in
+                */test_rule_files) arg=rules ;;
+                */test_rule_perf)  arg=0 ;;   # emulated: the time is only reported
+                *)                 arg= ;;
+              esac
+              if "$t" $arg > "$t.log" 2>&1; then
+                echo "ok   $t"
+              else
+                echo "FAIL $t"; tail -20 "$t.log"; failed="$failed $t"
+              fi
+            done
+            [ -z "$failed" ] || { echo "FAIL:$failed"; exit 1; }
+            tests/smoke/serve.sh arm/budyk
+            tests/smoke/crash.sh arm/budyk
+            tests/smoke/warm_grace.sh arm/budyk
+            tests/smoke/escalate.sh arm/budyk
+            tests/smoke/fsck.sh arm/budyk
+            tests/smoke/modes.sh arm/budyk
 
       # The static-analysis job leaves out the FreeBSD collectors and sees
       # only the Linux side of every #ifdef; with the sysroot's headers,

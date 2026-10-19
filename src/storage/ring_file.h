@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #pragma once
+#include <atomic>
 #include <cstdint>
 #include <cstddef>
 
@@ -64,6 +65,11 @@ private:
     size_t    mmap_len_ = 0;
     uint32_t  record_size_ = 0;
     uint64_t  capacity_ = 0;
+    /// The write index, for the threads of this process: the header's
+    /// field sits at +28, not 8-byte aligned, and an atomic there faults
+    /// on arm64 (SIGBUS). The writer stores each new value into the
+    /// header too (append(), advance_write_index()).
+    std::atomic<uint64_t> widx_{0};
 };
 
 } // namespace budyk

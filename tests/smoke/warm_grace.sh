@@ -15,9 +15,6 @@
 #   tests/smoke/warm_grace.sh path/to/budyk [port]
 
 set -eu
-# Tenths of a second to wait for the daemon to answer: SMOKE_START_WAIT
-# seconds (default 5); an emulated VM needs more.
-START_TRIES=$(( ${SMOKE_START_WAIT:-5} * 10 ))
 BIN=${1:?usage: warm_grace.sh path/to/budyk [port]}
 PORT=${2:-18767}
 DIR=$(mktemp -d)
@@ -39,7 +36,7 @@ PID=$!
 i=0
 until curl -s -o /dev/null "http://127.0.0.1:$PORT/api/health"; do
     i=$((i + 1))
-    [ "$i" -lt "$START_TRIES" ] || { echo "daemon did not start"; cat "$DIR/log"; exit 1; }
+    [ "$i" -lt 50 ] || { echo "daemon did not start"; cat "$DIR/log"; exit 1; }
     sleep 0.1
 done
 

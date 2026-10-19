@@ -113,14 +113,17 @@ int FileWatcher::poll(int timeout_ms, std::vector<FileChangeEvent>* out) {
 
         char* p = buf;
         while (p < buf + n) {
-            auto* ev = reinterpret_cast<struct inotify_event*>(p);
-            auto  it = id_to_path_.find(ev->wd);
+            // The fixed part, copied out rather than cast: the name is not
+            // read, and -Wcast-align=strict holds for the whole tree.
+            struct inotify_event ev;
+            std::memcpy(&ev, p, sizeof(ev));
+            auto it = id_to_path_.find(ev.wd);
             if (it != id_to_path_.end()) {
                 FileChangeEvent out_ev;
                 out_ev.path = it->second;
-                if (ev->mask & (IN_DELETE_SELF | IN_MOVE_SELF)) {
+                if (ev.mask & (IN_DELETE_SELF | IN_MOVE_SELF)) {
                     out_ev.kind = FileChangeKind::Deleted;
-                } else if (ev->mask & IN_CREATE) {
+                } else if (ev.mask & IN_CREATE) {
                     out_ev.kind = FileChangeKind::Created;
                 } else {
                     out_ev.kind = FileChangeKind::Modified;
@@ -132,7 +135,7 @@ int FileWatcher::poll(int timeout_ms, std::vector<FileChangeEvent>* out) {
                     ++appended;
                 }
             }
-            p += sizeof(struct inotify_event) + ev->len;
+            p += sizeof(struct inotify_event) + ev.len;
         }
     }
     return appended;

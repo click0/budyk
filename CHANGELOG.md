@@ -107,6 +107,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **budyk runs on arm64.** The ring file's write index sits at byte 28 of
+  its header, not 8-byte aligned, and was read and advanced there with
+  atomic instructions: x86 allows that, arm64 raises SIGBUS, so the
+  daemon died on its first ring and the ring unit tests failed. The
+  index is now an atomic in memory, copied into the header after each
+  write; the file format does not change. GCC builds add
+  `-Wcast-align=strict`, which turns such a cast into a build error on
+  x86 too, and CI runs the unit tests and the smoke scripts on FreeBSD
+  arm64.
 - **No descriptor leaks into a forked child.** The Linux collectors, the
   config, rules, freeze and session files and the private temp files
   for curl were opened without close-on-exec. They are open for a moment
