@@ -340,7 +340,7 @@ cooldowns carry over the reload.
 watch("high_cpu", {
     when      = function() return cpu.total_percent > 90 end,
     for_ticks = 5,           -- consecutive ticks the condition must hold (default 1)
-    cooldown  = 60,          -- ticks to stay quiet after firing (default 0)
+    cooldown  = 60,          -- ticks to stay quiet after firing (default: for_ticks)
     severity  = "warning",   -- "info" | "warning" (default) | "critical"
     message   = "CPU above 90%",   -- default: the rule name
 })
@@ -355,26 +355,44 @@ watch("swap_under_load", {
 })
 ```
 
-`when` is required. `action` is one of:
+`when` is required. It returns `true` to fire (once it has held for
+`for_ticks` ticks in a row) and `false` to reset that streak. `nil`
+means "cannot tell on this tick", a device that is not there, say:
+the tick is skipped and the streak kept (spec §3.6.5). A `when` that
+returns nothing at all, an `if` without an `else`, counts as `false`.
+
+After firing, a rule stays quiet for `cooldown` ticks: as many as
+`for_ticks` unless set, `cooldown = 0` for none. `for_ticks` and
+`cooldown` are whole numbers; anything else is an error.
+
+`action` is one of these, or a list of them run in order
+(`action = { alert, escalate }`):
 
 | `action` | On fire |
 |----------|---------|
-| `"alert"` (default) | Sends `message` with `severity` to every alert channel. |
+| `alert` or `"alert"` (default) | Raises an alert with `message` and `severity`: logged, sent to every alert channel and to the dashboards, and kept for `/api/alerts`. |
 | `"log"` | Writes `[budyk] <message>` to the daemon log. |
+| `escalate` or `"escalate"` | Keeps L3 on for 60 s. |
 | a function | Calls it with no arguments. `severity` and `message` aren't used. |
+| `exec(cmd)` | With `exec` enabled, runs `cmd` (see below). |
 
-Anything else, including a table of actions, is an error: loading stops
-at that rule, and the daemon log shows the file, line and rule name.
-Rules defined above it stay active.
+`exec()` written in the rules file, outside any `when` or action, runs
+nothing: it checks the command (enabled, absolute path, the allowlist)
+and returns it as an action, so `action = { alert, exec("/usr/local/bin/drop-caches.sh") }`
+alerts and then runs the script each time the rule fires.
+
+Anything else is an error: loading stops at that rule, and the daemon
+log shows the file, line and rule name. Rules defined above it stay
+active.
 [`rules/examples.lua`](rules/examples.lua) has more examples.
 
 Functions available to rules:
 
 | Function | Purpose |
 |----------|---------|
-| `alert(name, severity, message)` | Send to every configured channel. `severity` is `"info"`, `"warning"` (default) or `"critical"`. |
+| `alert(name, severity, message)` | Raise an alert: logged, sent to every configured channel and to the dashboards, kept for `/api/alerts`. `severity` is `"info"`, `"warning"` (default) or `"critical"`. |
 | `print(...)` | Write to the daemon log. |
-| `exec(cmd [, timeout_s])` | Run a program: a string or an argv table, absolute path, 30 s timeout by default. **Off by default.** Enable with `rules.exec.enabled` or `--enable-exec`, and restrict it with `rules.exec.allow`. The command runs in the background: the call returns `{ queued = true }` at once (or `{ queued = false, error = "exec queue full" }`), the rules carry on, and the outcome is logged. To run it inline and get its result, `exec(cmd, { timeout = 5, wait = true })` returns `{ ok, exit_status, signal, timed_out, elapsed_seconds }`; the tick waits, so that timeout is capped at 60 s. |
+| `exec(cmd [, timeout_s])` | Run a program: a string or an argv table, absolute path, 30 s timeout by default (in the rules file itself it returns the command as an action instead, see above). **Off by default.** Enable with `rules.exec.enabled` or `--enable-exec`, and restrict it with `rules.exec.allow`. The command runs in the background: the call returns `{ queued = true }` at once (or `{ queued = false, error = "exec queue full" }`), the rules carry on, and the outcome is logged. To run it inline and get its result, `exec(cmd, { timeout = 5, wait = true })` returns `{ ok, exit_status, signal, timed_out, elapsed_seconds }`; the tick waits, so that timeout is capped at 60 s. |
 | `freeze(pid)` / `unfreeze(pid)` | Send `SIGSTOP` / `SIGCONT`. **Off by default.** Enable with `rules.freeze.enabled` or `--enable-freeze`, and restrict by process name with `rules.freeze.allow`. |
 | `collected(name)` | Whether the sample has a group (`"disk"`, `"self"`) or list (`"disk.devices"`); see [What each level collects](#what-each-level-collects). Raises for an unknown name. |
 | `escalate(level [, seconds])` | Keep a collection level active for `seconds` (default 60): a [custom level](#custom-levels)'s name, `"L2"` or `"L3"`. Takes effect for the current sleep. Raises for an unknown level. |
@@ -480,8 +498,11 @@ second daemon: `budyk serve` locks `budyk.lock` in the data directory.
 
 ## Alerts
 
-Configure channels under `alerts.channels`. `alert()` sends to every
-channel; if one fails, the rest still get the message. Sending happens
+Every alert is written to the daemon log (`budyk alert: critical
+disk_full: ...`), pushed to open dashboards, which list the latest, and
+kept for `/api/alerts` (the last 100, in RAM). It is also sent to the
+channels under `alerts.channels`; if one fails, the rest still get the
+message. Sending happens
 on a separate thread: a channel that is slow or down never delays
 collection. The queue holds 256 alerts; beyond that, new ones are
 dropped and logged until it drains.
@@ -506,6 +527,7 @@ needs.
 | `POST` | `/api/auth/logout` | no | clears the session |
 | `GET` | `/api/samples` | yes | recent samples from the in-memory buffer |
 | `GET` | `/api/range` | yes | stored history: `since`, `until` (nanoseconds since the epoch), `limit` (up to 5000), and either `level` (`L1`–`L3`, a custom level's name, or `all` for every level merged and thinned over the window) or `tier` (`1` = L3 samples, `2` = L2, `3` = L1) |
+| `GET` | `/api/alerts` | yes | the latest 100 alerts (RAM only), oldest first: `ts`, `severity`, `rule`, `message`; new ones also come over `/api/ws` as `{"alerts":[...]}` |
 | `GET` | `/api/levels` | yes | every level: `id` (the value of a sample's `level`), `name`, `interval_ms`, `priority`, `builtin`, `collects` (false for L1 and L2 in on-demand mode), `metrics` (its set, by name) |
 | `GET` | `/api/ws` | yes | WebSocket live stream |
 

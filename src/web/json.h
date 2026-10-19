@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #pragma once
+#include "core/alert_event.h"
 #include "core/json_text.h"
 #include "core/sample.h"
 #include "core/sample_c.h"
@@ -39,6 +40,11 @@ std::string detail_to_json(const budyk_detail_c& d);
 // when that is given and not empty (the newest sample's detail).
 std::string samples_to_json(const Sample* samples, size_t n,
                             const std::string* detail_json = nullptr);
+
+// Alerts as the body of /api/alerts and as a WebSocket frame:
+// {"count":N,"alerts":[{"ts","severity","rule","message"},...]}, the
+// strings escaped, oldest first.
+std::string alerts_to_json(const AlertEvent* alerts, size_t n);
 
 // Pull the value of a top-level string field out of a small JSON
 // object: `"<key>" : "<value>"`, with the value's escapes decoded.

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #pragma once
+#include "core/alert_event.h"
 #include "core/sample.h"
 #include "core/sample_c.h"
 #include "rules/alert.h"
@@ -18,10 +19,12 @@ namespace budyk {
 struct LuaRule {
     std::string name;
     int         when_ref;          // LUA_REGISTRYINDEX ref
-    int         action_ref;        // LUA_REGISTRYINDEX ref, or LUA_REFNIL
-    std::string action_tag;        // "alert" / "log" / "" if action_ref is set
-    AlertSeverity severity;        // used by the "alert" tag
-    std::string   message;         // used by the "alert" / "log" tags
+    // LUA_REGISTRYINDEX ref to the actions run in order when the rule
+    // fires: a Lua sequence of "alert", "log", "escalate" or functions
+    // (see watch() in lua_stdlib.cpp).
+    int         actions_ref;
+    AlertSeverity severity;        // used by "alert"
+    std::string   message;         // used by "alert" / "log"
     uint64_t    fire_count;
 
     int         for_ticks;         // consecutive true evaluations needed to fire
@@ -116,6 +119,22 @@ public:
     // escalate() requests made since the last call, oldest first.
     std::vector<Escalation> take_escalations();
 
+    // An alert (a rule's "alert" action, or alert() from Lua): logged,
+    // queued for take_alerts() and sent to every channel. Returns the
+    // number of channels it was queued for.
+    int raise_alert(AlertSeverity sev, const std::string& rule, const std::string& message);
+    // The alerts raised since the last call, oldest first: the serve loop
+    // pushes them to the dashboards and keeps them for /api/alerts. At
+    // most kMaxPendingAlerts wait; the rest are counted, not kept.
+    static constexpr size_t kMaxPendingAlerts = 256;
+    std::vector<AlertEvent> take_alerts();
+    uint64_t                alerts_dropped() const;
+
+    // True while load_string() / load_file() runs the rules file. exec()
+    // called then returns the command as an action instead of running it
+    // (spec §3.6.2: action = { alert, exec("/path") }).
+    bool loading() const;
+
     int  rule_count()      const;
     int  last_fire_count() const;
     bool exec_enabled()    const;
@@ -186,12 +205,14 @@ public:
 
     // Called by the watch() C binding. Public so the binding can reach
     // the engine via the Lua registry without any friendship gymnastics.
-    void add_rule(const std::string& name, int when_ref, int action_ref,
-                  const std::string& action_tag,
+    void add_rule(const std::string& name, int when_ref, int actions_ref,
                   AlertSeverity severity, const std::string& message,
                   int for_ticks, int cooldown_ticks);
 
 private:
+    // Runs a rule's actions when it fires (see LuaRule::actions_ref).
+    void run_actions(LuaRule* r);
+
     // Lua allocator (lua_Alloc) that enforces memory_limit_, and the
     // count hook that enforces instruction_limit_. Both find the engine
     // through the allocator's userdata (lua_getallocf), so neither
@@ -219,6 +240,9 @@ private:
     std::vector<LevelCondition> level_conditions_;
     std::vector<std::string>    level_names_;
     std::vector<Escalation>     escalations_;
+    std::vector<AlertEvent>     alert_events_;
+    uint64_t                    alerts_dropped_ = 0;
+    bool                        loading_        = false;
     bool                     has_file_state_  = false;
     FileWatchState           file_state_;
 };

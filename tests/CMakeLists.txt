@@ -60,6 +60,11 @@ if(LUA_FOUND)
     budyk_add_test(test_lua_engine
         LIBS budyk_rules budyk_security budyk_core ${LUA_LIBRARIES}
         INCLUDES ${LUA_INCLUDE_DIR})
+    # The rule files shipped in rules/ load and run.
+    budyk_add_test(test_rule_files
+        LIBS budyk_rules budyk_security budyk_core ${LUA_LIBRARIES}
+        INCLUDES ${LUA_INCLUDE_DIR}
+        ARGS ${CMAKE_SOURCE_DIR}/rules)
 
     # Spec §5 item 13: 100 rules per tick within 1 ms (median). Sanitizer
     # and coverage instrumentation slow the VM down several times over,

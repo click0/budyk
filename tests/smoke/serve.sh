@@ -34,6 +34,8 @@ cat > "$DIR/rules.lua" <<'EOF'
 n = 0
 watch("tick", { when = function() n = n + 1; return true end, action = "log", message = "tick", cooldown = 2 })
 watch("esc",  { when = function() return n == 3 end, action = function() escalate("L3", 2) end })
+watch("beat", { when = function() return n % 4 == 0 end, severity = "critical",
+                message = "every fourth tick", cooldown = 0 })
 EOF
 
 # The rules file is left group/world-writable on purpose: the daemon
@@ -96,14 +98,17 @@ expect 200 /
 expect 200 /api/health
 expect 200 /api/samples
 expect 200 /api/levels
+expect 200 /api/alerts
 expect 200 "/api/range?level=all"
 expect 200 "/api/range?level=burst"
 expect 404 "/api/range?level=nope"
 expect 200 "/api/range?tier=2&since=1&until=99999999999999999999999&limit=0"
 expect 404 /nope
 
-# A WebSocket client that reads a few frames, and one that drops mid-way.
-python3 - "$PORT" <<'EOF'
+# A WebSocket client that reads frames for a while, and one that drops
+# mid-way. The frames carry samples and, from the "beat" rule, alerts
+# (spec §3.6.4: an alert is a WS event).
+python3 - "$PORT" > "$DIR/ws.out" <<'EOF' || { echo "FAIL: websocket client: $(cat "$DIR/ws.out")"; fail=1; }
 import base64, os, socket, sys, time
 port = int(sys.argv[1])
 def connect():
@@ -114,16 +119,52 @@ def connect():
             "Sec-WebSocket-Version: 13\r\n\r\n" % key).encode())
     return s
 s = connect()
-s.settimeout(3)
-if not s.recv(4096).startswith(b"HTTP/1.1 101"):
+s.settimeout(0.2)
+buf = b""
+while b"\r\n\r\n" not in buf:
+    buf += s.recv(4096)
+head, buf = buf.split(b"\r\n\r\n", 1)
+if not head.startswith(b"HTTP/1.1 101"):
     sys.exit("websocket handshake failed")
-time.sleep(1.5)
+frames, end = [], time.time() + 2.5
+while time.time() < end:
+    try:
+        chunk = s.recv(65536)
+        if not chunk:
+            break
+        buf += chunk
+    except socket.timeout:
+        pass
+    while len(buf) >= 2:            # server frames: unmasked
+        n, off = buf[1] & 0x7f, 2
+        if n == 126:
+            if len(buf) < 4: break
+            n, off = int.from_bytes(buf[2:4], "big"), 4
+        elif n == 127:
+            if len(buf) < 10: break
+            n, off = int.from_bytes(buf[2:10], "big"), 10
+        if len(buf) < off + n: break
+        frames.append(buf[off:off + n].decode())
+        buf = buf[off + n:]
 s.close()
 connect().close()
 junk = socket.create_connection(("127.0.0.1", port))
 junk.send(b"\x00\xff not http\r\n\r\n")
 junk.close()
+alerts = [f for f in frames if f.startswith('{"count":') and '"alerts":[' in f]
+if not any('"samples":[' in f for f in frames) or not alerts:
+    sys.exit("frames: %d, with alerts: %d" % (len(frames), len(alerts)))
+if '"rule":"beat"' not in alerts[0] or '"severity":"critical"' not in alerts[0]:
+    sys.exit("alert frame: " + alerts[0])
+print("ok   the WebSocket carries samples and alert events")
 EOF
+cat "$DIR/ws.out"
+if curl -s "http://127.0.0.1:$PORT/api/alerts" | grep -q '"rule":"beat","message":"every fourth tick"' &&
+   grep -q 'budyk alert: critical beat: every fourth tick' "$DIR/log"; then
+    echo "ok   alerts are logged and kept for /api/alerts"
+else
+    echo "FAIL: no beat alert in /api/alerts or in the log"; fail=1
+fi
 
 # The per-entity detail (cores, disks, interfaces, filesystems) rides
 # along with /api/samples: one core at least, the filesystems the totals

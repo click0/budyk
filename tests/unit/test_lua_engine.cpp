@@ -76,6 +76,10 @@ int main() {
         assert(e.last_fire_count() == 1);
         assert(e.rules()[0].fire_count == 1);
 
+        // Then a cooldown as long as for_ticks (spec §3.6.4): one tick.
+        assert(e.rules()[0].cooldown_ticks == 1);
+        assert(e.eval_tick(mk(95.0, 10.0, 2.5, 0.0)) == 0);
+
         // Firing again accumulates fire_count.
         assert(e.eval_tick(mk(95.0, 10.0, 2.5, 0.0)) == 1);
         assert(e.rules()[0].fire_count == 2);
@@ -134,7 +138,8 @@ int main() {
             "counter = 0\n"
             "watch('bump', {\n"
             "  when   = function() return cpu.total_percent > 50 end,\n"
-            "  action = function() counter = counter + 1 end\n"
+            "  action = function() counter = counter + 1 end,\n"
+            "  cooldown = 0\n"
             "})\n"
             "watch('observer', { when = function() return counter >= 2 end })\n";
         assert(e.load_string(script) == 0);
@@ -245,21 +250,21 @@ int main() {
         e.shutdown();
     }
 
-    // 11. for_ticks=0 is clamped to 1 (backwards-compatible with existing rules).
+    // 11. for_ticks=0 is clamped to 1 (backwards-compatible with existing
+    //     rules), and so is the cooldown it brings.
     {
         LuaEngine e;
         assert(e.init(false) == 0);
         assert(e.load_string(
             "watch('default', { when = function() return true end, for_ticks = 0 })\n") == 0);
-        assert(e.rules()[0].for_ticks == 1);
+        assert(e.rules()[0].for_ticks == 1 && e.rules()[0].cooldown_ticks == 1);
         assert(e.eval_tick(mk(0, 0, 0, 0)) == 1);
         e.shutdown();
     }
 
-    // 11b. exec(cmd, { wait = true }) — Lua gets a result table for
-    //      /bin/true / /bin/false.
-    //      Engine is initialised with enable_exec=true; the rule stashes the
-    //      returned table in a global that a second rule inspects.
+    // 11b. exec(cmd, { wait = true }) in a rule — Lua gets a result table
+    //      for /bin/true / /bin/false. Engine is initialised with
+    //      enable_exec=true.
     {
         LuaEngine e;
         assert(e.init(/*enable_exec*/ true) == 0);
@@ -268,24 +273,20 @@ int main() {
 
         if (have_true) {
             assert(e.load_string(
-                "r_true = exec('/bin/true', { timeout = 5, wait = true })\n"
                 "watch('true_ok', { when = function()\n"
-                "  return r_true and r_true.ok == true\n"
-                "           and r_true.exit_status == 0\n"
-                "           and r_true.timed_out == false\n"
+                "  local r = exec('/bin/true', { timeout = 5, wait = true })\n"
+                "  return r.ok == true and r.exit_status == 0 and r.timed_out == false\n"
                 "end })\n") == 0);
             assert(e.eval_tick(mk(0, 0, 0, 0)) == 1);
         }
         if (have_false) {
             assert(e.load_string(
-                "r_false = exec('/bin/false', { timeout = 5, wait = true })\n"
                 "watch('false_ok', { when = function()\n"
-                "  return r_false and r_false.exit_status == 1\n"
-                "           and r_false.ok == false\n"
+                "  local r = exec('/bin/false', { timeout = 5, wait = true })\n"
+                "  return r.exit_status == 1 and r.ok == false\n"
                 "end })\n") == 0);
-            // Previous 'true_ok' rule may still be registered — eval just
-            // ensures the new rule fires; count ≥ 1.
-            assert(e.eval_tick(mk(0, 0, 0, 0)) >= 1);
+            // 'true_ok' is in its cooldown: the new rule fires alone.
+            assert(e.eval_tick(mk(0, 0, 0, 0)) == 1);
         }
         e.shutdown();
     }
@@ -296,8 +297,8 @@ int main() {
             LuaEngine e;
             assert(e.init(/*enable_exec*/ true) == 0);
             assert(e.load_string(
-                "r = exec({'/bin/sh', '-c', 'exit 7'}, { timeout = 5, wait = true })\n"
                 "watch('sh7', { when = function()\n"
+                "  local r = exec({'/bin/sh', '-c', 'exit 7'}, { timeout = 5, wait = true })\n"
                 "  return r.exit_status == 7 and r.ok == false\n"
                 "end })\n") == 0);
             assert(e.eval_tick(mk(0, 0, 0, 0)) == 1);
@@ -348,9 +349,9 @@ int main() {
         assert(e.init(/*enable_exec*/ true) == 0);
         e.set_exec_allowlist({"/bin/true", "/bin/echo"});
         assert(e.load_string(
-            "r = exec('/bin/true', { timeout = 5, wait = true })\n"
             "watch('allowed', { when = function()\n"
-            "  return r and r.ok == true and r.exit_status == 0\n"
+            "  local r = exec('/bin/true', { timeout = 5, wait = true })\n"
+            "  return r.ok == true and r.exit_status == 0\n"
             "end })\n") == 0);
         assert(e.eval_tick(mk(0, 0, 0, 0)) == 1);
         e.shutdown();
@@ -361,10 +362,10 @@ int main() {
         LuaEngine e;
         assert(e.init(false) == 0);
         const char* script =
-            "watch('disk_hot', { when = function() return disk.read_bytes_per_sec > 10000000 end })\n"
-            "watch('net_hot',  { when = function() return net.tx_bytes_per_sec  > 1000000  end })\n"
-            "watch('iface_ok', { when = function() return net.interface_count   >= 2       end })\n"
-            "watch('devs_ok',  { when = function() return disk.device_count     >= 2       end })\n";
+            "watch('disk_hot', { when = function() return disk.read_bytes_per_sec > 10000000 end, cooldown = 0 })\n"
+            "watch('net_hot',  { when = function() return net.tx_bytes_per_sec  > 1000000  end, cooldown = 0 })\n"
+            "watch('iface_ok', { when = function() return net.interface_count   >= 2       end, cooldown = 0 })\n"
+            "watch('devs_ok',  { when = function() return disk.device_count     >= 2       end, cooldown = 0 })\n";
         assert(e.load_string(script) == 0);
         assert(e.rule_count() == 4);
 
@@ -611,15 +612,26 @@ int main() {
     }
 
     // 28. Invalid rules fail at load time instead of silently doing
-    //     nothing: an action table (the old `{ alert, escalate }` form),
-    //     an unknown action string, an unknown severity, a non-string
-    //     message. None of them registers a rule.
+    //     nothing: an unknown action string, alone or in a list, an empty
+    //     list, an unknown severity, a non-string message, a for_ticks or
+    //     cooldown that is not a whole number in range. None of them
+    //     registers a rule.
     {
         const char* bad[] = {
-            "watch('t', { when = function() return true end, action = { alert } })",
             "watch('t', { when = function() return true end, action = 'page' })",
+            "watch('t', { when = function() return true end, action = { alert, 'page' } })",
+            "watch('t', { when = function() return true end, action = { alert, 42 } })",
+            "watch('t', { when = function() return true end, action = {} })",
+            "watch('t', { when = function() return true end, action = 42 })",
             "watch('t', { when = function() return true end, severity = 'high' })",
             "watch('t', { when = function() return true end, message = 42 })",
+            "watch('t', { when = function() return true end, for_ticks = 2.5 })",
+            "watch('t', { when = function() return true end, for_ticks = -1 })",
+            "watch('t', { when = function() return true end, for_ticks = 'x' })",
+            "watch('t', { when = function() return true end, for_ticks = 1000001 })",
+            "watch('t', { when = function() return true end, cooldown = -1 })",
+            "watch('t', { when = function() return true end, cooldown = 0.5 })",
+            "watch('t', { when = function() return true end, cooldown = {} })",
         };
         for (const char* code : bad) {
             LuaEngine e;
@@ -632,18 +644,32 @@ int main() {
         }
     }
 
-    // 29. severity is case-insensitive; cooldown defaults to 0, so a
-    //     for_ticks = 1 rule fires on every hot tick.
+    // 29. severity is case-insensitive. cooldown defaults to for_ticks
+    //     (spec §3.6.4): a rule that keeps holding fires once per
+    //     2 * for_ticks ticks; cooldown = 0 fires on every hot tick.
+    //     A whole number given as a string or a float counts.
     {
         LuaEngine e;
         assert(e.init(false) == 0);
         assert(e.load_string(
             "watch('i', { when = function() return true end,"
-            "             severity = 'INFO' })\n") == 0);
-        assert(e.rules()[0].cooldown_ticks == 0);
-        assert(e.eval_tick(mk(0, 50, 0, 0)) == 1);
-        assert(e.eval_tick(mk(0, 50, 0, 0)) == 1);
-        assert(e.alerts().dispatch_calls() == 2);
+            "             severity = 'INFO' })\n"
+            "watch('three', { when = function() return true end, for_ticks = 3, action = 'log' })\n"
+            "watch('every', { when = function() return true end, cooldown = 0, action = 'log' })\n"
+            "watch('str', { when = function() return false end, for_ticks = '4', cooldown = 2.0 })\n") == 0);
+        assert(e.rules()[0].cooldown_ticks == 1);
+        assert(e.rules()[1].for_ticks == 3 && e.rules()[1].cooldown_ticks == 3);
+        assert(e.rules()[2].cooldown_ticks == 0);
+        assert(e.rules()[3].for_ticks == 4 && e.rules()[3].cooldown_ticks == 2);
+        int fires_i = 0, fires_three = 0, fires_every = 0;
+        for (int t = 0; t < 12; ++t) {
+            e.eval_tick(mk(0, 50, 0, 0));
+            fires_i     = static_cast<int>(e.rules()[0].fire_count);
+            fires_three = static_cast<int>(e.rules()[1].fire_count);
+            fires_every = static_cast<int>(e.rules()[2].fire_count);
+        }
+        assert(fires_i == 6 && fires_three == 2 && fires_every == 12);
+        assert(e.alerts().dispatch_calls() == 6);
         assert(e.alerts().last_event().severity == AlertSeverity::Info);
         e.shutdown();
     }
@@ -677,13 +703,13 @@ int main() {
         e.set_level_names({"L1", "L2", "L3", "burst"});
         assert(e.load_string(
             "watch('a', { when = function() return true end,"
-            "             action = function() escalate('BURST', 5) end })\n"
+            "             action = function() escalate('BURST', 5) end, cooldown = 0 })\n"
             "watch('b', { when = function() return true end,"
-            "             action = function() escalate('L3') end })\n"
+            "             action = function() escalate('L3') end, cooldown = 0 })\n"
             "watch('c', { when = function() return true end,"
-            "             action = function() escalate('nope', 5) end })\n"
+            "             action = function() escalate('nope', 5) end, cooldown = 0 })\n"
             "watch('d', { when = function() return true end,"
-            "             action = function() escalate('burst', 0) end })\n") == 0);
+            "             action = function() escalate('burst', 0) end, cooldown = 0 })\n") == 0);
         assert(e.eval_tick(mk(0, 50, 0, 0)) == 4);
         auto esc = e.take_escalations();
         assert(esc.size() == 2);
@@ -705,8 +731,8 @@ int main() {
         assert(e.instruction_limit() == 200000);
 
         assert(e.load_string(
-            "watch('spin', { when = function() while true do end end })\n"
-            "watch('ok',   { when = function() return cpu.total_percent > 50 end })\n") == 0);
+            "watch('spin', { when = function() while true do end end, cooldown = 0 })\n"
+            "watch('ok',   { when = function() return cpu.total_percent > 50 end, cooldown = 0 })\n") == 0);
         assert(e.rule_count() == 2);
 
         for (int tick = 0; tick < 3; ++tick) {
@@ -720,7 +746,7 @@ int main() {
         // counts as fired, the error is recorded, the tick completes.
         assert(e.load_string(
             "watch('spin_action', { when = function() return true end,"
-            " action = function() local n = 0 while true do n = n + 1 end end })\n") == 0);
+            " action = function() local n = 0 while true do n = n + 1 end end, cooldown = 0 })\n") == 0);
         assert(e.eval_tick(mk(90.0, 50.0, 0.1, 0.0)) == 2);
         assert(e.rules()[2].fire_count == 1);
         assert(e.rules()[2].last_error.find("instruction limit") != std::string::npos);
@@ -750,8 +776,8 @@ int main() {
             "  local t = {}\n"
             "  for i = 1, 1000000 do t[i] = ('x'):rep(1024) end\n"
             "  return true\n"
-            "end })\n"
-            "watch('ok', { when = function() return true end })\n") == 0);
+            "end, cooldown = 0 })\n"
+            "watch('ok', { when = function() return true end, cooldown = 0 })\n") == 0);
 
         assert(e.eval_tick(mk(0, 0, 0, 0)) == 1);   // 'ok' fires, 'hog' errors
         assert(e.rules()[0].last_error.find("not enough memory") != std::string::npos);
@@ -760,7 +786,7 @@ int main() {
         // One huge string from a single C call: no VM instructions to
         // count, so this is the memory limit's job alone.
         assert(e.load_string(
-            "watch('big', { when = function() local s = ('x'):rep(64 * 1024 * 1024) return true end })\n") == 0);
+            "watch('big', { when = function() local s = ('x'):rep(64 * 1024 * 1024) return true end, cooldown = 0 })\n") == 0);
         assert(e.eval_tick(mk(0, 0, 0, 0)) == 1);
         assert(e.rules()[2].last_error.find("not enough memory") != std::string::npos);
 
@@ -804,7 +830,7 @@ int main() {
             "watch('bg', { when = function()\n"
             "  r = exec({'/bin/sh', '-c', 'sleep 0.3; touch " + marker + "'})\n"
             "  return r.queued == true and r.ok == true\n"
-            "end })\n";
+            "end, cooldown = 0 })\n";
         assert(e.load_string(bg.c_str()) == 0);
         const auto t0 = std::chrono::steady_clock::now();
         assert(e.eval_tick(mk(0, 0, 0, 0)) == 1);
@@ -822,11 +848,11 @@ int main() {
         // wait = true caps the timeout at a minute and the result shows
         // a kill; a plain number as the second argument means a timeout.
         assert(e.load_string(
-            "r2 = exec({'/bin/sh', '-c', 'sleep 5'}, { timeout = 1, wait = true })\n"
-            "r3 = exec('/bin/true', 5)\n"
             "watch('bg2', { when = function()\n"
+            "  local r2 = exec({'/bin/sh', '-c', 'sleep 5'}, { timeout = 1, wait = true })\n"
+            "  local r3 = exec('/bin/true', 5)\n"
             "  return r2.timed_out == true and r2.ok == false and r3.queued == true\n"
-            "end })\n") == 0);
+            "end, cooldown = 0 })\n") == 0);
         assert(e.eval_tick(mk(0, 0, 0, 0)) >= 1);
         assert(e.exec_worker().wait_idle(5000));
         assert(e.exec_worker().completed() == 2);
@@ -851,7 +877,7 @@ int main() {
             // exec() raises, which eval_tick logs and counts as no hit.
             const std::string src =
                 "watch('x', { when = function() local r = exec('" + cmd +
-                "', { timeout = 5, wait = true }) return r.ok == true end })\n";
+                "', { timeout = 5, wait = true }) return r.ok == true end, cooldown = 0 })\n";
             assert(e.load_string(src.c_str()) == 0);
             const int fired = e.eval_tick(mk(0, 0, 0, 0));
             const std::string err = e.rules().back().last_error;
@@ -906,22 +932,22 @@ int main() {
         assert(e.init(false) == 0);
         assert(e.load_string(
             "tick = 0\n"
-            "watch('writer', { when = function() cpu.total_percent = 0 return true end })\n"
-            "watch('reader', { when = function() return cpu.total_percent > 50 end })\n"
+            "watch('writer', { when = function() cpu.total_percent = 0 return true end, cooldown = 0 })\n"
+            "watch('reader', { when = function() return cpu.total_percent > 50 end, cooldown = 0 })\n"
             "watch('same', { when = function()\n"
             "  tick = tick + 1\n"
             "  if tick == 1 then first = cpu return false end\n"
             "  return rawequal(cpu, first) and cpu.total_percent == 20\n"
-            "end })\n"
+            "end, cooldown = 0 })\n"
             "watch('pairs', { when = function()\n"
             "  local n = 0\n"
             "  for k, v in pairs(cpu) do n = n + 1 end\n"
             "  return n == 9\n"           // 8 numbers and cpu.cores
-            "end })\n"
+            "end, cooldown = 0 })\n"
             "watch('meta', { when = function()\n"
             "  local ok = pcall(setmetatable, cpu, nil)\n"
             "  return getmetatable(cpu) == 'read-only' and not ok\n"
-            "end })\n") == 0);
+            "end, cooldown = 0 })\n") == 0);
 
         // Tick 1: cpu 90. 'writer' errors; 'reader' still sees 90.
         assert(e.eval_tick(mk(90.0, 50.0, 0.1, 0.0)) == 3);   // reader, pairs, meta
@@ -947,12 +973,12 @@ int main() {
             "  t = t + 1\n"
             "  if t == 1 then rawset(cpu, 'total_percent', -1) mem = nil end\n"
             "  return false\n"
-            "end })\n"
+            "end, cooldown = 0 })\n"
             "watch('see', { when = function()\n"
             "  seen_cpu = cpu.total_percent\n"
             "  seen_mem = mem and mem.available_percent\n"
             "  return true\n"
-            "end })\n") == 0);
+            "end, cooldown = 0 })\n") == 0);
         // Tick 1: the bypasses work within the tick...
         assert(e.load_string("seen_cpu = nil seen_mem = nil") == 0);
         assert(e.eval_tick(mk(90.0, 25.0, 0.1, 0.0)) == 1);
@@ -969,13 +995,13 @@ int main() {
         LuaEngine e;
         assert(e.init(false) == 0);
         assert(e.load_string(
-            "watch('iowait', { when = function() return cpu.iowait_percent > 20 end })\n"
-            "watch('zombies', { when = function() return proc.zombie > 3 and proc.threads == 900 end })\n"
-            "watch('retrans', { when = function() return tcp.present and tcp.retransmits_per_sec > 10 end })\n"
-            "watch('udp', { when = function() return udp.no_port_per_sec > 1 end })\n"
-            "watch('disk_full', { when = function() return fs.max_used_percent >= 95 end })\n"
-            "watch('clock', { when = function() return clock.present and not clock.synced end })\n"
-            "watch('ro', { when = function() fs.max_used_percent = 0 return true end })\n") == 0);
+            "watch('iowait', { when = function() return cpu.iowait_percent > 20 end, cooldown = 0 })\n"
+            "watch('zombies', { when = function() return proc.zombie > 3 and proc.threads == 900 end, cooldown = 0 })\n"
+            "watch('retrans', { when = function() return tcp.present and tcp.retransmits_per_sec > 10 end, cooldown = 0 })\n"
+            "watch('udp', { when = function() return udp.no_port_per_sec > 1 end, cooldown = 0 })\n"
+            "watch('disk_full', { when = function() return fs.max_used_percent >= 95 end, cooldown = 0 })\n"
+            "watch('clock', { when = function() return clock.present and not clock.synced end, cooldown = 0 })\n"
+            "watch('ro', { when = function() fs.max_used_percent = 0 return true end, cooldown = 0 })\n") == 0);
         Sample x = mk(10.0, 50.0, 0.1, 0.0);
         x.cpu.iowait_percent       = 25.0;
         x.proc.zombie              = 4;
@@ -1010,21 +1036,21 @@ int main() {
             "  local n = 0\n"
             "  for i, c in ipairs(cpu.cores) do n = n + 1 end\n"
             "  return #cpu.cores == 2 and n == 2 and cpu.cores[2].iowait_percent == 30\n"
-            "end })\n"
+            "end, cooldown = 0 })\n"
             "watch('disk', { when = function()\n"
             "  return disk.devices.sda ~= nil and disk.devices.sda.busy_percent > 50\n"
-            "end })\n"
+            "end, cooldown = 0 })\n"
             "watch('nic', { when = function()\n"
             "  return net.interfaces.eth0 ~= nil and net.interfaces.eth0.up\n"
-            "end })\n"
+            "end, cooldown = 0 })\n"
             "watch('full', { when = function()\n"
             "  for mnt, m in pairs(fs.mounts) do\n"
             "    if m.used_percent > 90 and m.type == 'ext4' then return true end\n"
             "  end\n"
             "  return false\n"
-            "end })\n"
-            "watch('ro_item', { when = function() cpu.cores[1].user_percent = 0 return true end })\n"
-            "watch('ro_coll', { when = function() fs.mounts['/x'] = 1 return true end })\n") == 0);
+            "end, cooldown = 0 })\n"
+            "watch('ro_item', { when = function() cpu.cores[1].user_percent = 0 return true end, cooldown = 0 })\n"
+            "watch('ro_coll', { when = function() fs.mounts['/x'] = 1 return true end, cooldown = 0 })\n") == 0);
 
         std::unique_ptr<budyk_detail_c> d(new budyk_detail_c());
         d->collected = kDetailAll;
@@ -1080,19 +1106,19 @@ int main() {
         assert(e.load_string(
             "watch('io', { for_ticks = 3, when = function()\n"
             "  return disk.read_bytes_per_sec > 100\n"
-            "end })\n"
-            "watch('len', { when = function() return #cpu.cores >= 0 end })\n"
-            "watch('iter', { when = function() for k in pairs(tcp) do end return true end })\n"
+            "end, cooldown = 0 })\n"
+            "watch('len', { when = function() return #cpu.cores >= 0 end, cooldown = 0 })\n"
+            "watch('iter', { when = function() for k in pairs(tcp) do end return true end, cooldown = 0 })\n"
             "watch('guard', { when = function()\n"
             "  return collected('disk') and collected('disk.devices') and collected('self_')\n"
-            "end })\n"
-            "watch('typo', { when = function() return collected('dsik') end })\n"
+            "end, cooldown = 0 })\n"
+            "watch('typo', { when = function() return collected('dsik') end, cooldown = 0 })\n"
             "watch('act', { when = function() return true end,\n"
-            "               action = function() local x = net.rx_bytes_per_sec end })\n"
+            "               action = function() local x = net.rx_bytes_per_sec end, cooldown = 0 })\n"
             "watch('caught', { when = function()\n"
             "  local ok, err = pcall(function() return disk.read_bytes_per_sec end)\n"
             "  return not ok and err:find('disk is not collected at this level') ~= nil\n"
-            "end })\n") == 0);
+            "end, cooldown = 0 })\n") == 0);
         assert(e.add_level_condition(kFirstCustomLevel, "disk.read_bytes_per_sec > 100") == 0);
         assert(e.add_level_condition(kFirstCustomLevel + 1, "cpu.total_percent >= 0") == 0);
 
@@ -1139,14 +1165,14 @@ int main() {
         LuaEngine f;
         assert(f.init(false) == 0);
         assert(f.load_string(
-            "watch('io', { for_ticks = 2, when = function() return disk.read_bytes_per_sec > 100 end })\n"
-            "watch('len', { when = function() return #cpu.cores >= 0 end })\n"
+            "watch('io', { for_ticks = 2, when = function() return disk.read_bytes_per_sec > 100 end, cooldown = 0 })\n"
+            "watch('len', { when = function() return #cpu.cores >= 0 end, cooldown = 0 })\n"
             "watch('why', { when = function()\n"
             "  local ok, err = pcall(function() return tcp.established end)\n"
             "  return not ok and err:find('tcp has no rate yet: its first read at this level') ~= nil\n"
-            "end })\n"
-            "watch('none', { when = function() return not collected('disk') end })\n"
-            "watch('nocores', { when = function() return not collected('cpu.cores') end })\n") == 0);
+            "end, cooldown = 0 })\n"
+            "watch('none', { when = function() return not collected('disk') end, cooldown = 0 })\n"
+            "watch('nocores', { when = function() return not collected('cpu.cores') end, cooldown = 0 })\n") == 0);
         assert(f.eval_tick(full, d.get()) == 1);    // len; io 1/2
         assert(f.eval_tick(first, fd.get()) == 3);  // why, none, nocores; io and len skipped
         assert(f.rules()[0].consecutive_hits == 1);
@@ -1170,6 +1196,136 @@ int main() {
         for (int i = 0; i < 2000; ++i) e.eval_tick(i % 2 ? full : bare, i % 2 ? d.get() : none.get());
         assert(e.memory_used() < settled + 64 * 1024);
         e.shutdown();
+    }
+
+    // N+3. when() results (spec §3.6.5): nil skips the tick and keeps the
+    //      streak; no value (an `if` without an else) is false and resets
+    //      it, like false.
+    {
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        assert(e.load_string(
+            "mode = 'true'\n"
+            "local function pick()\n"
+            "  if mode == 'true' then return true elseif mode == 'nil' then return nil\n"
+            "  elseif mode == 'false' then return false end\n"
+            "end\n"
+            "watch('r', { for_ticks = 3, cooldown = 0, action = 'log', when = pick })\n") == 0);
+        const Sample x = mk(1, 50, 0, 0);
+        auto set = [&](const char* m) {
+            assert(e.load_string((std::string("mode = '") + m + "'").c_str()) == 0);
+        };
+        assert(e.eval_tick(x) == 0 && e.rules()[0].consecutive_hits == 1);
+        set("nil");
+        assert(e.eval_tick(x) == 0 && e.rules()[0].consecutive_hits == 1);   // kept
+        set("true");
+        assert(e.eval_tick(x) == 0 && e.rules()[0].consecutive_hits == 2);
+        set("none");                                                         // no value
+        assert(e.eval_tick(x) == 0 && e.rules()[0].consecutive_hits == 0);
+        set("true");
+        e.eval_tick(x); e.eval_tick(x);
+        set("false");
+        assert(e.eval_tick(x) == 0 && e.rules()[0].consecutive_hits == 0);
+        set("true");
+        e.eval_tick(x); e.eval_tick(x);
+        set("nil");
+        e.eval_tick(x); e.eval_tick(x);
+        set("true");
+        assert(e.eval_tick(x) == 1 && e.rules()[0].fire_count == 1);       // 2 + nil + 1
+        assert(e.rules()[0].last_error.empty());
+        e.shutdown();
+    }
+
+    // N+4. An action list (spec §3.6.2) runs in order: the built-ins as
+    //      values or names, functions, a failing function logged without
+    //      stopping the rest. Every alert is queued for take_alerts() (and
+    //      the WebSocket), as is one from alert() in Lua; past the cap
+    //      they are counted, not kept.
+    {
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        e.set_level_names({"L1", "L2", "L3"});
+        assert(e.load_string(
+            "order = {}\n"
+            "watch('multi', { cooldown = 0, severity = 'critical', message = 'disk full',\n"
+            "  when = function() return true end,\n"
+            "  action = { function() order[#order + 1] = 'a' end, alert, 'log',\n"
+            "             function() error('boom') end, escalate,\n"
+            "             function() order[#order + 1] = 'b' end } })\n"
+            "watch('esc', { cooldown = 0, when = function() return true end, action = escalate })\n"
+            "watch('lua', { cooldown = 0, when = function() return true end,\n"
+            "  action = function() alert('from_lua', 'info', 'hello') end })\n") == 0);
+        assert(e.eval_tick(mk(1, 50, 0, 0)) == 3);
+        assert(e.load_string("assert(table.concat(order, ',') == 'a,b')") == 0);
+        assert(e.rules()[0].last_error.find("boom") != std::string::npos);
+        const auto esc = e.take_escalations();
+        assert(esc.size() == 2 && esc[0].level == "L3" && esc[0].seconds == 60);
+        auto alerts = e.take_alerts();
+        assert(alerts.size() == 2);
+        assert(alerts[0].rule == "multi" && alerts[0].severity == "critical" &&
+               alerts[0].message == "disk full" && alerts[0].ts_ns > 0);
+        assert(alerts[1].rule == "from_lua" && alerts[1].severity == "info" &&
+               alerts[1].message == "hello");
+        assert(e.take_alerts().empty());
+        assert(e.alerts().dispatch_calls() == 2);
+
+        assert(e.load_string("for i = 1, 300 do alert('flood') end") == 0);
+        assert(e.take_alerts().size() == LuaEngine::kMaxPendingAlerts);
+        assert(e.alerts_dropped() == 300 - LuaEngine::kMaxPendingAlerts);
+        e.shutdown();
+    }
+
+    // N+5. exec() written in the rules file runs nothing: it is checked
+    //      (enabled, absolute, no traversal, allowlist) and returns the
+    //      command as an action, alone or in a list, run (queued) when
+    //      the rule fires and checked again then.
+    if (access("/bin/sh", X_OK) == 0) {
+        char tmpl[] = "/tmp/budyk_defer_XXXXXX";
+        const char* dir = ::mkdtemp(tmpl);
+        assert(dir != nullptr);
+        const std::string marker = std::string(dir) + "/ran";
+        LuaEngine e;
+        assert(e.init(/*enable_exec*/ true) == 0);
+        const std::string rules =
+            "loaded = exec({'/bin/sh', '-c', 'touch " + marker + ".load'})\n"
+            "watch('fix', { cooldown = 0, when = function() return cpu.total_percent > 90 end,\n"
+            "  action = { 'log', exec({'/bin/sh', '-c', 'touch " + marker + "'}) } })\n"
+            "watch('one', { cooldown = 0, when = function() return cpu.total_percent > 90 end,\n"
+            "  action = exec({'/bin/sh', '-c', 'touch " + marker + ".one'}) })\n"
+            "assert(type(loaded) == 'function')\n";
+        assert(e.load_string(rules.c_str()) == 0);
+        assert(e.exec_worker().wait_idle(2000));
+        assert(e.exec_worker().completed() == 0);
+        assert(access((marker + ".load").c_str(), F_OK) != 0);   // nothing ran at load
+
+        assert(e.eval_tick(mk(10, 50, 0, 0)) == 0);
+        assert(e.eval_tick(mk(95, 50, 0, 0)) == 2);
+        assert(e.exec_worker().wait_idle(5000));
+        assert(e.exec_worker().completed() == 2);
+        assert(access(marker.c_str(), F_OK) == 0 && access((marker + ".one").c_str(), F_OK) == 0);
+
+        // Checked again when it runs: an allowlist set since makes it fail.
+        e.set_exec_allowlist({"/bin/true"});
+        assert(e.eval_tick(mk(95, 50, 0, 0)) == 2);
+        assert(e.rules()[0].last_error.find("not in allowlist") != std::string::npos);
+        assert(e.exec_worker().wait_idle(2000) && e.exec_worker().completed() == 2);
+
+        // At load: a bad command fails the load, so does exec disabled.
+        for (const char* bad : { "x = exec('sh')", "x = exec('/bin/../bin/sh')",
+                                 "x = exec('/bin/sh')" }) {
+            assert(e.load_string(bad) != 0);
+        }
+        assert(e.last_error().find("not in allowlist") != std::string::npos);
+        e.shutdown();
+        LuaEngine off;
+        assert(off.init(/*enable_exec*/ false) == 0);
+        assert(off.load_string(
+            "watch('x', { when = function() return true end, action = exec('/bin/true') })") != 0);
+        assert(off.last_error().find("exec is disabled") != std::string::npos);
+        assert(off.rule_count() == 0);
+        off.shutdown();
+        for (const char* f : { "", ".one" }) ::unlink((marker + f).c_str());
+        ::rmdir(dir);
     }
 
     std::printf("test_lua_engine: PASS\n");

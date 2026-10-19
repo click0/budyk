@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Alerts reach the dashboard** (spec §3.6.4: "alert: log + WS
+  event"). Every alert, from a rule's `alert` action or from `alert()`
+  in Lua, is written to the daemon log ("budyk alert: critical
+  disk_full: /var at 97%"), pushed to open dashboards as a WebSocket
+  frame `{"count":N,"alerts":[...]}`, and kept for the new
+  `GET /api/alerts` (the last 100, in RAM). The dashboard lists the
+  latest 20 under the live panel; the rule names and messages go in as
+  text. An alert used to reach only the configured channels, and with
+  none configured it left no trace.
+- **Action lists** (spec §3.6.2): `action = { alert, escalate }` runs
+  each in order; one that fails is logged and the next still runs.
+  `escalate` (or `"escalate"`) as an action keeps L3 on for 60 s.
+- **`exec()` as an action.** Written in the rules file itself, outside
+  `when` and the actions, `exec("/path")` runs nothing: it checks the
+  command (enabled, absolute, no `..`, the allowlist) and returns it as
+  an action, so `action = { alert, exec("/usr/local/bin/drop-caches.sh") }`
+  works as the spec writes it. A bad command fails the load. It is
+  checked again when it runs.
+- **`tests/unit/test_rule_files`** loads `rules/examples.lua` and
+  `rules/freebsd-defaults.lua` and runs them, so the shipped examples
+  keep working.
+
+### Changed
+
+- **`cooldown` defaults to `for_ticks`** (spec §3.6.4): a rule that keeps
+  holding fires once, stays quiet as long as it took to fire, then may
+  fire again. It used to default to 0 and fire on every tick. Set
+  `cooldown = 0` (or `cooldown: 0` in YAML) for the old behaviour.
+- **`when()` returning `nil` skips the tick** (spec §3.6.5): the streak
+  toward `for_ticks` is kept, as for a group the level does not collect.
+  `return d and d.busy_percent > 90` therefore waits out a device that
+  is briefly gone. A `when` that returns nothing at all still counts as
+  false and resets the streak, as `false` does.
+- **`for_ticks` and `cooldown` must be whole numbers** (from 1 and from 0,
+  up to 1 000 000); anything else fails the load with the rule's name.
+  `for_ticks = 2.5` used to read as 0, that is 1, and `cooldown = "x"`
+  as 0. `for_ticks = 0` still means 1.
+
 ## [0.7.0] — 2026-10-17
 
 Adaptive collection as the spec describes it. Each level reads its own

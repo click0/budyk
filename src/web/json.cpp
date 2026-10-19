@@ -302,6 +302,26 @@ std::string samples_to_json(const Sample* samples, size_t n, const std::string* 
     return out;
 }
 
+std::string alerts_to_json(const AlertEvent* alerts, size_t n) {
+    std::string out;
+    out.reserve(64 + n * 160);
+    out.append("{\"count\":");
+    append_uint(&out, static_cast<uint64_t>(n));
+    out.append(",\"alerts\":[");
+    for (size_t i = 0; i < n && alerts != nullptr; ++i) {
+        const AlertEvent& a = alerts[i];
+        if (i > 0) out.push_back(',');
+        out.push_back('{');
+        append_kv_uint(&out, "ts", a.ts_ns);                        out.push_back(',');
+        append_kv_str (&out, "severity", a.severity.c_str());       out.push_back(',');
+        append_kv_str (&out, "rule",     a.rule.c_str());           out.push_back(',');
+        append_kv_str (&out, "message",  a.message.c_str());
+        out.push_back('}');
+    }
+    out.append("]}\n");
+    return out;
+}
+
 bool json_get_string(const std::string& body, const char* key, std::string* out) {
     if (key == nullptr || out == nullptr) return false;
     std::string needle = "\"";

@@ -3,12 +3,14 @@
 -- Point `rules.path` in config.yaml at a copy of this file.
 --
 -- watch(name, opts):
---   when      — function returning true when the rule should fire
---   action    — "alert" (default), "log", or a function
+--   when      — function: true to fire (after for_ticks), false to reset
+--               the streak, nil to skip the tick (the streak is kept)
+--   action    — alert (default), "log", escalate, a function, or a list
+--               of them run in order: { alert, exec("/path/to/script") }
 --   severity  — "info" / "warning" (default) / "critical"
 --   message   — alert / log text (default: the rule name)
 --   for_ticks — consecutive true ticks before firing (default 1)
---   cooldown  — ticks to stay quiet after firing (default 0)
+--   cooldown  — ticks to stay quiet after firing (default: for_ticks)
 
 -- Simple threshold
 watch("high_cpu", {
@@ -62,3 +64,31 @@ watch("disk_write_burst", {
     action    = "log",
     message   = "disk writes above 500 MB/s",
 })
+
+-- A disk that may not be there: nil skips the tick instead of counting
+-- as "fine", so a device that comes and goes keeps its streak.
+watch("sda_busy", {
+    when      = function()
+        local d = disk.devices.sda
+        return d and d.busy_percent > 90
+    end,
+    for_ticks = 10,
+    severity  = "warning",
+    message   = "sda busy above 90% for 10 ticks",
+})
+
+-- Several actions: alert, then collect at 1 Hz (L3) for a minute to see
+-- what happens next.
+watch("load_spike", {
+    when      = function() return load.avg_1m > cpu.count * 4 end,
+    for_ticks = 2,
+    cooldown  = 60,
+    severity  = "critical",
+    message   = "1-minute load above four times the core count",
+    action    = { alert, escalate },
+})
+
+-- With rules.exec.enabled (or --enable-exec), a command can be one of the
+-- actions. exec() written here runs nothing; it is checked now and run
+-- when the rule fires:
+--   action = { alert, exec("/usr/local/bin/drop-caches.sh") },

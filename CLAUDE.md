@@ -36,8 +36,15 @@ dependencies at runtime, no database. BSD-3-Clause license.
   No mongoose, no libwebsockets. The SPA is a string literal in
   `src/web/spa.cpp`.
 - **TUI:** ncurses; polls `/api/samples` once a second
-- **Alerts:** ntfy / Discord / Telegram / SMTP / Twilio through `curl(1)`,
-  run from a worker thread
+- **Alerts:** every alert is logged, queued by `LuaEngine::raise_alert()`
+  for the serve loop (WebSocket frame `{"alerts":[...]}`, the last 100 for
+  `/api/alerts`) and sent to ntfy / Discord / Telegram / SMTP / Twilio
+  through `curl(1)` from a worker thread
+- **Rules (spec §3.6):** `cooldown` defaults to `for_ticks`; `when()`
+  returning nil skips the tick and keeps the streak, returning nothing is
+  false; `action` may be a list (`{ alert, escalate, exec(...) }`); `exec()`
+  in the rules file itself returns the command as an action instead of
+  running it (`LuaEngine::loading()`)
 
 ## Threads and I/O (how it actually runs)
 
@@ -234,9 +241,6 @@ on every target; a new implicit sign or width change is a build error in CI
 - No process list (top processes by CPU / RSS). The per-entity detail
   (cores, disks, interfaces, filesystems) is live only: not in the rings,
   so not in the history.
-- Rule semantics that differ from §3.6: `cooldown` defaults to 0; a `nil`
-  from `when()` resets the sustain counter; `action = { alert, exec(...) }`
-  tables are rejected; `alert()` emits no WebSocket event.
 - No Doxygen, no deb/rpm, no cross-compilation toolchains, FreeBSD 13 not in CI.
 
 ### Kept on purpose for later milestones (do not remove as dead code)

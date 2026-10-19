@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #include "rules/lua_engine.h"
 
+#include "core/clock.h"
+
 #include "rules/lua_bindings.h"
 #include "rules/lua_stdlib.h"
 
@@ -138,9 +140,7 @@ void LuaEngine::shutdown() {
     if (L_ == nullptr) return;
     for (const auto& r : rules_) {
         luaL_unref(L_, LUA_REGISTRYINDEX, r.when_ref);
-        if (r.action_ref != LUA_REFNIL) {
-            luaL_unref(L_, LUA_REGISTRYINDEX, r.action_ref);
-        }
+        luaL_unref(L_, LUA_REGISTRYINDEX, r.actions_ref);
     }
     rules_.clear();
     for (const auto& c : level_conditions_) {
@@ -157,7 +157,10 @@ void LuaEngine::shutdown() {
 int LuaEngine::load_string(const char* code) {
     if (L_ == nullptr || code == nullptr) return -1;
     begin_call();
-    if (luaL_dostring(L_, code) != LUA_OK) {
+    loading_ = true;
+    const int rc = luaL_dostring(L_, code);
+    loading_ = false;
+    if (rc != LUA_OK) {
         const char* msg = lua_tostring(L_, -1);
         last_error_ = msg != nullptr ? msg : "unknown Lua error";
         lua_pop(L_, 1);
@@ -169,7 +172,10 @@ int LuaEngine::load_string(const char* code) {
 int LuaEngine::load_file(const char* path) {
     if (L_ == nullptr || path == nullptr) return -1;
     begin_call();
-    if (luaL_dofile(L_, path) != LUA_OK) {
+    loading_ = true;
+    const int rc = luaL_dofile(L_, path);
+    loading_ = false;
+    if (rc != LUA_OK) {
         const char* msg = lua_tostring(L_, -1);
         last_error_ = msg != nullptr ? msg : "unknown Lua error";
         lua_pop(L_, 1);
@@ -269,9 +275,10 @@ int LuaEngine::eval_tick(const Sample& s, const budyk_detail_c* detail) {
             continue;
         }
 
+        const int base = lua_gettop(L_);
         lua_rawgeti(L_, LUA_REGISTRYINDEX, r.when_ref);
         begin_call();
-        if (lua_pcall(L_, 0, 1, 0) != LUA_OK) {
+        if (lua_pcall(L_, 0, LUA_MULTRET, 0) != LUA_OK) {
             if (const int why = budyk_lua_uncollected(L_, -1); why != 0) {
                 // Skipped: the sustain count stays. A rate's first read
                 // passes in a tick; a level that does not collect it is
@@ -287,10 +294,17 @@ int LuaEngine::eval_tick(const Sample& s, const budyk_detail_c* detail) {
             r.consecutive_hits = 0;
             continue;
         }
-        const bool hit = lua_toboolean(L_, -1) != 0;
-        lua_pop(L_, 1);
+        // Spec §3.6.5: nil means "cannot tell on this tick" (a device that
+        // is not there, say: `return disk.devices.sda and ...`) and skips
+        // the rule, its sustain count kept. A when() that returns nothing
+        // at all (an `if` without an else) is false.
+        const int  nret = lua_gettop(L_) - base;
+        const bool skip = nret > 0 && lua_isnil(L_, base + 1);
+        const bool hit  = nret > 0 && lua_toboolean(L_, base + 1) != 0;
+        lua_settop(L_, base);
         r.last_error.clear();
 
+        if (skip) continue;
         if (!hit) {
             r.consecutive_hits = 0;
             continue;
@@ -304,23 +318,61 @@ int LuaEngine::eval_tick(const Sample& s, const budyk_detail_c* detail) {
         r.consecutive_hits   = 0;
         r.cooldown_remaining = r.cooldown_ticks;
 
-        if (r.action_ref != LUA_REFNIL) {
-            lua_rawgeti(L_, LUA_REGISTRYINDEX, r.action_ref);
-            begin_call();
-            if (lua_pcall(L_, 0, 0, 0) != LUA_OK) {
-                log_rule_error(&r.last_error, r.name.c_str(), "action", lua_tostring(L_, -1));
-                lua_pop(L_, 1);
-            }
-        } else if (r.action_tag == "alert") {
-            alerts_.dispatch(r.severity, r.name, r.message);
-        } else if (r.action_tag == "log") {
-            // Same stream and format as Lua's print() / the YAML "log" action.
-            std::printf("[budyk] %s\n", r.message.c_str());
-            std::fflush(stdout);
-        }
+        run_actions(&r);
     }
     return last_fire_count_;
 }
+
+void LuaEngine::run_actions(LuaRule* r) {
+    // Every action runs, in order: one that fails is logged and the next
+    // still runs (an alert must not depend on a script before it).
+    lua_rawgeti(L_, LUA_REGISTRYINDEX, r->actions_ref);
+    const int list = lua_gettop(L_);
+    const lua_Integer n = static_cast<lua_Integer>(lua_rawlen(L_, list));
+    for (lua_Integer i = 1; i <= n; ++i) {
+        if (lua_rawgeti(L_, list, i) == LUA_TFUNCTION) {
+            begin_call();
+            if (lua_pcall(L_, 0, 0, 0) != LUA_OK) {
+                log_rule_error(&r->last_error, r->name.c_str(), "action", lua_tostring(L_, -1));
+                lua_pop(L_, 1);
+            }
+            continue;
+        }
+        const char* tag = lua_tostring(L_, -1);
+        const std::string what = tag != nullptr ? tag : "";
+        lua_pop(L_, 1);
+        if (what == "alert") {
+            raise_alert(r->severity, r->name, r->message);
+        } else if (what == "log") {
+            // Same stream and format as Lua's print() / the YAML "log" action.
+            std::printf("[budyk] %s\n", r->message.c_str());
+            std::fflush(stdout);
+        } else if (what == "escalate") {
+            push_escalation("L3", 60);   // spec §3.6.2: { alert, escalate }
+        }
+    }
+    lua_settop(L_, list - 1);
+}
+
+int LuaEngine::raise_alert(AlertSeverity sev, const std::string& rule, const std::string& message) {
+    std::fprintf(stderr, "budyk alert: %s %s: %s\n", severity_name(sev), rule.c_str(),
+                 message.c_str());
+    if (alert_events_.size() < kMaxPendingAlerts) {
+        alert_events_.push_back(AlertEvent{now_realtime_ns(), severity_name(sev), rule, message});
+    } else {
+        ++alerts_dropped_;
+    }
+    return alerts_.dispatch(sev, rule, message);
+}
+
+std::vector<AlertEvent> LuaEngine::take_alerts() {
+    std::vector<AlertEvent> out;
+    out.swap(alert_events_);
+    return out;
+}
+
+uint64_t LuaEngine::alerts_dropped() const { return alerts_dropped_; }
+bool     LuaEngine::loading()        const { return loading_; }
 
 int  LuaEngine::rule_count()      const { return static_cast<int>(rules_.size()); }
 const std::string& LuaEngine::last_error() const { return last_error_; }
@@ -451,14 +503,13 @@ std::vector<Escalation> LuaEngine::take_escalations() {
     return out;
 }
 
-void LuaEngine::add_rule(const std::string& name, int when_ref, int action_ref,
-                         const std::string& action_tag,
+void LuaEngine::add_rule(const std::string& name, int when_ref, int actions_ref,
                          AlertSeverity severity, const std::string& message,
                          int for_ticks, int cooldown_ticks) {
     if (for_ticks      < 1) for_ticks      = 1;
-    if (cooldown_ticks < 0) cooldown_ticks = 0;   // default: no cooldown
+    if (cooldown_ticks < 0) cooldown_ticks = 0;
     rules_.push_back(LuaRule{
-        name, when_ref, action_ref, action_tag, severity, message,
+        name, when_ref, actions_ref, severity, message,
         /*fire_count*/ 0,
         for_ticks, cooldown_ticks,
         /*consecutive_hits*/ 0, /*cooldown_remaining*/ 0,
