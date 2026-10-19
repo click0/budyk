@@ -156,6 +156,9 @@ if(BUILD_TESTS)
     add_subdirectory(tests)
 endif()
 
+# API reference: the `docs` target, when doxygen is installed
+include(cmake/docs.cmake)
+
 # Install
 install(TARGETS budyk DESTINATION bin)
 install(FILES config.example.yaml DESTINATION etc/budyk)

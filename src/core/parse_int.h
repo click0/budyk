@@ -6,11 +6,11 @@
 
 namespace budyk {
 
-// The whole of `s` as a base-10 integer in [lo, hi]: an optional sign
-// and digits, nothing before or after them. False (and *out untouched)
-// for an empty string, blanks, a unit or other trailing text, or a
-// value out of range — where atoi() would quietly return 0 or a
-// truncated number. For command-line and config values.
+/// The whole of `s` as a base-10 integer in [lo, hi]: an optional sign
+/// and digits, nothing before or after them. False (and *out untouched)
+/// for an empty string, blanks, a unit or other trailing text, or a
+/// value out of range — where atoi() would quietly return 0 or a
+/// truncated number. For command-line and config values.
 inline bool parse_int_full(const char* s, long lo, long hi, long* out) {
     if (s == nullptr) return false;
     const unsigned char first = static_cast<unsigned char>(*s);

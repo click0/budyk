@@ -115,6 +115,7 @@ addons/            — FreeBSD port + rc.d, systemd unit, Docker; the .deb and
                      .rpm (addons/linux/mkpkg.sh, test-packages.sh)
 cmake/toolchains/  — cross-compiling for FreeBSD on Linux: freebsd-sysroot.sh
                      (base.txz + packages, checked), freebsd-{amd64,aarch64}.cmake
+cmake/docs.cmake   — the `docs` target: Doxygen over the headers in src/
 docs/              — spec (en/uk), man page
 ```
 
@@ -134,6 +135,7 @@ tests/smoke/fsck.sh build/src/budyk      # fsck, start-up recovery, the data_dir
 tests/smoke/upgrade.sh build/src/budyk OLD/budyk  # rings of an older release converted
 tests/smoke/modes.sh build/src/budyk     # metric sets per level, always / on-demand
 tests/check_whitespace.sh                # trailing blanks, tabs, CR, final newline
+cmake --build build --target docs        # API reference (Doxygen), any warning fails it
 cmake/toolchains/freebsd-sysroot.sh 14.4 amd64 SYSROOT   # then, on Linux:
 cmake -B build-fbsd --toolchain cmake/toolchains/freebsd-amd64.cmake -DFREEBSD_SYSROOT=SYSROOT
 ```
@@ -143,8 +145,8 @@ and tests the .deb and .rpm (`addons/linux/test-packages.sh`), runs
 the tests under ASan + UBSan (`-DSTATIC_LINK=OFF -DENABLE_SANITIZERS=ON`)
 together with the smoke scripts, under ThreadSanitizer
 (`-DSTATIC_LINK=OFF -DENABLE_TSAN=ON`) with the serve smoke test, runs
-cppcheck, clang-tidy (checks in `.clang-tidy`) and
-`tests/check_whitespace.sh`, gates line coverage of `core/` and `storage/`
+cppcheck, clang-tidy (checks in `.clang-tidy`), the Doxygen reference
+(`--target docs`) and `tests/check_whitespace.sh`, gates line coverage of `core/` and `storage/`
 at 85% (`tests/coverage_report.py`), cross-compiles for FreeBSD 14.4 amd64
 and aarch64 and runs clang-tidy on the FreeBSD side of the code, and on
 FreeBSD 14.2 and 15.0 (clang) builds and tests both the shared (port) and
@@ -157,6 +159,12 @@ on every target; a new implicit sign or width change is a build error in CI
 ## Coding conventions
 
 - SPDX license header in every file
+- In a header, the comment that documents a declaration is Doxygen's:
+  `///` above it, `///<` after a member on its line (`/** */`, `/**< */` in
+  the C header `sample_c.h`), a file's own description under `/// @file`.
+  Comments in `.c`/`.cpp` files and inside function bodies stay `//`. Put
+  `<placeholders>`, `\n` and the like in backticks: Doxygen otherwise reads
+  them as HTML tags and commands, and its warnings fail CI.
 - C++17, no exceptions (`-fno-exceptions`), no RTTI (`-fno-rtti`). Lua raises
   errors with `luaL_error` (a longjmp): never hold a C++ object with a
   destructor across a call that may raise — see the pattern in
@@ -257,7 +265,7 @@ on every target; a new implicit sign or width change is a build error in CI
 
 - The per-entity detail (cores, disks, interfaces, filesystems, top
   processes) is live only: not in the rings, so not in the history.
-- No Doxygen, FreeBSD 13 not in CI.
+- FreeBSD 13 not in CI.
 
 ### Kept on purpose for later milestones (do not remove as dead code)
 

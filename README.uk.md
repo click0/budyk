@@ -185,6 +185,10 @@ cmake --install build      # бінарник, приклад конфігура
 За замовчуванням збірка повністю статична. Щоб лінкувати зі спільними
 бібліотеками, додайте `-DSTATIC_LINK=OFF`.
 
+Якщо встановлено Doxygen, `cmake --build build --target docs` створює
+довідник API за заголовками з `src/` у `build/docs/html/index.html`.
+CI будує його на кожен push і зберігає як артефакт `api-reference`.
+
 ### Крос-компіляція для FreeBSD
 
 На Linux із clang і lld (`apt install clang lld llvm`) можна зібрати

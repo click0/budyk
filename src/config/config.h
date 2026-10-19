@@ -13,9 +13,9 @@ struct Config {
     char data_dir[256]   = "/var/db/budyk";
     char rules_path[256] = "/usr/local/etc/budyk/rules.lua";
 
-    // Persist per-rule cooldown / fire counters across restarts so a
-    // bounce doesn't re-fire rules that were mid-cooldown. Empty
-    // state_path ⇒ derive `<data_dir>/rule_state.tsv`.
+    /// Persist per-rule cooldown / fire counters across restarts so a
+    /// bounce doesn't re-fire rules that were mid-cooldown. Empty
+    /// state_path ⇒ derive `<data_dir>/rule_state.tsv`.
     bool rules_persist_state    = true;
     char rules_state_path[256]  = "";
 
@@ -23,12 +23,12 @@ struct Config {
 
     bool  auth_enabled        = false;
     char  password_hash[256]  = "";
-    // Persist web sessions to `<data_dir>/sessions.tsv` (mode 0600) so a
-    // daemon restart doesn't log everyone out. Set false for RAM-only.
+    /// Persist web sessions to `<data_dir>/sessions.tsv` (mode 0600) so a
+    /// daemon restart doesn't log everyone out. Set false for RAM-only.
     bool  auth_persist_sessions = true;
-    // Login throttle (LoginLimiter): after this many failed attempts
-    // from one address within the window, further attempts from it get
-    // 429 until the window ends.
+    /// Login throttle (LoginLimiter): after this many failed attempts
+    /// from one address within the window, further attempts from it get
+    /// 429 until the window ends.
     int   auth_max_login_failures = 5;
     int   auth_login_window_sec   = 60;
 
@@ -40,34 +40,34 @@ struct Config {
     int   hot_buffer_warm_grace  = 60;
 
     bool                     rules_enable_exec = false;
-    // Absolute paths that `exec()` is permitted to launch. Empty = any
-    // absolute path allowed (still subject to path-traversal guard).
+    /// Absolute paths that `exec()` is permitted to launch. Empty = any
+    /// absolute path allowed (still subject to path-traversal guard).
     std::vector<std::string> rules_exec_allow;
 
-    // Execution limits for the Lua engine (rules.limits): VM
-    // instructions per call into Lua, and the memory the whole state
-    // may hold. See LuaEngine::set_limits.
+    /// Execution limits for the Lua engine (rules.limits): VM
+    /// instructions per call into Lua, and the memory the whole state
+    /// may hold. See LuaEngine::set_limits.
     int                      rules_instruction_limit = 1000000;
     int                      rules_memory_mb         = 16;
 
     bool                     rules_enable_freeze = false;
-    // Process names (kernel `comm`) that freeze()/unfreeze() are
-    // allowed to signal. Empty = no name-based gate (the engine-wide
-    // enabled flag still applies).
+    /// Process names (kernel `comm`) that freeze()/unfreeze() are
+    /// allowed to signal. Empty = no name-based gate (the engine-wide
+    /// enabled flag still applies).
     std::vector<std::string> rules_freeze_allow;
 
-    // File watcher — paths the daemon should keep tabs on. Each path
-    // is fed into a single FileWatcher; events surface as the `files`
-    // Lua global with per-path .modifies / .deletes / .tampered.
+    /// File watcher — paths the daemon should keep tabs on. Each path
+    /// is fed into a single FileWatcher; events surface as the `files`
+    /// Lua global with per-path .modifies / .deletes / .tampered.
     bool                     file_watch_enabled = false;
     std::vector<std::string> file_watch_paths;
 
-    // Alert channels — POD mirror of rules::AlertChannel. Kept here to
-    // avoid pulling budyk_config into budyk_rules' dep graph. main.cpp
-    // copies the fields into a rules::AlertChannel for each entry.
+    /// Alert channels — POD mirror of rules::AlertChannel. Kept here to
+    /// avoid pulling budyk_config into budyk_rules' dep graph. main.cpp
+    /// copies the fields into a rules::AlertChannel for each entry.
     struct AlertChannelConfig {
         std::string name;
-        std::string type;     // ntfy / discord / telegram / smtp / twilio
+        std::string type;     ///< ntfy / discord / telegram / smtp / twilio
         std::string url;
         std::string topic;
         std::string token;
@@ -76,12 +76,12 @@ struct Config {
     std::vector<AlertChannelConfig> alert_channels;
 };
 
-// Load a YAML config into `out`, starting from defaults. Missing
-// keys leave defaults in place. Returns 0 on success, negative on
-// I/O or parse error.
-// `error`, when given, gets the reason for a non-zero return: the
-// strerror of a failed open, or "YAML parse error" (the parser's own
-// messages go to stderr as they are found).
+/// Load a YAML config into `out`, starting from defaults. Missing
+/// keys leave defaults in place. Returns 0 on success, negative on
+/// I/O or parse error.
+/// `error`, when given, gets the reason for a non-zero return: the
+/// strerror of a failed open, or "YAML parse error" (the parser's own
+/// messages go to stderr as they are found).
 int config_load        (const char* path, Config* out, std::string* error = nullptr);
 int config_load_string (const char* yaml, Config* out);
 
