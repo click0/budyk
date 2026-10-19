@@ -44,7 +44,7 @@ int budyk_collect_cpu_linux_ex(budyk_cpu_ctx_c* ctx, budyk_sample_c* s, budyk_de
 
     char path[512];
     snprintf(path, sizeof(path), "%s/stat", budyk_linux_proc_root());
-    FILE* f = fopen(path, "r");
+    FILE* f = fopen(path, "re");
     if (f == NULL) return -errno;
 
     unsigned long long user = 0, nice = 0, system_ = 0, idle = 0,

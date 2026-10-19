@@ -242,12 +242,15 @@ else
 fi
 
 # Every descriptor the daemon holds must be close-on-exec (rule exec()
-# and the alert channels fork): the listening socket, the WS client
-# above, the ring files, the wake pipe. Linux only — FreeBSD has no
-# fdinfo; the flags are set with the same calls on both.
+# and the alert channels fork from other threads): the listening socket,
+# the WS client above, the ring files, the wake pipe, and the files a
+# collector has open for a moment each tick (/proc/<pid>/stat for every
+# process), which is why the descriptors are read over and over for 3 s
+# rather than once. Linux only — FreeBSD has no fdinfo; the flags are set
+# with the same calls on both.
 if [ -d "/proc/$PID/fdinfo" ]; then
     python3 - "$PID" <<'EOF' || fail=1
-import os, sys
+import os, sys, time
 pid = sys.argv[1]
 # Descriptors the daemon inherited from this shell (a CI runner keeps
 # a few pipes open in every child) are not its to set CLOEXEC on. This
@@ -262,21 +265,33 @@ def targets(p):
             pass
     return out
 inherited = set(targets("self").values())
-bad = []
-for fd, target in targets(pid).items():
-    if int(fd) < 3 or target in inherited:
-        continue
-    try:
-        with open("/proc/%s/fdinfo/%s" % (pid, fd)) as f:
-            flags = [l.split()[1] for l in f if l.startswith("flags:")][0]
-    except OSError:
-        continue
-    if not int(flags, 8) & 0o2000000:
-        bad.append("fd %s -> %s (flags %s)" % (fd, target, flags))
+bad = {}
+rounds = 0
+end = time.time() + 3
+# The flags first and the name only for a descriptor without CLOEXEC:
+# a collector's file is open for microseconds.
+fdinfo = "/proc/%s/fdinfo" % pid
+while time.time() < end:
+    rounds += 1
+    for fd in os.listdir(fdinfo):
+        if int(fd) < 3:
+            continue
+        try:
+            with open("%s/%s" % (fdinfo, fd)) as f:
+                flags = [l.split()[1] for l in f if l.startswith("flags:")][0]
+            if int(flags, 8) & 0o2000000:
+                continue
+            target = os.readlink("/proc/%s/fd/%s" % (pid, fd))
+        except (OSError, IndexError):
+            continue   # closed in between
+        if target not in inherited:
+            bad.setdefault(target, "fd %s -> %s (flags %s)" % (fd, target, flags))
 if bad:
-    print("FAIL: descriptors without O_CLOEXEC:\n  " + "\n  ".join(bad))
+    shown = sorted(bad.values())
+    print("FAIL: descriptors without O_CLOEXEC (%d seen in %d looks):\n  %s"
+          % (len(shown), rounds, "\n  ".join(shown[:10])))
     sys.exit(1)
-print("ok   all descriptors are close-on-exec")
+print("ok   all descriptors are close-on-exec (%d looks over 3 s)" % rounds)
 EOF
 fi
 

@@ -178,6 +178,10 @@ on every target; a new implicit sign or width change is a build error in CI
   `parse_int_full()` (`src/core/parse_int.h`): whole string, in range, or
   an error that names the value. No `atoi()`; clang-tidy (`cert-err34-c`)
   rejects it outside the collectors.
+- Every descriptor is close-on-exec, short-lived ones too: `fopen(path,
+  "re")` / `"we"`, `O_CLOEXEC`, `SOCK_CLOEXEC`, `mkostemp(..., O_CLOEXEC)`
+  (worker threads fork while the main thread has a file open).
+  `tests/smoke/serve.sh` watches the daemon's descriptors for 3 s.
 - Other programs run through `exec_command()` with an argv, never a shell
   (`system`/`popen` are rejected by `cert-env33-c`); secrets go in 0600
   temp files from `write_private_tmp()`, not on the command line.

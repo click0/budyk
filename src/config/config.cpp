@@ -410,7 +410,7 @@ int config_load(const char* path, Config* out, std::string* error) {
         return -1;
     }
 
-    FILE* f = std::fopen(path, "r");
+    FILE* f = std::fopen(path, "re");
     if (f == nullptr) {
         if (error != nullptr) *error = std::strerror(errno);
         return -2;

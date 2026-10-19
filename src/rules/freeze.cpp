@@ -25,7 +25,7 @@ int proc_name_of(int pid, char* buf, std::size_t cap) {
 #if defined(BUDYK_LINUX)
     char path[64];
     std::snprintf(path, sizeof(path), "/proc/%d/comm", pid);
-    std::FILE* f = std::fopen(path, "r");
+    std::FILE* f = std::fopen(path, "re");
     if (f == nullptr) return -1;
     if (std::fgets(buf, static_cast<int>(cap), f) == nullptr) {
         std::fclose(f);

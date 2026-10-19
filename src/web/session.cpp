@@ -100,7 +100,7 @@ size_t SessionStore::size() const {
 
 int SessionStore::load(const char* path) {
     if (path == nullptr) return -EINVAL;
-    std::FILE* f = std::fopen(path, "r");
+    std::FILE* f = std::fopen(path, "re");
     if (f == nullptr) return 0;   // no sessions yet — fresh install, fine
 
     const uint64_t now = now_realtime_ns();

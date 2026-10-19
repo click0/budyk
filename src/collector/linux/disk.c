@@ -90,7 +90,7 @@ int budyk_collect_disk_linux_ex(budyk_disk_ctx_c* ctx, budyk_sample_c* s, budyk_
 
     char path[512];
     snprintf(path, sizeof(path), "%s/diskstats", budyk_linux_proc_root());
-    FILE* f = fopen(path, "r");
+    FILE* f = fopen(path, "re");
     if (f == NULL) return -errno;
 
     uint64_t read_sectors  = 0;
