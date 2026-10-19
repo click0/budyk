@@ -98,7 +98,8 @@ single dashboard that combines servers isn't part of budyk yet.
   memory, swap, load average, disk I/O, network, processes by state,
   TCP and UDP, filesystem usage (space and inodes), clock sync,
   entropy, temperature, uptime, and budyk's own CPU/RSS; live, each
-  core, disk, interface and filesystem.
+  core, disk, interface and filesystem, and the top processes by CPU
+  and by memory.
 - **Ring-file storage:** one size-capped file per level, so 1 Hz detail
   from busy or watched periods sits next to sparse 5-minute heartbeats.
   No database.
@@ -288,7 +289,7 @@ collection:
 |-----|-------|
 | `minimal` | `cpu`, `mem`, `swap`, `load`, `uptime` |
 | `standard` | every group: the above and `disk`, `net`, `proc`, `entropy`, `self`, `thermal`, `tcp`, `udp`, `fs`, `clock` |
-| `full` | `standard` and the per-entity lists `cpu.cores`, `disk.devices`, `net.interfaces`, `fs.mounts` |
+| `full` | `standard` and the per-entity lists `cpu.cores`, `disk.devices`, `net.interfaces`, `fs.mounts`, `proc.top` |
 
 A list may name sets, groups and lists. Every set includes `minimal`
 (the thresholds are checked against it), and a list brings its group
@@ -423,9 +424,13 @@ collections: `cpu.cores` (an array: `#cpu.cores`, `cpu.cores[1].iowait_percent`)
 `disk.devices["sda"]` (`read_bytes_per_sec`, `write_bytes_per_sec`,
 `reads_per_sec`, `writes_per_sec`, `busy_percent`),
 `net.interfaces["eth0"]` (`rx/tx_bytes_per_sec`, `rx/tx_packets_per_sec`,
-`rx/tx_errors_per_sec`, `rx_drops_per_sec`, `up`) and `fs.mounts["/var"]`
+`rx/tx_errors_per_sec`, `rx_drops_per_sec`, `up`), `fs.mounts["/var"]`
 (`type`, `device`, `total_bytes`, `used_bytes`, `avail_bytes`,
-`used_percent`, `inodes_total`, `inodes_used`, `inodes_used_percent`).
+`used_percent`, `inodes_total`, `inodes_used`, `inodes_used_percent`)
+and `proc.top`, an array of the top 10 processes by CPU and the top 10
+by memory, each once, busiest first (`pid`, `name`, `state`, `threads`,
+`cpu_percent` of one CPU over the last interval, `rss_bytes`; kernel
+threads are left out).
 A device that is gone is `nil`; iterate with `ipairs` / `pairs`:
 
 ```lua

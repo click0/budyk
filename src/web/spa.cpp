@@ -124,6 +124,9 @@ h1 .host { color: var(--muted); margin-left: .6rem; font-weight: 400; }
     <h2>Filesystems</h2>
     <table><thead><tr><th>mount</th><th>type</th><th>used</th><th>size</th><th></th><th>inodes</th></tr></thead>
       <tbody id="mounts"></tbody></table>
+    <h2>Processes</h2>
+    <table><thead><tr><th>process</th><th>pid</th><th>state</th><th>CPU</th><th>RSS</th><th>threads</th></tr></thead>
+      <tbody id="procs"></tbody></table>
   </div>
 
   <div class="hist">
@@ -624,6 +627,15 @@ function renderDetail(d) {
     cell(tr, miniBar(x.used_percent, 80, 90));
     cell(tr, (x.inodes_used_percent ?? 0).toFixed(1) + "%");
   }, notCollected(d, "fs.mounts"));
+  // The top processes by CPU and by memory; names are the processes' own.
+  fillRows("procs", d.processes, (tr, x) => {
+    cell(tr, x.name);
+    cell(tr, String(x.pid), "muted");
+    cell(tr, x.state || "", "muted");
+    cell(tr, (x.cpu_percent ?? 0).toFixed(1) + "%");
+    cell(tr, fmtBytes(x.rss_bytes ?? 0));
+    cell(tr, String(x.threads ?? 0));
+  }, notCollected(d, "proc.top"));
 }
 
 // Alerts the rules raised: the latest from /api/alerts when the page

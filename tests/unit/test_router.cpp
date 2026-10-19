@@ -296,7 +296,7 @@ int main() {
         assert(has(r.body, "\"name\":\"L3\",\"interval_ms\":1000,\"priority\":30,"
                            "\"builtin\":true,\"collects\":true,\"metrics\":[\"cpu\","));
         assert(has(r.body, "\"tcp\",\"udp\",\"fs\",\"clock\",\"cpu.cores\",\"disk.devices\","
-                           "\"net.interfaces\",\"fs.mounts\"]}"));
+                           "\"net.interfaces\",\"fs.mounts\",\"proc.top\"]}"));
         assert(has(r.body, "{\"id\":4,\"name\":\"burst\",\"interval_ms\":300,\"priority\":40,"
                            "\"builtin\":false,\"collects\":true,"
                            "\"metrics\":[\"cpu\",\"mem\",\"swap\",\"load\",\"disk\",\"uptime\","

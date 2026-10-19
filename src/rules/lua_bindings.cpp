@@ -414,6 +414,27 @@ void bind_mounts(lua_State* L, int fs_idx, const budyk_detail_c* d) {
     lua_pop(L, 2);
 }
 
+void bind_processes(lua_State* L, int proc_idx, const budyk_detail_c* d) {
+    push_collection(L, proc_idx, "proc.top", "top", has(d, budyk::kDetailProcesses));
+    const int items = lua_absindex(L, -2), data = lua_absindex(L, -1);
+    for (uint32_t i = 0; d != nullptr && i < d->nprocs; ++i) {
+        const budyk_process_c& p = d->procs[i];
+        lua_pushinteger(L, static_cast<lua_Integer>(i) + 1);
+        push_item(L, items, data, "proc.top");
+        set_integer(L, "pid", p.pid);
+        lua_pushstring(L, p.name);
+        lua_setfield(L, -2, "name");
+        lua_pushlstring(L, &p.state, p.state != '\0' ? 1 : 0);
+        lua_setfield(L, -2, "state");
+        set_integer(L, "threads",   static_cast<lua_Integer>(p.threads));
+        set_number (L, "cpu_percent", p.cpu_percent);
+        set_integer(L, "rss_bytes", static_cast<lua_Integer>(p.rss_bytes));
+        lua_pop(L, 1);
+    }
+    drop_stale_items(L, items, data);
+    lua_pop(L, 2);
+}
+
 } // namespace
 
 void budyk_lua_bind_sample(lua_State* L, const budyk::Sample& s, const budyk_detail_c* d) {
@@ -483,6 +504,7 @@ void budyk_lua_bind_sample(lua_State* L, const budyk::Sample& s, const budyk_det
     set_integer(L, "stopped",  static_cast<lua_Integer>(s.proc.stopped));
     set_integer(L, "zombie",   static_cast<lua_Integer>(s.proc.zombie));
     set_integer(L, "threads",  static_cast<lua_Integer>(s.proc.threads));
+    bind_processes(L, -1, d);
     lua_pop(L, 1);
 
     // entropy — kernel CSPRNG pool depth in bits (Linux only).

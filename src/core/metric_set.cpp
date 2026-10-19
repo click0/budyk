@@ -44,6 +44,7 @@ constexpr Collection kCollections[] = {
     { "disk.devices",   kDetailDisks,      kGroupDisk },
     { "net.interfaces", kDetailInterfaces, kGroupNet },
     { "fs.mounts",      kDetailMounts,     kGroupFs },
+    { "proc.top",       kDetailProcesses,  kGroupProc },
 };
 
 } // namespace

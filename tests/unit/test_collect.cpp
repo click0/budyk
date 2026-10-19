@@ -38,15 +38,22 @@ int main() {
     assert(s.disk.device_count == 0 && s.net.interface_count == 0 && !s.tcp.present);
     assert(s.mem.total > 0 && s.uptime_seconds > 0.0);
     assert(ctx.detail->collected == kDetailMounts);
-    assert(ctx.detail->baseline == (kDetailCores | kDetailDisks | kDetailInterfaces));
+    assert(ctx.detail->baseline ==
+           (kDetailCores | kDetailDisks | kDetailInterfaces | kDetailProcesses));
+    assert(ctx.detail->nprocs == 0);
     assert(ctx.detail->ncores == 0 && ctx.detail->ndisks == 0 && ctx.detail->nifaces == 0);
     assert(ctx.detail->nmounts == s.fs.count);
 
-    // 2. The second has it all.
+    // 2. The second has it all, the top processes included (this test
+    //    among them: no kernel thread, a pid and a name each).
     s = tick(&ctx, metric_set_full());
     assert(s.groups == kGroupsSelectable && s.baseline == 0);
     assert(s.cpu.count >= 1 && ctx.detail->ncores == s.cpu.count);
     assert(ctx.detail->collected == kDetailAll && ctx.detail->baseline == 0);
+    assert(ctx.detail->nprocs >= 1 && ctx.detail->nprocs <= 2 * BUDYK_TOP_EACH);
+    for (uint32_t i = 0; i < ctx.detail->nprocs; ++i) {
+        assert(ctx.detail->procs[i].pid > 0 && ctx.detail->procs[i].name[0] != '\0');
+    }
 
     // 3. minimal: only cpu, mem, swap, load, uptime; the rest zero, no list.
     s = tick(&ctx, metric_set_minimal());

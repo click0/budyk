@@ -12,11 +12,12 @@ void collect_one(Sample* s, CollectContext* ctx, const MetricSet& set) {
     if ((lists & kDetailDisks)      != 0) want |= kGroupDisk;
     if ((lists & kDetailInterfaces) != 0) want |= kGroupNet;
     if ((lists & kDetailMounts)     != 0) want |= kGroupFs;
+    if ((lists & kDetailProcesses)  != 0) want |= kGroupProc;
     // tcp and udp come from one read.
     if ((want & (kGroupTcp | kGroupUdp)) != 0) want |= kGroupTcp | kGroupUdp;
 
     budyk_detail_c* d = ctx->detail.get();
-    d->ncores = d->ndisks = d->nifaces = d->nmounts = 0;
+    d->ncores = d->ndisks = d->nifaces = d->nmounts = d->nprocs = 0;
     auto list = [&](uint32_t bit) { return (lists & bit) != 0 ? d : nullptr; };
     auto wants = [&](uint32_t group) { return (want & group) != 0; };
 
@@ -27,7 +28,7 @@ void collect_one(Sample* s, CollectContext* ctx, const MetricSet& set) {
     budyk_collect_load_linux   (&c);
     if (wants(kGroupDisk))    budyk_collect_disk_linux_ex   (&ctx->disk, &c, list(kDetailDisks));
     if (wants(kGroupNet))     budyk_collect_network_linux_ex(&ctx->net,  &c, list(kDetailInterfaces));
-    if (wants(kGroupProc))    budyk_collect_proc_linux   (&c);
+    if (wants(kGroupProc))    budyk_collect_proc_linux_ex(&c, list(kDetailProcesses));
     if (wants(kGroupEntropy)) budyk_collect_entropy_linux(&c);
     if (wants(kGroupSelf))    budyk_collect_self_linux   (&c);
     if (wants(kGroupThermal)) budyk_collect_thermal_linux(&c);
@@ -41,7 +42,7 @@ void collect_one(Sample* s, CollectContext* ctx, const MetricSet& set) {
     budyk_collect_load_freebsd   (&c);
     if (wants(kGroupDisk))    budyk_collect_disk_freebsd_ex   (&ctx->disk, &c, list(kDetailDisks));
     if (wants(kGroupNet))     budyk_collect_network_freebsd_ex(&ctx->net,  &c, list(kDetailInterfaces));
-    if (wants(kGroupProc))    budyk_collect_proc_freebsd   (&c);
+    if (wants(kGroupProc))    budyk_collect_proc_freebsd_ex(&c, list(kDetailProcesses));
     if (wants(kGroupEntropy)) budyk_collect_entropy_freebsd(&c);
     if (wants(kGroupSelf))    budyk_collect_self_freebsd   (&c);
     if (wants(kGroupThermal)) budyk_collect_thermal_freebsd(&c);
@@ -119,7 +120,8 @@ void collect_one(Sample* s, CollectContext* ctx, const MetricSet& set) {
     s->uptime_seconds         = c.uptime_seconds;
 
     constexpr uint32_t kRateGroups = kGroupCpu | kGroupDisk | kGroupNet | kGroupTcp | kGroupUdp;
-    constexpr uint32_t kRateLists  = kDetailCores | kDetailDisks | kDetailInterfaces;
+    constexpr uint32_t kRateLists  = kDetailCores | kDetailDisks | kDetailInterfaces |
+                                     kDetailProcesses;
     const uint32_t have       = want & ~(kRateGroups & ~ctx->last_groups);
     const uint32_t have_lists = lists & ~(kRateLists & ~ctx->last_detail);
     ctx->last_groups = want;
@@ -132,6 +134,7 @@ void collect_one(Sample* s, CollectContext* ctx, const MetricSet& set) {
     if ((have_lists & kDetailDisks)      == 0) d->ndisks  = 0;
     if ((have_lists & kDetailInterfaces) == 0) d->nifaces = 0;
     if ((have_lists & kDetailMounts)     == 0) d->nmounts = 0;
+    if ((have_lists & kDetailProcesses)  == 0) d->nprocs  = 0;
     d->collected = have_lists;
     d->baseline  = lists & ~have_lists;
 }

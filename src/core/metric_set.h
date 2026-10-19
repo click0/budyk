@@ -15,8 +15,9 @@ enum MetricDetail : uint32_t {
     kDetailDisks      = 1u << 1,   // disk.devices
     kDetailInterfaces = 1u << 2,   // net.interfaces
     kDetailMounts     = 1u << 3,   // fs.mounts
+    kDetailProcesses  = 1u << 4,   // proc.top
 };
-constexpr uint32_t kDetailAll = (1u << 4) - 1;
+constexpr uint32_t kDetailAll = (1u << 5) - 1;
 
 // What the scheduler's anomaly check reads, and spec §3.4.1's L1 set:
 // every level collects these.
@@ -37,7 +38,7 @@ struct MetricSet {
 //   minimal   cpu, mem, swap, load, uptime
 //   standard  every group (the totals), no per-entity detail
 //   full      standard and the detail: cpu.cores, disk.devices,
-//             net.interfaces, fs.mounts
+//             net.interfaces, fs.mounts, proc.top
 MetricSet metric_set_minimal();
 MetricSet metric_set_standard();
 MetricSet metric_set_full();
@@ -46,7 +47,7 @@ MetricSet metric_set_full();
 // ("cpu", "mem", "swap", "load", "uptime", "disk", "net", "proc",
 // "entropy", "self", "thermal", "tcp", "udp", "fs", "clock") and
 // collection names ("cpu.cores", "disk.devices",
-// "net.interfaces", "fs.mounts"), case-sensitive. The result is their
+// "net.interfaces", "fs.mounts", "proc.top"), case-sensitive. The result is their
 // union plus the minimal set; a collection brings its group with it.
 // Returns 0, or -EINVAL with *error naming the first unknown name (*out
 // is then unchanged).

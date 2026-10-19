@@ -9,7 +9,8 @@ namespace budyk {
 
 // Escape the contents of a JSON string (what goes between the quotes):
 // \" \\ \b \f \n \r \t, and every other control character as \u00XX.
-// Bytes >= 0x20 are passed through unchanged (UTF-8 stays UTF-8).
+// Well-formed UTF-8 passes through unchanged; a byte that does not start
+// one becomes \ufffd, so the result is valid UTF-8 whatever went in.
 std::string json_escape(const std::string& s);
 
 // Decode the JSON escapes in a string's contents: \" \\ \/ \b \f \n \r

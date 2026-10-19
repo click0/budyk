@@ -140,6 +140,28 @@ int main() {
         assert(lv[1].id == 4 && lv[1].interval_ms == 500);
     }
 
+    // 7. parse_processes: the "processes" of the detail, in order, names
+    //    unescaped (quotes, braces and \ufffd in them); a list cut off or
+    //    missing is empty.
+    {
+        const std::string body =
+            "{\"count\":1,\"samples\":[{\"ts\":1,\"proc\":{\"total\":3}}],"
+            "\"detail\":{\"collected\":[\"proc.top\"],\"cores\":[],"
+            "\"processes\":[{\"pid\":42,\"name\":\"a \\\"q\\\" {x}\",\"state\":\"R\","
+            "\"threads\":2,\"cpu_percent\":97.5,\"rss_bytes\":1048576},"
+            "{\"pid\":7,\"name\":\"bad\\ufffd\",\"state\":\"S\",\"threads\":1,"
+            "\"cpu_percent\":0,\"rss_bytes\":4096}]}}";
+        const auto p = parse_processes(body);
+        assert(p.size() == 2);
+        assert(p[0].pid == 42 && p[0].name == "a \"q\" {x}" && p[0].state == "R");
+        assert(p[0].cpu_percent == 97.5 && p[0].rss_bytes == 1048576.0);
+        assert(p[1].pid == 7 && p[1].name == "bad\xEF\xBF\xBD" && p[1].cpu_percent == 0.0);
+        assert(parse_processes(body.substr(0, body.size() - 40)).empty());
+        assert(parse_processes("{\"count\":0,\"samples\":[]}").empty());
+        assert(parse_processes("{\"processes\":[]}").empty());
+        assert(parse_processes("{\"processes\":[{\"pid\":x}]}").empty());
+    }
+
     std::printf("test_tui: PASS\n");
     return 0;
 }

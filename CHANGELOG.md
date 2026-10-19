@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The top processes, live** (the last gap in spec §2.1's table): the
+  10 that use the most CPU and the 10 largest by memory, each once,
+  busiest first, with pid, name, state, threads, CPU % (of one CPU over
+  the last interval) and RSS. Linux reads utime + stime from
+  `/proc/<pid>/stat`, FreeBSD `ki_runtime` from `kern.proc.all`; a pid
+  reused by another process (another start time) starts from 0; kernel
+  threads (and FreeBSD's system processes) are left out, as `top` does.
+  The dashboard has a Processes table, the TUI lists as many as fit,
+  rules get `proc.top`, and the detail JSON `"processes"`. A new list for
+  the metric sets, `proc.top`, is in `full`. Not stored, like the rest of
+  the detail.
 - **Alerts reach the dashboard** (spec §3.6.4: "alert: log + WS
   event"). Every alert, from a rule's `alert` action or from `alert()`
   in Lua, is written to the daemon log ("budyk alert: critical
@@ -46,6 +57,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   up to 1 000 000); anything else fails the load with the rule's name.
   `for_ticks = 2.5` used to read as 0, that is 1, and `cooldown = "x"`
   as 0. `for_ticks = 0` still means 1.
+
+### Fixed
+
+- **A name that is not UTF-8 no longer breaks the dashboard.** JSON
+  strings carried a process name, a mount point or a rule's message as
+  bytes; one that is not UTF-8 made the WebSocket frame invalid, and a
+  browser must drop the connection on such a frame. Each byte that
+  starts no well-formed UTF-8 sequence is now `\ufffd`. Anyone on the
+  host can name a process.
 
 ## [0.7.0] — 2026-10-17
 

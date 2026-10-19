@@ -16,7 +16,8 @@ set -eu
 BIN=${1:?usage: serve.sh path/to/budyk [port]}
 PORT=${2:-18765}
 DIR=$(mktemp -d)
-trap 'kill "$PID" 2>/dev/null || true; rm -rf "$DIR"' EXIT
+BUSY_PID=
+trap 'kill "$PID" $BUSY_PID 2>/dev/null || true; rm -rf "$DIR"' EXIT
 
 # data_dir does not exist yet: the daemon creates it (mode 0750).
 cat > "$DIR/config.yaml" <<EOF
@@ -183,6 +184,32 @@ assert isinstance(d["disks"], list) and isinstance(d["interfaces"], list)
 else
     echo "FAIL: no or inconsistent detail in /api/samples"; fail=1
 fi
+
+# The top processes: a busy one named with a byte that is not UTF-8 (any
+# user can name a process so) is listed first, its name with U+FFFD, and
+# the JSON, a WebSocket text frame's too, stays valid UTF-8.
+BUSY="$DIR/$(printf 'busy\377x')"
+ln -s /bin/sh "$BUSY"
+"$BUSY" -c 'while :; do :; done' &
+BUSY_PID=$!
+sleep 1.5
+if curl -s "http://127.0.0.1:$PORT/api/samples" | python3 -c '
+import json, sys
+doc = json.loads(sys.stdin.buffer.read().decode("utf-8"))   # strict UTF-8
+p = doc["detail"]["processes"]
+assert 1 <= len(p) <= 20, len(p)
+assert all(x["pid"] > 0 and x["name"] for x in p)
+assert all(a["cpu_percent"] >= b["cpu_percent"] for a, b in zip(p, p[1:]))
+busy = [x for x in p if x["pid"] == int(sys.argv[1])]
+assert busy and busy[0]["name"] == "busy�x" and busy[0]["cpu_percent"] > 20, (busy, p[:3])
+' "$BUSY_PID"; then
+    echo "ok   the top processes, a name that is not UTF-8 included"
+else
+    echo "FAIL: no or wrong top processes in /api/samples"; fail=1
+fi
+kill "$BUSY_PID" 2>/dev/null || true
+wait "$BUSY_PID" 2>/dev/null || true
+BUSY_PID=
 
 # The burst level holds throughout, yet the L1 ring still gets a record
 # per L1 interval (2 s here), folded from the burst samples; level=all
