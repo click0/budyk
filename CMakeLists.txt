@@ -60,6 +60,11 @@ endif()
 # fails the build; a local or distro build with a newer compiler that
 # warns about something new still builds.
 add_compile_options(-Wall -Wextra -Wshadow -Wconversion -Wsign-conversion)
+# A cast to a pointer that needs more alignment (uint8_t* to uint64_t*):
+# x86 forgives the unaligned access, arm64 raises SIGBUS. GCC only, since
+# clang's -Wcast-align leaves reinterpret_cast alone.
+add_compile_options("$<$<COMPILE_LANG_AND_ID:C,GNU>:-Wcast-align=strict>"
+                    "$<$<COMPILE_LANG_AND_ID:CXX,GNU>:-Wcast-align=strict>")
 option(ENABLE_WERROR "Treat compiler warnings as errors (used by CI)" OFF)
 if(ENABLE_WERROR)
     add_compile_options(-Werror)

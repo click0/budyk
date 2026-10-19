@@ -23,16 +23,16 @@ jobs:
   lite:
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    name: FreeBSD 14.2 lite (build + ctest)
+    name: FreeBSD 14.4 lite (build + ctest)
     steps:
       - uses: actions/checkout@v4
 
       - name: Build + test on FreeBSD
-        uses: cross-platform-actions/action@v1.0.0
+        uses: cross-platform-actions/action@v1.6.0
         timeout-minutes: 20
         with:
           operating_system: freebsd
-          version: '14.2'
+          version: '14.4'
           shell: sh
           run: |
             set -ex

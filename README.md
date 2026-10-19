@@ -126,13 +126,16 @@ single dashboard that combines servers isn't part of budyk yet.
 ### Release binaries
 
 Each [release](https://github.com/click0/budyk/releases) has static
-binaries for Linux amd64 and FreeBSD 14.2 / 15.0 amd64:
+binaries for Linux amd64, FreeBSD 14.4 / 15.1 amd64 and FreeBSD aarch64:
 
 ```
 budyk-<version>-linux-amd64.tar.gz
-budyk-<version>-freebsd14.2-amd64.tar.gz
-budyk-<version>-freebsd15.0-amd64.tar.gz
+budyk-<version>-freebsd14.4-amd64.tar.gz
+budyk-<version>-freebsd15.1-amd64.tar.gz
+budyk-<version>-freebsd14.4-aarch64.tar.gz
 ```
+
+A binary built for 14.4 runs on later 14.x releases and on 15.x.
 
 Each archive also has a `-debug` variant with symbols, and a `.sha256`
 checksum file. Unpack it and put `budyk` somewhere in your `PATH`.
@@ -203,7 +206,7 @@ release's `MANIFEST`, the package catalogue against the pkg signing key
 in `base.txz`, each package against the catalogue. A binary built for 14.4
 runs on later 14.x and on 15.x. The tests are built but run only on
 FreeBSD; CI runs the smoke scripts with the cross-compiled amd64 binary on
-FreeBSD 15.0.
+FreeBSD 15.1.
 
 ### Running as a service
 
@@ -593,8 +596,9 @@ needs.
 
 ## Platforms
 
-- **FreeBSD 14.2, 15.0:** primary target, built and tested in CI.
-- **FreeBSD aarch64:** cross-compiled in CI, not run there.
+- **FreeBSD 14.4, 15.1:** primary target, built and tested in CI.
+- **FreeBSD aarch64:** cross-compiled; the release binary passes the
+  smoke scripts in an emulated arm64 FreeBSD 14.4 before it is published.
 - **Linux:** built and tested in CI on Ubuntu.
 
 Other versions and systems aren't tested. NetBSD and OpenBSD have no

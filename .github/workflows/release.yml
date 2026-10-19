@@ -1,7 +1,8 @@
 name: Release binaries
 
-# Builds release tarballs for Linux (x86_64) and FreeBSD (14.2, 15.0 — amd64)
-# when a semver tag is pushed, or on manual workflow_dispatch.
+# Builds release tarballs for Linux (x86_64), FreeBSD amd64 (14.4, 15.1) and
+# FreeBSD aarch64 (14.4, cross-compiled) when a semver tag is pushed, or on
+# manual workflow_dispatch.
 #
 # Two variants per platform:
 #   budyk-<version>-<platform>.tar.gz          Release, stripped (distribution).
@@ -167,7 +168,8 @@ jobs:
           retention-days: 14
 
   # ----------------------------------------------------------------------
-  # 3. FreeBSD amd64 matrix (14.2 / 15.0) — Release + RelWithDebInfo.
+  # 3. FreeBSD amd64 matrix (14.4 / 15.1, the oldest supported release
+  #    of each branch) — Release + RelWithDebInfo.
   #    Both variants built inside the same VM run to avoid paying the
   #    cross-platform-actions boot cost twice.
   # ----------------------------------------------------------------------
@@ -178,7 +180,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        freebsd-version: ['14.2', '15.0']
+        freebsd-version: ['14.4', '15.1']
     name: FreeBSD ${{ matrix.freebsd-version }} amd64
     steps:
       - uses: actions/checkout@v4
@@ -186,7 +188,7 @@ jobs:
           ref: ${{ inputs.ref }}
 
       - name: Build on FreeBSD
-        uses: cross-platform-actions/action@v1.0.0
+        uses: cross-platform-actions/action@v1.6.0
         timeout-minutes: 65
         env:
           VER: ${{ needs.meta.outputs.version }}
@@ -273,12 +275,123 @@ jobs:
           retention-days: 14
 
   # ----------------------------------------------------------------------
-  # 4. Verify all checksums in one run, the way a user would with
+  # 4. FreeBSD aarch64 — Release + RelWithDebInfo, cross-compiled on this
+  #    Linux host against the 14.4 sysroot (cmake/toolchains/), then run
+  #    in an arm64 FreeBSD 14.4 VM (emulated): `budyk version` and the
+  #    smoke scripts, with the release binary.
+  # ----------------------------------------------------------------------
+  freebsd-aarch64:
+    needs: meta
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    name: FreeBSD 14.4 aarch64
+    env:
+      FBSD: '14.4'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Install toolchain
+        run: |
+          set -ex
+          .github/scripts/apt-install.sh cmake clang lld llvm zstd
+          clang --version | head -1
+
+      - name: Sysroot (base.txz and packages, checksums and signature checked)
+        run: cmake/toolchains/freebsd-sysroot.sh "$FBSD" aarch64 "$RUNNER_TEMP/sysroot"
+
+      - name: Build Release (stripped) and RelWithDebInfo (debug symbols kept)
+        run: |
+          set -ex
+          for type in Release RelWithDebInfo; do
+            cmake -B "build-$type" \
+              --toolchain cmake/toolchains/freebsd-aarch64.cmake \
+              -DFREEBSD_SYSROOT="$RUNNER_TEMP/sysroot" \
+              -DSTATIC_LINK=ON \
+              -DBUILD_TESTS=OFF \
+              -DCMAKE_BUILD_TYPE="$type"
+            cmake --build "build-$type" -j"$(nproc)"
+          done
+          llvm-strip build-Release/src/budyk
+          for b in build-Release/src/budyk build-RelWithDebInfo/src/budyk; do
+            file "$b"
+            file "$b" | grep "ARM aarch64" | grep "statically linked" \
+              | grep -q "for FreeBSD $FBSD"
+          done
+
+      - name: Stage tarballs
+        env:
+          VER: ${{ needs.meta.outputs.version }}
+        run: |
+          set -ex
+          for variant in release debug; do
+            if [ "$variant" = "release" ]; then
+              SRC=build-Release/src/budyk
+              STAGE="budyk-${VER}-freebsd${FBSD}-aarch64"
+            else
+              SRC=build-RelWithDebInfo/src/budyk
+              STAGE="budyk-${VER}-freebsd${FBSD}-aarch64-debug"
+            fi
+            mkdir -p "$STAGE"
+            cp "$SRC" "$STAGE/"
+            cp LICENSE "$STAGE/"
+            [ -f README.md    ] && cp README.md    "$STAGE/" || true
+            [ -f README.uk.md ] && cp README.uk.md "$STAGE/" || true
+            [ -f CHANGELOG.md ] && cp CHANGELOG.md "$STAGE/" || true
+            mkdir -p "$STAGE/docs"
+            [ -f docs/budyk.8 ] && cp docs/budyk.8 "$STAGE/docs/" || true
+            tar -czf "${STAGE}.tar.gz" "$STAGE"
+            sha256sum "${STAGE}.tar.gz" > "${STAGE}.tar.gz.sha256"
+          done
+          cp build-Release/src/budyk budyk-aarch64
+          rm -rf build-Release build-RelWithDebInfo
+          ls -la budyk-*.tar.gz*
+
+      # The build trees are gone, so the VM gets the sources, the tarballs
+      # and the binary under test only.
+      - name: Smoke tests on FreeBSD arm64
+        uses: cross-platform-actions/action@v1.6.0
+        timeout-minutes: 75
+        with:
+          operating_system: freebsd
+          architecture: arm64
+          version: '14.4'
+          shell: sh
+          memory: 4G
+          cpu_count: 3
+          run: |
+            set -ex
+            uname -a
+            sudo pkg install -y curl python3
+            file budyk-aarch64
+            ./budyk-aarch64 version
+            tests/smoke/serve.sh ./budyk-aarch64
+            tests/smoke/crash.sh ./budyk-aarch64
+            tests/smoke/warm_grace.sh ./budyk-aarch64
+            tests/smoke/escalate.sh ./budyk-aarch64
+            tests/smoke/fsck.sh ./budyk-aarch64
+            tests/smoke/modes.sh ./budyk-aarch64
+
+      - name: Upload artefacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: budyk-freebsd-14.4-aarch64
+          path: |
+            budyk-*-freebsd14.4-aarch64.tar.gz
+            budyk-*-freebsd14.4-aarch64.tar.gz.sha256
+            budyk-*-freebsd14.4-aarch64-debug.tar.gz
+            budyk-*-freebsd14.4-aarch64-debug.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  # ----------------------------------------------------------------------
+  # 5. Verify all checksums in one run, the way a user would with
   #    `sha256sum -c *.sha256`. A sidecar in a format that run misreads
   #    fails here — on the dry run too, which skips publish.
   # ----------------------------------------------------------------------
   checksums:
-    needs: [linux, freebsd]
+    needs: [linux, freebsd, freebsd-aarch64]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -297,10 +410,10 @@ jobs:
           sha256sum -c ./*.sha256
 
   # ----------------------------------------------------------------------
-  # 5. Publish to GitHub Release when triggered by a tag push.
+  # 6. Publish to GitHub Release when triggered by a tag push.
   # ----------------------------------------------------------------------
   publish:
-    needs: [meta, linux, freebsd, checksums]
+    needs: [meta, linux, freebsd, freebsd-aarch64, checksums]
     if: needs.meta.outputs.is_tag == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5

@@ -20,7 +20,8 @@ namespace {
 //   +13  u8[3]  pad
 //   +16  u32    record_size
 //   +20  u64    capacity
-//   +28  u64    write_idx   <-- atomically updated
+//   +28  u64    write_idx   records written; not 8-byte aligned, so it is
+//                           copied in and out (widx_ is the atomic)
 //   +36  u8[28] reserved
 constexpr size_t   kHeaderSize      = 64;
 constexpr uint32_t kFormatVersion   = 1;
@@ -97,6 +98,7 @@ int RingFile::open_impl(const char* path, uint8_t tier, uint32_t record_size,
     mmap_len_    = kHeaderSize;
     record_size_ = record_size;
     capacity_    = capacity;
+    widx_.store(le_get_u64(h + kWriteIdxOffset), std::memory_order_release);
     return 0;
 }
 
@@ -145,23 +147,24 @@ void RingFile::close() {
     capacity_    = 0;
     read_only_   = false;
     tier_        = 0;
+    widx_.store(0, std::memory_order_release);
 }
 
 int RingFile::append(const void* record, size_t len) {
     if (fd_ < 0 || read_only_ || record == nullptr) return -1;
     if (len != record_size_)                   return -2;
 
-    auto*     widx_ptr = reinterpret_cast<uint64_t*>(static_cast<uint8_t*>(mmap_base_) + kWriteIdxOffset);
-    uint64_t  idx      = __atomic_load_n(widx_ptr, __ATOMIC_ACQUIRE);
-    uint64_t  slot     = idx % capacity_;
-    off_t     off      = static_cast<off_t>(kHeaderSize + slot * record_size_);
+    const uint64_t idx  = widx_.load(std::memory_order_acquire);
+    const uint64_t slot = idx % capacity_;
+    const off_t    off  = static_cast<off_t>(kHeaderSize + slot * record_size_);
 
     ssize_t w = ::pwrite(fd_, record, record_size_, off);
     if (w != static_cast<ssize_t>(record_size_)) return -3;
 
     // Advance write_idx only after the record is durably placed. A crash
     // between pwrite and this increment loses at most the last record.
-    __atomic_fetch_add(widx_ptr, 1, __ATOMIC_RELEASE);
+    le_put_u64(static_cast<uint8_t*>(mmap_base_) + kWriteIdxOffset, idx + 1);
+    widx_.store(idx + 1, std::memory_order_release);
     return 0;
 }
 
@@ -178,15 +181,20 @@ int RingFile::read_at(uint64_t index, void* out, size_t len) const {
 
 int RingFile::advance_write_index(uint64_t n) {
     if (fd_ < 0 || read_only_) return -1;
-    auto* widx_ptr = reinterpret_cast<uint64_t*>(static_cast<uint8_t*>(mmap_base_) + kWriteIdxOffset);
-    __atomic_fetch_add(widx_ptr, n, __ATOMIC_RELEASE);
+    const uint64_t idx = widx_.load(std::memory_order_acquire) + n;
+    le_put_u64(static_cast<uint8_t*>(mmap_base_) + kWriteIdxOffset, idx);
+    widx_.store(idx, std::memory_order_release);
     return 0;
 }
 
 uint64_t RingFile::write_index() const {
     if (fd_ < 0) return 0;
-    auto* widx_ptr = reinterpret_cast<uint64_t*>(static_cast<uint8_t*>(mmap_base_) + kWriteIdxOffset);
-    return __atomic_load_n(widx_ptr, __ATOMIC_ACQUIRE);
+    // Read-only (fsck, suggest-rules): the header as it is now, since a
+    // running daemon may be writing the ring.
+    if (read_only_) {
+        return le_get_u64(static_cast<const uint8_t*>(mmap_base_) + kWriteIdxOffset);
+    }
+    return widx_.load(std::memory_order_acquire);
 }
 
 uint64_t RingFile::count() const {

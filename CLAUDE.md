@@ -72,8 +72,10 @@ There is no event-loop library (no libuv, kqueue or epoll). The daemon is:
   process group, rlimits, a timeout and a cancel flag. Every descriptor the
   daemon opens is close-on-exec; `tests/smoke/serve.sh` checks that.
 - **Shared state:** the hot buffer under a mutex; the ring files via
-  `pread`/`pwrite` plus an atomic `write_idx` in the mmap'd header; the hub
-  and the session store under their own mutexes.
+  `pread`/`pwrite` plus the write index, an atomic in `RingFile` (`widx_`)
+  that the writer also copies into the mmap'd header after each `pwrite`
+  (the header's field is not 8-byte aligned: an atomic there is SIGBUS on
+  arm64); the hub and the session store under their own mutexes.
 
 ## Directory structure
 
@@ -148,13 +150,16 @@ together with the smoke scripts, under ThreadSanitizer
 cppcheck, clang-tidy (checks in `.clang-tidy`), the Doxygen reference
 (`--target docs`) and `tests/check_whitespace.sh`, gates line coverage of `core/` and `storage/`
 at 85% (`tests/coverage_report.py`), cross-compiles for FreeBSD 14.4 amd64
-and aarch64 and runs clang-tidy on the FreeBSD side of the code, and on
-FreeBSD 14.2 and 15.0 (clang) builds and tests both the shared (port) and
-the static (release) configuration and runs the smoke scripts on the
-static binary (on 15.0 also on the cross-compiled amd64 one). Everything
+and aarch64, runs clang-tidy on the FreeBSD side of the code and the aarch64
+unit tests and smoke scripts in an emulated arm64 FreeBSD 14.4, and on
+FreeBSD 14.4 and 15.1 (clang; the oldest supported release of each branch)
+builds and tests both the shared (port) and the static (release)
+configuration and runs the smoke scripts on the static binary (on 15.1 also
+on the cross-compiled amd64 one). Everything
 must be green before a merge. Warnings are `-Wall -Wextra -Wshadow -Wconversion -Wsign-conversion`
-on every target; a new implicit sign or width change is a build error in CI
-(GCC and clang both).
+on every target, plus `-Wcast-align=strict` with GCC; a new implicit sign or
+width change, or a cast to a more strictly aligned pointer, is a build error
+in CI.
 
 ## Coding conventions
 
@@ -253,11 +258,13 @@ on every target; a new implicit sign or width change is a build error in CI
    and the dry run are green.
 4. The maintainer creates tag `vx.y.z` on `main` (a tag push only: a
    release made by hand on GitHub first can keep the workflow from adding
-   its files). The tag push builds static tarballs for linux-amd64,
-   freebsd14.2-amd64 and freebsd15.0-amd64 (release and debug) and the
-   Linux .deb and .rpm (installed, run and removed first), checks every
-   `.sha256` in one `sha256sum -c` run, and publishes the release.
-5. Verify the published release: tag → commit, the body, 16 assets, checksums,
+   its files). The tag push builds static tarballs, release and debug, for
+   linux-amd64, freebsd14.4-amd64 and freebsd15.1-amd64 (built in VMs) and
+   freebsd14.4-aarch64 (cross-compiled, smoke-tested in an emulated arm64
+   VM), and the Linux .deb and .rpm (installed, run and removed first),
+   checks every `.sha256` in one `sha256sum -c` run, and publishes the
+   release.
+5. Verify the published release: tag → commit, the body, 20 assets, checksums,
    `file` on every binary, `budyk version`, and the smoke scripts against the
    published Linux binary.
 
