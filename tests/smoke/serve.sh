@@ -34,8 +34,9 @@ cat > "$DIR/rules.lua" <<'EOF'
 n = 0
 watch("tick", { when = function() n = n + 1; return true end, action = "log", message = "tick", cooldown = 2 })
 watch("esc",  { when = function() return n == 3 end, action = function() escalate("L3", 2) end })
-watch("beat", { when = function() return n % 4 == 0 end, severity = "critical",
-                message = "every fourth tick", cooldown = 0 })
+beats = 0
+watch("beat", { when = function() beats = beats + 1; return beats % 2 == 0 end,
+                severity = "critical", message = "every other tick", cooldown = 0 })
 EOF
 
 # The rules file is left group/world-writable on purpose: the daemon
@@ -108,7 +109,7 @@ expect 404 /nope
 # A WebSocket client that reads frames for a while, and one that drops
 # mid-way. The frames carry samples and, from the "beat" rule, alerts
 # (spec §3.6.4: an alert is a WS event).
-python3 - "$PORT" > "$DIR/ws.out" <<'EOF' || { echo "FAIL: websocket client: $(cat "$DIR/ws.out")"; fail=1; }
+python3 - "$PORT" > "$DIR/ws.out" 2>&1 <<'EOF' || { echo "FAIL: websocket client: $(cat "$DIR/ws.out")"; fail=1; }
 import base64, os, socket, sys, time
 port = int(sys.argv[1])
 def connect():
@@ -159,8 +160,8 @@ if '"rule":"beat"' not in alerts[0] or '"severity":"critical"' not in alerts[0]:
 print("ok   the WebSocket carries samples and alert events")
 EOF
 cat "$DIR/ws.out"
-if curl -s "http://127.0.0.1:$PORT/api/alerts" | grep -q '"rule":"beat","message":"every fourth tick"' &&
-   grep -q 'budyk alert: critical beat: every fourth tick' "$DIR/log"; then
+if curl -s "http://127.0.0.1:$PORT/api/alerts" | grep -q '"rule":"beat","message":"every other tick"' &&
+   grep -q 'budyk alert: critical beat: every other tick' "$DIR/log"; then
     echo "ok   alerts are logged and kept for /api/alerts"
 else
     echo "FAIL: no beat alert in /api/alerts or in the log"; fail=1
