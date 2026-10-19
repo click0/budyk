@@ -263,38 +263,38 @@ typedef struct {
      * the collectors. */
     uint32_t         collected;
     uint32_t         baseline;
-    uint32_t         ncores;
+    /* How many of each list this tick has; the 32-bit fields go
+     * together, so the struct is not padded between them. */
+    uint32_t         ncores, ndisks, nifaces, nmounts, nprocs;
+    /* For the rates: entries in disk_prev / iface_prev, in each
+     * proc_track, and in the candidates. */
+    uint32_t         ndisk_prev, niface_prev;
+    uint32_t         nproc_track[2];
+    uint32_t         ntop_cpu, ntop_rss;
+
     budyk_core_c     cores[BUDYK_MAX_CORES];
-    uint32_t         ndisks;
     budyk_disk_dev_c disks[BUDYK_MAX_ENTITIES];
-    uint32_t         nifaces;
     budyk_iface_c    ifaces[BUDYK_MAX_ENTITIES];
-    uint32_t         nmounts;
     budyk_mount_c    mounts[BUDYK_MAX_ENTITIES];
     /* The union of the top BUDYK_TOP_EACH by CPU and by RSS, by CPU
      * then RSS, largest first. */
-    uint32_t         nprocs;
     budyk_process_c  procs[2 * BUDYK_TOP_EACH];
 
     /* Across ticks, for the rates. */
     uint64_t            core_prev[BUDYK_MAX_CORES][7];   /* 6 parts, total */
-    uint8_t             core_has_prev[BUDYK_MAX_CORES];
     budyk_entity_prev_c disk_prev[BUDYK_MAX_ENTITIES];
-    uint32_t            ndisk_prev;
     uint64_t            disk_prev_ns;
     budyk_entity_prev_c iface_prev[BUDYK_MAX_ENTITIES];
-    uint32_t            niface_prev;
     uint64_t            iface_prev_ns;
     /* Processes: the previous read and the one being made, by pid
      * (proc_track[proc_cur] is the previous), and the candidates. */
     budyk_proc_prev_c   proc_track[2][BUDYK_MAX_TRACKED_PROCS];
-    uint32_t            nproc_track[2];
-    uint8_t             proc_cur;
     uint64_t            proc_prev_ns;
     uint64_t            proc_now_ns;
     budyk_process_c     top_cpu[BUDYK_TOP_EACH];
     budyk_process_c     top_rss[BUDYK_TOP_EACH];
-    uint32_t            ntop_cpu, ntop_rss;
+    uint8_t             core_has_prev[BUDYK_MAX_CORES];
+    uint8_t             proc_cur;
 } budyk_detail_c;
 
 /* The process tracker (src/collector/detail.c), driven by the platform

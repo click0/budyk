@@ -16,9 +16,8 @@ size_t utf8_len(const std::string& s, size_t i) {
     unsigned char lo = 0x80, hi = 0xBF;          // the second byte's range
     if      (c >= 0xC2 && c <= 0xDF) n = 2;
     else if (c == 0xE0)              { n = 3; lo = 0xA0; }
-    else if (c >= 0xE1 && c <= 0xEC) n = 3;
     else if (c == 0xED)              { n = 3; hi = 0x9F; }
-    else if (c >= 0xEE && c <= 0xEF) n = 3;
+    else if (c >= 0xE1 && c <= 0xEF) n = 3;              // 0xED taken above
     else if (c == 0xF0)              { n = 4; lo = 0x90; }
     else if (c >= 0xF1 && c <= 0xF3) n = 4;
     else if (c == 0xF4)              { n = 4; hi = 0x8F; }

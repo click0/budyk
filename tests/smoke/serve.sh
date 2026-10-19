@@ -187,9 +187,10 @@ fi
 
 # The top processes: a busy one named with a byte that is not UTF-8 (any
 # user can name a process so) is listed first, its name with U+FFFD, and
-# the JSON, a WebSocket text frame's too, stays valid UTF-8.
+# the JSON, a WebSocket text frame's too, stays valid UTF-8. A copy, not
+# a symlink: FreeBSD names a process after the file it runs.
 BUSY="$DIR/$(printf 'busy\377x')"
-ln -s /bin/sh "$BUSY"
+cp /bin/sh "$BUSY"
 "$BUSY" -c 'while :; do :; done' &
 BUSY_PID=$!
 sleep 1.5
