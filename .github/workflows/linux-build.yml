@@ -30,7 +30,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -78,6 +78,17 @@ jobs:
 
       - name: Run ctest
         run: ctest --test-dir build --output-on-failure
+
+      # The .deb and .rpm of the static binary: installed, run as budyk
+      # (under systemd here) and removed; the .rpm in a Fedora container.
+      - name: Linux packages (deb, rpm)
+        if: matrix.link == 'static'
+        run: |
+          set -ex
+          .github/scripts/apt-install.sh rpm
+          VER=$(build/src/budyk version | cut -d' ' -f2)
+          addons/linux/mkpkg.sh build/src/budyk "$VER" packages
+          sudo addons/linux/test-packages.sh packages "$VER"
 
       - name: Upload test logs on failure
         if: failure()

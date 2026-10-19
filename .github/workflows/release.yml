@@ -83,7 +83,7 @@ jobs:
           set -ex
           .github/scripts/apt-install.sh \
             cmake g++ pkg-config \
-            liblua5.4-dev libyaml-dev libargon2-dev libncurses-dev
+            liblua5.4-dev libyaml-dev libargon2-dev libncurses-dev rpm
 
       - name: Build Release (stripped)
         run: |
@@ -137,6 +137,19 @@ jobs:
           done
           ls -la budyk-*.tar.gz*
 
+      # The .deb and .rpm of the release binary, installed, run and
+      # removed before they go anywhere.
+      - name: Linux packages
+        env:
+          VER: ${{ needs.meta.outputs.version }}
+        run: |
+          set -ex
+          addons/linux/mkpkg.sh build-release/src/budyk "$VER" .
+          for f in budyk_*_amd64.deb budyk-*.x86_64.rpm; do
+            sha256sum "$f" > "$f.sha256"
+          done
+          sudo addons/linux/test-packages.sh . "$VER"
+
       - name: Upload artefacts
         uses: actions/upload-artifact@v4
         with:
@@ -146,6 +159,10 @@ jobs:
             budyk-*-linux-amd64.tar.gz.sha256
             budyk-*-linux-amd64-debug.tar.gz
             budyk-*-linux-amd64-debug.tar.gz.sha256
+            budyk_*_amd64.deb
+            budyk_*_amd64.deb.sha256
+            budyk-*.x86_64.rpm
+            budyk-*.x86_64.rpm.sha256
           if-no-files-found: error
           retention-days: 14
 
@@ -332,4 +349,8 @@ jobs:
           files: |
             dist/*.tar.gz
             dist/*.tar.gz.sha256
+            dist/*.deb
+            dist/*.deb.sha256
+            dist/*.rpm
+            dist/*.rpm.sha256
           fail_on_unmatched_files: true

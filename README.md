@@ -137,6 +137,25 @@ budyk-<version>-freebsd15.0-amd64.tar.gz
 Each archive also has a `-debug` variant with symbols, and a `.sha256`
 checksum file. Unpack it and put `budyk` somewhere in your `PATH`.
 
+### Linux packages
+
+Each release also has a `.deb` (Debian, Ubuntu) and an `.rpm` (Fedora,
+RHEL and alike) of the same static binary:
+
+```sh
+sudo apt install ./budyk_<version>_amd64.deb      # or: sudo dnf install ./budyk-<version>-1.x86_64.rpm
+sudo systemctl enable --now budyk                 # the dashboard on http://127.0.0.1:8080
+```
+
+They install `/usr/bin/budyk`, the config `/etc/budyk/config.yaml` and
+rules `/etc/budyk/rules.lua` (kept on upgrade if you changed them), the
+systemd unit, the man page and the example rules in
+`/usr/share/budyk/rules/`; create the system user `budyk` and the data
+directory `/var/lib/budyk`. The service is not started until you enable
+it. Removing the package stops it; purging (`apt purge`) also deletes
+`/var/lib/budyk` and the config. `addons/linux/mkpkg.sh` builds both from
+a binary of your own.
+
 ### Build from source
 
 Dependencies:
@@ -166,7 +185,8 @@ against shared libraries instead.
 - **FreeBSD:** a port skeleton and an rc.d script are in
   [`addons/freebsd/`](addons/freebsd/). The rc.d script reads
   `budyk_enable`, `budyk_config`, `budyk_user` and `budyk_flags`.
-- **Linux:** a hardened systemd unit is in
+- **Linux:** the packages above install a hardened systemd unit; for a
+  binary installed by hand it is in
   [`addons/linux/budyk.service`](addons/linux/budyk.service).
 - **Docker:** a `Dockerfile` and `docker-compose.yml` are in
   [`addons/docker/`](addons/docker/).
