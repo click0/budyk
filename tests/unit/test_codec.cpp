@@ -71,6 +71,11 @@ static Sample make_sample() {
     s.udp.no_port_per_sec       = 0.5;
     s.udp.in_errors_per_sec     = 0.25;
     s.udp.present               = true;
+    s.icmp.in_msgs_per_sec          = 3.5;
+    s.icmp.out_msgs_per_sec         = 2.25;
+    s.icmp.in_errors_per_sec        = 0.125;
+    s.icmp.in_dest_unreachs_per_sec = 1.0;
+    s.icmp.present                  = true;
     s.fs.count                  = 4;
     s.fs.max_used_percent       = 88.5;
     s.fs.max_inodes_used_percent = 12.0;
@@ -144,6 +149,11 @@ static void assert_samples_equal(const Sample& a, const Sample& b) {
     assert(bitwise_eq(a.udp.no_port_per_sec,       b.udp.no_port_per_sec));
     assert(bitwise_eq(a.udp.in_errors_per_sec,     b.udp.in_errors_per_sec));
     assert(a.udp.present == b.udp.present);
+    assert(bitwise_eq(a.icmp.in_msgs_per_sec,          b.icmp.in_msgs_per_sec));
+    assert(bitwise_eq(a.icmp.out_msgs_per_sec,         b.icmp.out_msgs_per_sec));
+    assert(bitwise_eq(a.icmp.in_errors_per_sec,        b.icmp.in_errors_per_sec));
+    assert(bitwise_eq(a.icmp.in_dest_unreachs_per_sec, b.icmp.in_dest_unreachs_per_sec));
+    assert(a.icmp.present == b.icmp.present);
     assert(a.fs.count == b.fs.count && a.fs.present == b.fs.present);
     assert(bitwise_eq(a.fs.max_used_percent,        b.fs.max_used_percent));
     assert(bitwise_eq(a.fs.max_inodes_used_percent, b.fs.max_inodes_used_percent));
@@ -160,7 +170,7 @@ int main() {
     // 1. Roundtrip — populated struct
     {
         Sample in = make_sample();
-        uint8_t buf[512] = {0};
+        uint8_t buf[1024] = {0};
         size_t  len = 0;
         assert(sample_encode(&in, buf, sizeof(buf), &len) == 0);
         assert(len == enc_size);
@@ -174,7 +184,7 @@ int main() {
     {
         Sample in{};
         in.level = Level::L1;
-        uint8_t buf[512] = {0};
+        uint8_t buf[1024] = {0};
         size_t  len = 0;
         assert(sample_encode(&in, buf, sizeof(buf), &len) == 0);
         Sample out{};
@@ -193,7 +203,7 @@ int main() {
         in.load.avg_1m       = 1e300;
         in.load.avg_5m       = -1e-300;
         in.uptime_seconds    = 0.0;
-        uint8_t buf[512] = {0};
+        uint8_t buf[1024] = {0};
         size_t  len = 0;
         assert(sample_encode(&in, buf, sizeof(buf), &len) == 0);
         Sample out{};
@@ -212,7 +222,7 @@ int main() {
     // 5. Corrupt magic — rejected
     {
         Sample in = make_sample();
-        uint8_t buf[512] = {0};
+        uint8_t buf[1024] = {0};
         size_t len = 0;
         assert(sample_encode(&in, buf, sizeof(buf), &len) == 0);
         buf[0] ^= 0xFF;
@@ -223,7 +233,7 @@ int main() {
     // 6. Unsupported version — rejected
     {
         Sample in = make_sample();
-        uint8_t buf[512] = {0};
+        uint8_t buf[1024] = {0};
         size_t len = 0;
         assert(sample_encode(&in, buf, sizeof(buf), &len) == 0);
         buf[8] = 0xEE; // version byte
@@ -235,7 +245,7 @@ int main() {
     //    (kFirstCustomLevel..kMaxLevelId) decode; 0 and above-max don't.
     {
         Sample in = make_sample();
-        uint8_t buf[512] = {0};
+        uint8_t buf[1024] = {0};
         size_t len = 0;
         assert(sample_encode(&in, buf, sizeof(buf), &len) == 0);
         Sample out{};
@@ -255,7 +265,7 @@ int main() {
     {
         Sample in{};
         in.level = Level::L1;
-        uint8_t buf[512] = {0};
+        uint8_t buf[1024] = {0};
         size_t  len = 0;
         assert(sample_encode(nullptr, buf, sizeof(buf), &len) != 0);
         assert(sample_encode(&in, nullptr, sizeof(buf), &len) != 0);
@@ -269,7 +279,7 @@ int main() {
     // 9. Short buffer on decode — rejected
     {
         Sample in = make_sample();
-        uint8_t buf[512] = {0};
+        uint8_t buf[1024] = {0};
         size_t  len = 0;
         assert(sample_encode(&in, buf, sizeof(buf), &len) == 0);
         Sample out{};
@@ -279,7 +289,7 @@ int main() {
     // 10. Encoding is deterministic — same input ⇒ identical bytes
     {
         Sample in = make_sample();
-        uint8_t a[512] = {0}, b[512] = {0};
+        uint8_t a[1024] = {0}, b[1024] = {0};
         size_t la = 0, lb = 0;
         assert(sample_encode(&in, a, sizeof(a), &la) == 0);
         assert(sample_encode(&in, b, sizeof(b), &lb) == 0);
@@ -334,7 +344,7 @@ int main() {
     //      version=2) decodes successfully; proc + entropy zeroed.
     {
         Sample in = make_sample();
-        uint8_t buf[512] = {0};
+        uint8_t buf[1024] = {0};
         size_t  full = 0;
         assert(sample_encode(&in, buf, sizeof(buf), &full) == 0);
         buf[8] = 2;                            // version 4 → 2
@@ -353,7 +363,7 @@ int main() {
     //      entropy + self zeroed.
     {
         Sample in = make_sample();
-        uint8_t buf[512] = {0};
+        uint8_t buf[1024] = {0};
         size_t  full = 0;
         assert(sample_encode(&in, buf, sizeof(buf), &full) == 0);
         buf[8] = 3;                            // version 5 → 3
@@ -372,7 +382,7 @@ int main() {
     //      self + thermal zeroed.
     {
         Sample in = make_sample();
-        uint8_t buf[512] = {0};
+        uint8_t buf[1024] = {0};
         size_t  full = 0;
         assert(sample_encode(&in, buf, sizeof(buf), &full) == 0);
         buf[8] = 4;                            // version 6 → 4
@@ -391,7 +401,7 @@ int main() {
     //      thermal zeroed.
     {
         Sample in = make_sample();
-        uint8_t buf[512] = {0};
+        uint8_t buf[1024] = {0};
         size_t  full = 0;
         assert(sample_encode(&in, buf, sizeof(buf), &full) == 0);
         buf[8] = 5;                            // version 7 → 5
@@ -408,7 +418,7 @@ int main() {
     //      file_watch zeroed.
     {
         Sample in = make_sample();
-        uint8_t buf[512] = {0};
+        uint8_t buf[1024] = {0};
         size_t  full = 0;
         assert(sample_encode(&in, buf, sizeof(buf), &full) == 0);
         buf[8] = 6;                            // version 8 → 6
@@ -425,16 +435,16 @@ int main() {
     // 11g. v7 backward compat (budyk 0.6) — version=7, length 256. The
     //      v7 fields parsed; what v8 adds is zero, with no present flag,
     //      and groups says what a v7 record carried. One byte short of
-    //      v8 is rejected.
+    //      v9 is rejected.
     {
         Sample in = make_sample();
-        uint8_t buf[512] = {0};
+        uint8_t buf[1024] = {0};
         size_t  full = 0;
         assert(sample_encode(&in, buf, sizeof(buf), &full) == 0);
-        assert(full == 488 && buf[8] == 8);
+        assert(full == 528 && buf[8] == 9);
         Sample out{};
         assert(sample_decode(buf, full - 1, &out) != 0);
-        buf[8] = 7;                            // version 8 → 7
+        buf[8] = 7;                            // version 9 → 7
         constexpr size_t kV7Size = 256;
         out.tcp.present = true;
         out.proc.zombie = 99;
@@ -445,14 +455,37 @@ int main() {
         assert(!out.tcp.present && !out.udp.present && !out.fs.present && !out.clock.present);
         assert(out.tcp.established == 0 && out.fs.max_used_percent == 0.0);
         assert(out.groups == kGroupsV7);
-        buf[8] = 9;                            // a version from the future
+        assert(!out.icmp.present && out.icmp.in_msgs_per_sec == 0.0);
+        buf[8] = 10;                           // a version from the future
         assert(sample_decode(buf, full, &out) != 0);
+    }
+
+    // 11h. v8 backward compat (budyk 0.7) — version=8, length 488: all of
+    //      v8 parsed, the groups as stored; ICMP, which v9 adds, zero
+    //      (and not in groups: v8 never set that bit). One byte short of
+    //      v8 is rejected.
+    {
+        Sample in = make_sample();
+        in.groups = kGroupsAll & ~uint32_t(kGroupIcmp) & ~uint32_t(kGroupThermal);
+        uint8_t buf[1024] = {0};
+        size_t  full = 0;
+        assert(sample_encode(&in, buf, sizeof(buf), &full) == 0);
+        buf[8] = 8;                            // version 9 → 8
+        constexpr size_t kV8Size = 488;
+        Sample out{};
+        out.icmp.present = true;
+        out.icmp.in_msgs_per_sec = 7.0;
+        assert(sample_decode(buf, kV8Size - 1, &out) != 0);
+        assert(sample_decode(buf, kV8Size, &out) == 0);
+        assert(out.groups == in.groups && out.clock.present && out.udp.present);
+        assert(bitwise_eq(out.clock.offset_ms, in.clock.offset_ms));
+        assert(!out.icmp.present && out.icmp.in_msgs_per_sec == 0.0);
     }
 
     // 12. v3 with length that truncates the proc tail — rejected.
     {
         Sample in = make_sample();
-        uint8_t buf[512] = {0};
+        uint8_t buf[1024] = {0};
         size_t  len = 0;
         assert(sample_encode(&in, buf, sizeof(buf), &len) == 0);
         // Feed decode a length that's smaller than the v2 encoded size

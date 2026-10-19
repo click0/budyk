@@ -15,7 +15,7 @@ namespace budyk {
 // Per field (spec §1 leaves the choice open):
 //   mean      cpu.*_percent, mem.available(+_percent),
 //             swap.used(+_percent), load.*, disk.*_bytes_per_sec,
-//             net.*_bytes_per_sec, tcp.*_per_sec, udp.*_per_sec — what
+//             net.*_bytes_per_sec, tcp / udp / icmp.*_per_sec — what
 //             the window looked like on average; byte counts are rounded
 //   max       proc.* (every state, threads), tcp.established,
 //             tcp.time_wait, thermal.max_celsius, self_.rss_bytes,
@@ -54,7 +54,7 @@ public:
     void   reset();
 
 private:
-    static constexpr unsigned kGroupCount = 16;   // MetricGroup bits
+    static constexpr unsigned kGroupCount = 17;   // MetricGroup bits
 
     Level    out_level_;
     size_t   n_;
@@ -77,6 +77,7 @@ private:
     double   cpu_part_sum_[6];      // user, system, iowait, irq, steal, idle
     double   tcp_rate_sum_[6];      // active, passive, retransmits, in, out, errors
     double   udp_rate_sum_[4];      // in, out, no port, errors
+    double   icmp_rate_sum_[4];     // in, out, errors in, unreachable in
 
     // Extremes, sums, flags.
     uint32_t proc_total_max_;
@@ -91,6 +92,7 @@ private:
     ProcessStats proc_max_;
     TcpStats     tcp_;        // established / time_wait max, present
     bool         udp_present_;
+    bool         icmp_present_;
     FsStats      fs_max_;     // the two percentages max, present
     ClockStats   clock_;      // offset (largest |x|), max error, synced, present
 

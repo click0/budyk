@@ -60,6 +60,9 @@ struct ProcessRow {
 // CPU first); names unescaped. Empty if there is none or it is cut off.
 std::vector<ProcessRow> parse_processes(const std::string& body);
 
+// The "hostname" of a /api/health body, unescaped; "" if none.
+std::string health_hostname(const std::string& body);
+
 // One row of GET /api/levels.
 struct LevelInfo {
     int         id          = 0;

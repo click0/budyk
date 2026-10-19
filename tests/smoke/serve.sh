@@ -106,6 +106,12 @@ expect 200 "/api/range?level=burst"
 expect 404 "/api/range?level=nope"
 expect 200 "/api/range?tier=2&since=1&until=99999999999999999999999&limit=0"
 expect 404 /nope
+if curl -s "http://127.0.0.1:$PORT/api/health" |
+   python3 -c 'import json, socket, sys; sys.exit(json.load(sys.stdin)["hostname"] != socket.gethostname())'; then
+    echo "ok   /api/health names the host"
+else
+    echo "FAIL: /api/health has no or another hostname"; fail=1
+fi
 
 # A WebSocket client that reads frames for a while, and one that drops
 # mid-way. The frames carry samples and, from the "beat" rule, alerts

@@ -213,6 +213,10 @@ int main() {
             x.tcp.present         = i != 0;
             x.udp.in_errors_per_sec = i == 0 ? 4.0 : 0.0;  // → 1
             x.udp.present         = true;
+            x.icmp.in_msgs_per_sec   = 10.0 * (i + 1);     // 10..40 → 25
+            x.icmp.out_msgs_per_sec  = 2.0;
+            x.icmp.in_dest_unreachs_per_sec = i == 3 ? 8.0 : 0.0;   // → 2
+            x.icmp.present        = i == 1;
             x.fs.count            = uint32_t(3 + i);
             x.fs.max_used_percent = i == 2 ? 97.0 : 50.0;
             x.fs.max_inodes_used_percent = 20.0 + i;
@@ -232,6 +236,8 @@ int main() {
         assert(out.tcp.established == 40 && out.tcp.time_wait == 30);
         assert(near(out.tcp.retransmits_per_sec, 1.5) && out.tcp.present);
         assert(near(out.udp.in_errors_per_sec, 4.0 / 3.0) && out.udp.present);
+        assert(near(out.icmp.in_msgs_per_sec, 25.0) && near(out.icmp.out_msgs_per_sec, 2.0));
+        assert(near(out.icmp.in_dest_unreachs_per_sec, 2.0) && out.icmp.present);
         assert(out.fs.count == 6 && near(out.fs.max_used_percent, 97.0));
         assert(near(out.fs.max_inodes_used_percent, 23.0) && out.fs.present);
         assert(out.clock.present && out.clock.synced);

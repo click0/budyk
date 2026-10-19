@@ -415,7 +415,36 @@ int main() {
 
         fx.file("net/snmp", "Ip: Forwarding\nIp: 1\n");   // no Tcp/Udp lines
         assert(budyk_collect_netstat_linux(&ctx, &s) != 0);
-        assert(!s.tcp.present && !s.udp.present);
+        assert(!s.tcp.present && !s.udp.present && !s.icmp.present);
+    }
+
+    // 7h2. ICMP from the "Icmp:" pair, not "IcmpMsg:" (whose columns
+    //      differ); by name, rates over the elapsed time.
+    {
+        Fixture fx;
+        auto snmp = [&](unsigned in, unsigned out, unsigned err, unsigned unr) {
+            char buf[1024];
+            std::snprintf(buf, sizeof(buf),
+                "Icmp: InMsgs InErrors InCsumErrors InDestUnreachs OutMsgs OutErrors\n"
+                "Icmp: %u %u 0 %u %u 0\n"
+                "IcmpMsg: InType3 OutType3 InMsgs\n"
+                "IcmpMsg: 7 9 999999\n", in, err, unr, out);
+            fx.file("net/snmp", buf);
+        };
+        budyk_linux_set_proc_root(fx.root.c_str());
+        budyk_netstat_ctx_c ctx;
+        std::memset(&ctx, 0, sizeof(ctx));
+        budyk_sample_c s;
+        std::memset(&s, 0, sizeof(s));
+        snmp(100, 50, 2, 10);
+        s.timestamp_nanos = 1'000'000'000ULL;
+        assert(budyk_collect_netstat_linux(&ctx, &s) == 0);   // ICMP alone is enough
+        assert(s.icmp.present && !s.tcp.present && s.icmp.in_msgs_per_sec == 0.0);
+        snmp(140, 70, 6, 30);
+        s.timestamp_nanos = 3'000'000'000ULL;                  // 2 s later
+        assert(budyk_collect_netstat_linux(&ctx, &s) == 0);
+        assert(near(s.icmp.in_msgs_per_sec, 20.0) && near(s.icmp.out_msgs_per_sec, 10.0));
+        assert(near(s.icmp.in_errors_per_sec, 2.0) && near(s.icmp.in_dest_unreachs_per_sec, 10.0));
     }
 
     // 7i. TCP / UDP and clock sync on this host.

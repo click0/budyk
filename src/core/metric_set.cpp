@@ -31,6 +31,7 @@ constexpr Name kGroupNames[] = {
     { "udp",        kGroupUdp },
     { "fs",         kGroupFs },
     { "clock",      kGroupClock },
+    { "icmp",       kGroupIcmp },
 };
 
 // Each collection and the group it comes with.

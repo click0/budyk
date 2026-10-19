@@ -84,7 +84,8 @@ HttpHandler make_router(const RouterDeps& d) {
             budyk::HttpResponse r;
             r.status       = 200;
             r.content_type = "application/json";
-            r.body         = std::string("{\"status\":\"ok\",\"version\":\"") + d.version + "\"}\n";
+            r.body         = std::string("{\"status\":\"ok\",\"version\":\"") + d.version +
+                             "\",\"hostname\":\"" + budyk::json_escape(d.hostname) + "\"}\n";
             return r;
         }
 

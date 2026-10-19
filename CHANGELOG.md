@@ -9,7 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **The top processes, live** (the last gap in spec §2.1's table): the
+- **ICMP** (spec §2.1, "TCP/UDP/ICMP counters"): messages in and out,
+  errors in and destination unreachable received, per second, over
+  IPv4 (Linux: the `Icmp:` pair of `/proc/net/snmp`; FreeBSD:
+  `net.inet.icmp.stats`). A new group `icmp`, read with TCP and UDP, in
+  the rings, the API, the rules, the dashboard and the TUI; folded
+  records average it.
+- **The host's name** (spec §2.1): `/api/health` gives `"hostname"`, and
+  the dashboard and the TUI show it in their title.
+- **The top processes, live** (spec §2.1): the
   10 that use the most CPU and the 10 largest by memory, each once,
   busiest first, with pid, name, state, threads, CPU % (of one CPU over
   the last interval) and RSS. Linux reads utime + stime from
@@ -43,6 +51,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keep working.
 
 ### Changed
+
+- **Records grow to 542 bytes (codec v9)** for ICMP. A ring of 0.7
+  (502-byte records) or 0.6 (270) is converted when the daemon starts,
+  as on the 0.7 upgrade; `tests/smoke/upgrade.sh` now runs against the
+  0.7.0 release too. A 0.7 daemon does not open the converted rings.
 
 - **`cooldown` defaults to `for_ticks`** (spec §3.6.4): a rule that keeps
   holding fires once, stays quiet as long as it took to fire, then may

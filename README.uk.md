@@ -96,7 +96,7 @@ budyk serve (один процес на сервер)
 
 - **Метрики:** CPU (з розбивкою user / system / iowait / irq / steal),
   пам'ять, swap, середнє навантаження, дисковий I/O, мережа, процеси за
-  станами, TCP і UDP, заповнення файлових систем (місце та inode),
+  станами, TCP, UDP і ICMP, заповнення файлових систем (місце та inode),
   синхронізація годинника, ентропія, температура, аптайм, а також власні
   CPU та RSS budyk; у реальному часі — кожне ядро, диск, інтерфейс,
   файлова система й найактивніші процеси за CPU та за пам'яттю.
@@ -294,7 +294,7 @@ collection:
 | Набір | Що в ньому |
 |-------|------------|
 | `minimal` | `cpu`, `mem`, `swap`, `load`, `uptime` |
-| `standard` | усі групи: наведені вище і `disk`, `net`, `proc`, `entropy`, `self`, `thermal`, `tcp`, `udp`, `fs`, `clock` |
+| `standard` | усі групи: наведені вище і `disk`, `net`, `proc`, `entropy`, `self`, `thermal`, `tcp`, `udp`, `icmp`, `fs`, `clock` |
 | `full` | `standard` і списки окремих об'єктів `cpu.cores`, `disk.devices`, `net.interfaces`, `fs.mounts`, `proc.top` |
 
 У списку можна називати набори, групи й списки. Кожен набір містить
@@ -419,6 +419,7 @@ watch("swap_under_load", {
 | `thermal` | `max_celsius`, `sensor_count`, `present` |
 | `tcp` | `established`, `time_wait`, `active_opens_per_sec`, `passive_opens_per_sec`, `retransmits_per_sec`, `in_segments_per_sec`, `out_segments_per_sec`, `in_errors_per_sec`, `present` |
 | `udp` | `in_datagrams_per_sec`, `out_datagrams_per_sec`, `no_port_per_sec`, `in_errors_per_sec`, `present` |
+| `icmp` | `in_msgs_per_sec`, `out_msgs_per_sec`, `in_errors_per_sec`, `in_dest_unreachs_per_sec`, `present` (ICMP поверх IPv4) |
 | `fs` | `count`, `max_used_percent`, `max_inodes_used_percent`, `present` |
 | `clock` | `offset_ms`, `max_error_ms`, `synced`, `present` |
 | `self_` | `rss_bytes`, `peak_rss_bytes`, `cpu_user_seconds`, `cpu_system_seconds` |
@@ -537,7 +538,7 @@ disk_full: ...`), надходить на відкриті панелі (там 
 
 | Метод | Шлях | Вхід | Повертає |
 |-------|------|------|----------|
-| `GET` | `/api/health` | ні | статус, версія |
+| `GET` | `/api/health` | ні | статус, версія, ім'я хоста |
 | `POST` | `/api/auth/login` | ні | тіло `{"password": "..."}`; встановлює cookie `budyk_session` |
 | `POST` | `/api/auth/logout` | ні | завершує сесію |
 | `GET` | `/api/samples` | так | останні вибірки з буфера в пам'яті |

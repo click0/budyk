@@ -67,6 +67,9 @@ int main() {
         s.tcp.present              = true;
         s.udp.no_port_per_sec      = 0.25;
         s.udp.present              = true;
+        s.icmp.in_msgs_per_sec     = 12.5;
+        s.icmp.in_dest_unreachs_per_sec = 0.5;
+        s.icmp.present             = true;
         s.fs.count                 = 3;
         s.fs.max_used_percent      = 91.5;
         s.fs.present               = true;
@@ -92,6 +95,9 @@ int main() {
         assert(contains(j, "\"tcp\":{\"established\":42,\"time_wait\":0,"));
         assert(contains(j, "\"retransmits_per_sec\":1.5,"));
         assert(contains(j, "\"udp\":{") && contains(j, "\"no_port_per_sec\":0.25,"));
+        assert(contains(j, "\"icmp\":{\"in_msgs_per_sec\":12.5,\"out_msgs_per_sec\":0,"
+                           "\"in_errors_per_sec\":0,\"in_dest_unreachs_per_sec\":0.5,"
+                           "\"present\":true},"));
         assert(contains(j, "\"fs\":{\"count\":3,\"max_used_percent\":91.5,"));
         assert(contains(j, "\"clock\":{\"offset_ms\":-0.75,\"max_error_ms\":0,"
                            "\"synced\":true,\"present\":true}"));

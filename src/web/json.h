@@ -24,7 +24,7 @@ namespace budyk {
 // the groups the sample has: those its level collected), baseline (when
 // not empty: those read for the first time, a rate from the next tick), cpu, mem, swap,
 // load, disk, net, proc, entropy, self, thermal, file_watch, tcp, udp,
-// fs, clock, uptime_seconds. No trailing newline.
+// icmp, fs, clock, uptime_seconds. No trailing newline.
 std::string sample_to_json(const Sample& s);
 
 // The per-entity detail of the newest sample: {"collected":[...],

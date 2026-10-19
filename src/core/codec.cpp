@@ -18,7 +18,8 @@ constexpr uint32_t kVersionV5    = 5;
 constexpr uint32_t kVersionV6    = 6;
 constexpr uint32_t kVersionV7    = 7;
 constexpr uint32_t kVersionV8    = 8;
-constexpr uint32_t kVersionWrite = kVersionV8;
+constexpr uint32_t kVersionV9    = 9;
+constexpr uint32_t kVersionWrite = kVersionV9;
 
 // v1 layout (unchanged — still decoded for records written before the bump).
 constexpr size_t kEncodedSizeV1 =
@@ -76,9 +77,14 @@ constexpr size_t kEncodedSizeV8 =
     + 2 * 8 + 1 + 1 + 6         // clock: offset, max error, synced, present
     + 4 + 4;                    // groups
 
+// v9 appends ICMP: 4 rates, present (40 bytes).
+constexpr size_t kEncodedSizeV9 =
+      kEncodedSizeV8
+    + 4 * 8 + 1 + 7;
+
 constexpr size_t kMinSize[] = {
     0, kEncodedSizeV1, kEncodedSizeV2, kEncodedSizeV3, kEncodedSizeV4,
-    kEncodedSizeV5, kEncodedSizeV6, kEncodedSizeV7, kEncodedSizeV8,
+    kEncodedSizeV5, kEncodedSizeV6, kEncodedSizeV7, kEncodedSizeV8, kEncodedSizeV9,
 };
 
 inline void put_u8 (uint8_t*& p, uint8_t  v)         { *p++ = v; }
@@ -95,11 +101,11 @@ inline void     skip   (const uint8_t*& p, size_t n) { p += n; }
 
 } // namespace
 
-size_t sample_max_encoded_size() { return kEncodedSizeV8; }
+size_t sample_max_encoded_size() { return kEncodedSizeV9; }
 
 int sample_encode(const Sample* s, void* buf, size_t cap, size_t* out_len) {
     if (s == nullptr || buf == nullptr || out_len == nullptr) return -1;
-    if (cap < kEncodedSizeV8) return -2;
+    if (cap < kEncodedSizeV9) return -2;
 
     auto* p = static_cast<uint8_t*>(buf);
     std::memcpy(p, kMagic, 8); p += 8;
@@ -214,7 +220,14 @@ int sample_encode(const Sample* s, void* buf, size_t cap, size_t* out_len) {
     put_u32(p, s->groups);
     put_pad(p, 4);
 
-    *out_len = kEncodedSizeV8;
+    put_f64(p, s->icmp.in_msgs_per_sec);
+    put_f64(p, s->icmp.out_msgs_per_sec);
+    put_f64(p, s->icmp.in_errors_per_sec);
+    put_f64(p, s->icmp.in_dest_unreachs_per_sec);
+    put_u8 (p, s->icmp.present ? 1 : 0);
+    put_pad(p, 7);
+
+    *out_len = kEncodedSizeV9;
     return 0;
 }
 
@@ -227,7 +240,7 @@ int sample_decode(const void* buf, size_t len, Sample* out) {
     p += 8;
 
     uint32_t version = get_u32(p);
-    if (version < kVersionV1 || version > kVersionV8) return -4;
+    if (version < kVersionV1 || version > kVersionV9) return -4;
     if (len < kMinSize[version])                       return -2;
     (void)get_u32(p);
 
@@ -326,6 +339,7 @@ int sample_decode(const void* buf, size_t len, Sample* out) {
     out->proc.zombie   = out->proc.threads = 0;
     out->cpu.user_percent = out->cpu.system_percent = out->cpu.iowait_percent = 0.0;
     out->cpu.irq_percent  = out->cpu.steal_percent  = out->cpu.idle_percent   = 0.0;
+    out->icmp = IcmpStats{};
     if (version < kVersionV8) {
         // Before v8 every group up to file_watch was always collected.
         out->groups = kGroupsV7;
@@ -377,6 +391,14 @@ int sample_decode(const void* buf, size_t len, Sample* out) {
 
     out->groups = get_u32(p);
     skip(p, 4);
+
+    if (version < kVersionV9) return 0;    // no ICMP before v9; groups says so
+    out->icmp.in_msgs_per_sec          = get_f64(p);
+    out->icmp.out_msgs_per_sec         = get_f64(p);
+    out->icmp.in_errors_per_sec        = get_f64(p);
+    out->icmp.in_dest_unreachs_per_sec = get_f64(p);
+    out->icmp.present                  = (get_u8(p) != 0);
+    skip(p, 7);
     return 0;
 }
 

@@ -13,8 +13,9 @@ void collect_one(Sample* s, CollectContext* ctx, const MetricSet& set) {
     if ((lists & kDetailInterfaces) != 0) want |= kGroupNet;
     if ((lists & kDetailMounts)     != 0) want |= kGroupFs;
     if ((lists & kDetailProcesses)  != 0) want |= kGroupProc;
-    // tcp and udp come from one read.
-    if ((want & (kGroupTcp | kGroupUdp)) != 0) want |= kGroupTcp | kGroupUdp;
+    // tcp, udp and icmp come from one read.
+    constexpr uint32_t kNetstat = kGroupTcp | kGroupUdp | kGroupIcmp;
+    if ((want & kNetstat) != 0) want |= kNetstat;
 
     budyk_detail_c* d = ctx->detail.get();
     d->ncores = d->ndisks = d->nifaces = d->nmounts = d->nprocs = 0;
@@ -109,6 +110,11 @@ void collect_one(Sample* s, CollectContext* ctx, const MetricSet& set) {
     s->udp.no_port_per_sec       = c.udp.no_port_per_sec;
     s->udp.in_errors_per_sec     = c.udp.in_errors_per_sec;
     s->udp.present               = (c.udp.present != 0);
+    s->icmp.in_msgs_per_sec          = c.icmp.in_msgs_per_sec;
+    s->icmp.out_msgs_per_sec         = c.icmp.out_msgs_per_sec;
+    s->icmp.in_errors_per_sec        = c.icmp.in_errors_per_sec;
+    s->icmp.in_dest_unreachs_per_sec = c.icmp.in_dest_unreachs_per_sec;
+    s->icmp.present                  = (c.icmp.present != 0);
     s->fs.count                   = c.fs.count;
     s->fs.max_used_percent        = c.fs.max_used_percent;
     s->fs.max_inodes_used_percent = c.fs.max_inodes_used_percent;
@@ -119,7 +125,7 @@ void collect_one(Sample* s, CollectContext* ctx, const MetricSet& set) {
     s->clock.present      = (c.clock.present != 0);
     s->uptime_seconds         = c.uptime_seconds;
 
-    constexpr uint32_t kRateGroups = kGroupCpu | kGroupDisk | kGroupNet | kGroupTcp | kGroupUdp;
+    constexpr uint32_t kRateGroups = kGroupCpu | kGroupDisk | kGroupNet | kNetstat;
     constexpr uint32_t kRateLists  = kDetailCores | kDetailDisks | kDetailInterfaces |
                                      kDetailProcesses;
     const uint32_t have       = want & ~(kRateGroups & ~ctx->last_groups);

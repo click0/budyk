@@ -97,6 +97,7 @@ h1 .host { color: var(--muted); margin-left: .6rem; font-weight: 400; }
     <div class="row" data-group="proc"><span class="label">Processes</span><span class="muted" id="proc">--</span>        <span class="value">&nbsp;</span></div>
     <div class="row" id="tcpRow" data-group="tcp"><span class="label">TCP</span><span class="muted" id="tcp">--</span> <span class="value">&nbsp;</span></div>
     <div class="row" id="udpRow" data-group="udp"><span class="label">UDP</span><span class="muted" id="udp">--</span> <span class="value">&nbsp;</span></div>
+    <div class="row" id="icmpRow" data-group="icmp"><span class="label">ICMP</span><span class="muted" id="icmp">--</span> <span class="value">&nbsp;</span></div>
     <div class="row" id="fsRow" data-group="fs"><span class="label">Filesystems</span><div class="bar"><i id="fsBar"></i></div> <span class="value" id="fs">--</span></div>
     <div class="row" id="clockRow" data-group="clock"><span class="label">Clock</span><span class="muted" id="clock">--</span> <span class="value">&nbsp;</span></div>
     <div class="row" id="entropyRow" data-group="entropy"><span class="label">Entropy</span><span class="muted" id="entropy">--</span> <span class="value">&nbsp;</span></div>
@@ -251,6 +252,12 @@ function render(s) {
     $("udp").textContent =
       `in ${rate(s.udp.in_datagrams_per_sec)}   out ${rate(s.udp.out_datagrams_per_sec)}   ` +
       `no port ${rate(s.udp.no_port_per_sec)}   errors ${rate(s.udp.in_errors_per_sec)}`;
+  }
+  show("icmpRow", s.icmp?.present);
+  if (s.icmp?.present) {
+    $("icmp").textContent =
+      `in ${rate(s.icmp.in_msgs_per_sec)}   out ${rate(s.icmp.out_msgs_per_sec)}   ` +
+      `errors ${rate(s.icmp.in_errors_per_sec)}   unreachable ${rate(s.icmp.in_dest_unreachs_per_sec)}`;
   }
   show("fsRow", s.fs?.present);
   if (s.fs?.present) {
@@ -680,6 +687,15 @@ function openWs() {
 
 async function start() {
   $("host").textContent = location.host;
+  // The host's own name, from /api/health (no login needed).
+  try {
+    const hr = await fetch("/api/health");
+    const name = hr.ok ? (await hr.json()).hostname : "";
+    if (name) {
+      $("host").textContent = `${name} · ${location.host}`;
+      document.title = `${name} — budyk`;
+    }
+  } catch (_) {}
   // Probe auth via /api/samples so the path also covers token expiry.
   const r = await fetch("/api/samples", { credentials: "same-origin" });
   if (r.status === 401) return showLogin();
