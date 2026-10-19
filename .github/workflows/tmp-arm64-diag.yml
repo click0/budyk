@@ -1,0 +1,66 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Temporary: why the cross-compiled aarch64 daemon does not start on an
+# emulated arm64 FreeBSD 14.4. Removed before the merge.
+name: tmp arm64 diag
+
+on:
+  push:
+    branches: [claude/review-coding-plan-DmHiG]
+    paths: ['.github/workflows/tmp-arm64-diag.yml']
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cross-compile with the tests
+        run: |
+          set -ex
+          .github/scripts/apt-install.sh cmake clang lld llvm zstd
+          cmake/toolchains/freebsd-sysroot.sh 14.4 aarch64 "$RUNNER_TEMP/sysroot"
+          cmake -B "$RUNNER_TEMP/b" --toolchain cmake/toolchains/freebsd-aarch64.cmake \
+            -DFREEBSD_SYSROOT="$RUNNER_TEMP/sysroot" -DBUILD_TESTS=ON
+          cmake --build "$RUNNER_TEMP/b" -j"$(nproc)"
+          mkdir arm
+          cp "$RUNNER_TEMP/b/src/budyk" arm/
+          cp "$RUNNER_TEMP"/b/tests/test_* arm/
+          ls arm
+
+      - name: Run on FreeBSD arm64
+        uses: cross-platform-actions/action@v1.6.0
+        timeout-minutes: 50
+        with:
+          operating_system: freebsd
+          architecture: arm64
+          version: '14.4'
+          shell: sh
+          memory: 4G
+          cpu_count: 3
+          run: |
+            set +e
+            uname -a
+            sysctl hw.model hw.machine_arch hw.ncpu
+            d=$(mktemp -d)
+            printf 'data_dir: %s/data\nlisten: 127.0.0.1\nport: 18999\n' "$d" > "$d/config.yaml"
+            timeout 60 ./arm/budyk serve --config "$d/config.yaml" > "$d/log" 2>&1
+            echo "serve exited with $?"
+            cat "$d/log"
+            ls -la "$d/data"
+            dmesg | tail -5
+            d=$(mktemp -d)
+            printf 'data_dir: %s/data\nlisten: 127.0.0.1\nport: 18999\n' "$d" > "$d/config.yaml"
+            timeout 60 truss -f -o "$d/truss" ./arm/budyk serve --config "$d/config.yaml" > "$d/log" 2>&1
+            echo "under truss: $?"
+            tail -60 "$d/truss"
+            for t in arm/test_*; do
+              case "$t" in
+                */test_rule_files) a=rules ;;
+                */test_rule_perf) a=0 ;;
+                *) a= ;;
+              esac
+              timeout 120 "$t" $a > /tmp/t.log 2>&1
+              rc=$?
+              if [ "$rc" -eq 0 ]; then echo "ok   $t"; else echo "FAIL $t ($rc)"; tail -5 /tmp/t.log; fi
+            done
