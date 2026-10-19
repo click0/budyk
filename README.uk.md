@@ -141,6 +141,26 @@ budyk-<версія>-freebsd15.0-amd64.tar.gz
 файл контрольної суми `.sha256`. Розпакуйте архів і покладіть `budyk` у
 каталог із вашого `PATH`.
 
+### Пакети для Linux
+
+До кожного релізу додаються також `.deb` (Debian, Ubuntu) і `.rpm`
+(Fedora, RHEL тощо) з тим самим статичним бінарним файлом:
+
+```sh
+sudo apt install ./budyk_<версія>_amd64.deb       # або: sudo dnf install ./budyk-<версія>-1.x86_64.rpm
+sudo systemctl enable --now budyk                 # панель на http://127.0.0.1:8080
+```
+
+Пакет встановлює `/usr/bin/budyk`, конфігурацію `/etc/budyk/config.yaml`
+і правила `/etc/budyk/rules.lua` (якщо ви їх змінили, оновлення їх не
+перезапише), systemd-юніт, man-сторінку і приклади правил у
+`/usr/share/budyk/rules/`; створює системного користувача `budyk` і
+каталог даних `/var/lib/budyk`. Служба не запускається, доки ви її не
+ввімкнете. Видалення пакета зупиняє службу; повне видалення
+(`apt purge`) стирає ще й `/var/lib/budyk` і конфігурацію.
+`addons/linux/mkpkg.sh` збирає обидва пакети з вашого власного бінарного
+файлу.
+
 ### Збирання з вихідного коду
 
 Залежності:
@@ -170,7 +190,8 @@ cmake --install build      # бінарник, приклад конфігура
 - **FreeBSD:** заготовка порту та rc.d-скрипт лежать у
   [`addons/freebsd/`](addons/freebsd/). rc.d-скрипт читає змінні
   `budyk_enable`, `budyk_config`, `budyk_user` і `budyk_flags`.
-- **Linux:** захищений systemd-юніт лежить у
+- **Linux:** пакети вище встановлюють захищений systemd-юніт; для
+  бінарного файлу, встановленого вручну, він лежить у
   [`addons/linux/budyk.service`](addons/linux/budyk.service).
 - **Docker:** `Dockerfile` і `docker-compose.yml` лежать у
   [`addons/docker/`](addons/docker/).

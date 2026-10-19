@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Linux packages** (spec M9): a `.deb` and an `.rpm` of the static
+  binary in every release, built by `addons/linux/mkpkg.sh`. They install
+  `/usr/bin/budyk`, `/etc/budyk/config.yaml` and `rules.lua` (conffiles,
+  Linux paths: data in `/var/lib/budyk`), the systemd unit, the man page
+  and the example rules; create the system user `budyk`; leave the
+  service to `systemctl enable --now budyk`. CI installs both (the .rpm
+  in a Fedora container), runs the daemon as `budyk`, under systemd for
+  the .deb, and removes and purges them (`addons/linux/test-packages.sh`);
+  the release job does the same before publishing. A release now has 16
+  files.
 - **ICMP** (spec §2.1, "TCP/UDP/ICMP counters"): messages in and out,
   errors in and destination unreachable received, per second, over
   IPv4 (Linux: the `Icmp:` pair of `/proc/net/snmp`; FreeBSD:

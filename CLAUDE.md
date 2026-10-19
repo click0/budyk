@@ -111,7 +111,8 @@ tests/smoke/       — serve.sh (HTTP, WS, SIGHUP, fd check), crash.sh (SIGKILL 
                      fsck.sh (fsck, recovery after a crash, the data_dir lock),
                      upgrade.sh (rings of an older release converted on start),
                      modes.sh (per-level metric sets, always / on-demand)
-addons/            — FreeBSD port + rc.d, systemd unit, Docker
+addons/            — FreeBSD port + rc.d, systemd unit, Docker; the .deb and
+                     .rpm (addons/linux/mkpkg.sh, test-packages.sh)
 docs/              — spec (en/uk), man page
 ```
 
@@ -133,7 +134,8 @@ tests/smoke/modes.sh build/src/budyk     # metric sets per level, always / on-de
 tests/check_whitespace.sh                # trailing blanks, tabs, CR, final newline
 ```
 
-CI (see `.github/workflows/linux-build.yml`) adds `-DENABLE_WERROR=ON`, runs
+CI (see `.github/workflows/linux-build.yml`) adds `-DENABLE_WERROR=ON`, builds
+and tests the .deb and .rpm (`addons/linux/test-packages.sh`), runs
 the tests under ASan + UBSan (`-DSTATIC_LINK=OFF -DENABLE_SANITIZERS=ON`)
 together with the smoke scripts, under ThreadSanitizer
 (`-DSTATIC_LINK=OFF -DENABLE_TSAN=ON`) with the serve smoke test, runs
@@ -231,11 +233,13 @@ on every target; a new implicit sign or width change is a build error in CI
 3. Open the PR; start a `release.yml` dry run (`workflow_dispatch` from the
    branch — it builds everything and skips publish); merge when all checks
    and the dry run are green.
-4. The maintainer creates tag `vx.y.z` on `main`. The tag push builds static
-   tarballs for linux-amd64, freebsd14.2-amd64 and freebsd15.0-amd64 (release
-   and debug), checks every `.sha256` in one `sha256sum -c` run, and
-   publishes the release.
-5. Verify the published release: tag → commit, the body, 12 assets, checksums,
+4. The maintainer creates tag `vx.y.z` on `main` (a tag push only: a
+   release made by hand on GitHub first can keep the workflow from adding
+   its files). The tag push builds static tarballs for linux-amd64,
+   freebsd14.2-amd64 and freebsd15.0-amd64 (release and debug) and the
+   Linux .deb and .rpm (installed, run and removed first), checks every
+   `.sha256` in one `sha256sum -c` run, and publishes the release.
+5. Verify the published release: tag → commit, the body, 16 assets, checksums,
    `file` on every binary, `budyk version`, and the smoke scripts against the
    published Linux binary.
 
@@ -243,7 +247,7 @@ on every target; a new implicit sign or width change is a build error in CI
 
 - The per-entity detail (cores, disks, interfaces, filesystems, top
   processes) is live only: not in the rings, so not in the history.
-- No Doxygen, no deb/rpm, no cross-compilation toolchains, FreeBSD 13 not in CI.
+- No Doxygen, no cross-compilation toolchains, FreeBSD 13 not in CI.
 
 ### Kept on purpose for later milestones (do not remove as dead code)
 
