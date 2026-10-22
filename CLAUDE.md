@@ -114,7 +114,10 @@ tests/smoke/       — serve.sh (HTTP, WS, SIGHUP, fd check), crash.sh (SIGKILL 
                      upgrade.sh (rings of an older release converted on start),
                      modes.sh (per-level metric sets, always / on-demand),
                      resources.sh (spec §5 items 2-6: RSS, CPU, disk, L1 -> L3,
-                     catch-up, binary size; release builds only)
+                     catch-up, binary size; release builds only),
+                     crosscheck.sh (the readings against free, swapinfo, uptime,
+                     ps, ss / netstat, df, /sys or ifconfig and kern.disks, a
+                     busy loop and a 64 MB write)
 addons/            — FreeBSD port + rc.d, systemd unit, Docker; the .deb and
                      .rpm (addons/linux/mkpkg.sh, test-packages.sh)
 cmake/toolchains/  — cross-compiling for FreeBSD on Linux: freebsd-sysroot.sh
@@ -139,6 +142,7 @@ tests/smoke/fsck.sh build/src/budyk      # fsck, start-up recovery, the data_dir
 tests/smoke/upgrade.sh build/src/budyk OLD/budyk  # rings of an older release converted
 tests/smoke/modes.sh build/src/budyk     # metric sets per level, always / on-demand
 tests/smoke/resources.sh build/src/budyk # spec §5 figures (a release build; ~2 min)
+tests/smoke/crosscheck.sh build/src/budyk  # the readings against the system's own tools
 tests/check_whitespace.sh                # trailing blanks, tabs, CR, final newline
 cmake --build build --target docs        # API reference (Doxygen), any warning fails it
 cmake/toolchains/freebsd-sysroot.sh 14.4 amd64 SYSROOT   # then, on Linux:

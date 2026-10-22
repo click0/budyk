@@ -19,6 +19,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The readings are checked against the system's own tools**
+  (`tests/smoke/crosscheck.sh`, spec M2 / M3), in CI on Linux (ASan,
+  coverage), FreeBSD 14.4 and 15.1 and the emulated FreeBSD arm64: CPUs
+  and per-core entries; memory and swap (`free -b`; `vm.stats.vm` and
+  `swapinfo -k`); load and uptime; processes and threads (`ps -A`); TCP
+  established (`ss`; `netstat -an`); each filesystem's size and use
+  (`df -P -k`); the interfaces (`/sys/class/net`; `ifconfig -l`) and
+  whole disks (`/sys/block`; `kern.disks`); a busy loop near 100 % of
+  one CPU in the top processes and in the CPU total; a 64 MB fsync'ed
+  write seen in the disk write rates.
 - **The resource figures of spec §5 are tested**
   (`tests/smoke/resources.sh`, in CI on the Linux static build and on
   FreeBSD 14.4 and 15.1): idle for 60 s, RSS at most 10 MB, CPU at most

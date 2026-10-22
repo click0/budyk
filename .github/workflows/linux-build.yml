@@ -200,6 +200,7 @@ jobs:
             tests/smoke/escalate.sh arm/budyk
             tests/smoke/fsck.sh arm/budyk
             tests/smoke/modes.sh arm/budyk
+            tests/smoke/crosscheck.sh arm/budyk
 
       # The static-analysis job leaves out the FreeBSD collectors and sees
       # only the Linux side of every #ifdef; with the sysroot's headers,
@@ -289,6 +290,12 @@ jobs:
           ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
         run: tests/smoke/modes.sh build/src/budyk
+
+      - name: The readings against the system's own tools
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: tests/smoke/crosscheck.sh build/src/budyk
 
       # Rings written by the v0.6.4 release (270-byte records) must be
       # converted when this build starts on them. The release binary is
@@ -455,6 +462,7 @@ jobs:
           tests/smoke/escalate.sh build/src/budyk
           tests/smoke/fsck.sh build/src/budyk
           tests/smoke/modes.sh build/src/budyk
+          tests/smoke/crosscheck.sh build/src/budyk
 
       - name: Coverage report (core/ and storage/ >= 85%)
         run: |
