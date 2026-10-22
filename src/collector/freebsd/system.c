@@ -54,8 +54,9 @@ int budyk_collect_load_freebsd(budyk_sample_c* s) {
     return 0;
 }
 
-/* Processes by state via a single walk of kern.proc.all (one
- * kinfo_proc per process): SRUN running; SSLEEP, SWAIT (waiting for an
+/* Processes by state via a single walk of kern.proc.proc (one
+ * kinfo_proc per process; kern.proc.all has one per thread, as ps -H
+ * shows them): SRUN running; SSLEEP, SWAIT (waiting for an
  * interrupt) and SIDL (being created) sleeping; SLOCK blocked on a lock;
  * SSTOP stopped; SZOMB zombie. ki_numthreads sums to the thread count.
  *
@@ -96,12 +97,12 @@ int budyk_collect_proc_freebsd_ex(budyk_sample_c* s, budyk_detail_c* d) {
     size_t bytes = 0;
     for (int attempt = 0; attempt < 2; ++attempt) {
         bytes = 0;
-        if (sysctlbyname("kern.proc.all", NULL, &bytes, NULL, 0) != 0) return -errno;
+        if (sysctlbyname("kern.proc.proc", NULL, &bytes, NULL, 0) != 0) return -errno;
         if (bytes == 0) return 0;
         bytes += bytes / 8;
         procs = (struct kinfo_proc*)malloc(bytes);
         if (procs == NULL) return -ENOMEM;
-        if (sysctlbyname("kern.proc.all", procs, &bytes, NULL, 0) == 0) break;
+        if (sysctlbyname("kern.proc.proc", procs, &bytes, NULL, 0) == 0) break;
         const int e = errno;
         free(procs);
         procs = NULL;

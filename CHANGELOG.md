@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **FreeBSD process counts.** `proc.total` counted threads and
+  `proc.threads` grew as the square of each process's thread count: the
+  collector walked `kern.proc.all`, which has an entry per thread, and
+  summed every entry's `ki_numthreads`. On a FreeBSD 14.4 VM that was
+  105 processes and 1561 threads where `ps` shows 42 and 106, and a
+  multi-threaded process reached the top-process tracker once per
+  thread. It now walks `kern.proc.proc`, one entry per process, as `ps`
+  without `-H` does. Found by the new cross-check below.
 - **Disk and network totals on a busy host.** The total read, write,
   receive and transmit rates were computed as delta x 1e9 / ns in 64
   bits, which overflows once an interval moves more than 18.4 GB: at the
@@ -19,6 +27,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The readings are checked against the system's own tools**
+  (`tests/smoke/crosscheck.sh`, spec M2 / M3), in CI on Linux (ASan,
+  coverage), FreeBSD 14.4 and 15.1 and the emulated FreeBSD arm64: CPUs
+  and per-core entries; memory and swap (`free -b`; `vm.stats.vm` and
+  `swapinfo -k`); load and uptime; processes and threads (`ps -A`); TCP
+  established (`ss`; `netstat -an`); each filesystem's size and use
+  (`df -P -k`); the interfaces (`/sys/class/net`; `ifconfig -l`) and
+  whole disks (`/sys/block`; `kern.disks`); a busy loop near 100 % of
+  one CPU in the top processes and in the CPU total; a 64 MB fsync'ed
+  write seen in the disk write rates.
 - **The resource figures of spec §5 are tested**
   (`tests/smoke/resources.sh`, in CI on the Linux static build and on
   FreeBSD 14.4 and 15.1): idle for 60 s, RSS at most 10 MB, CPU at most
