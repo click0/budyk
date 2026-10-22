@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1] — 2026-10-22
+
+Two fixes in the readings, found by two new tests that hold budyk to
+the spec. On FreeBSD the process count was the thread count and the
+thread count its square (105 and 1561 where `ps` shows 42 and 106). On
+a busy host the total disk and network rates were wrong once an
+interval moved more than 18.4 GB, which at the 5-minute heartbeat is
+61 MB/s. CI now compares every reading with the system's own tools
+(`free`, `swapinfo`, `ps`, `df`, `ss` / `netstat`, ...) on Linux and
+FreeBSD amd64 and arm64, and checks the spec's resource figures: on a
+CI runner the release build uses 3.5 to 4.5 MB of memory and 0.1 % of a
+CPU with a dashboard open. The record format does not change: the rings
+of 0.8.0 are used as they are.
+
 ### Fixed
 
 - **FreeBSD process counts.** `proc.total` counted threads and
@@ -864,6 +878,7 @@ it turned up two untested storage paths, which are now covered.
   opened, and init with the original size works again. tier_manager.cpp
   coverage went from 84.3% to 94.4%.
 
+[0.8.1]: https://github.com/click0/budyk/releases/tag/v0.8.1
 [0.8.0]: https://github.com/click0/budyk/releases/tag/v0.8.0
 [0.7.0]: https://github.com/click0/budyk/releases/tag/v0.7.0
 [0.6.5]: https://github.com/click0/budyk/releases/tag/v0.6.5
