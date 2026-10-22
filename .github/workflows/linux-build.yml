@@ -10,6 +10,9 @@ name: Linux Build
 # Packages come from .github/scripts/apt-install.sh, which puts a time
 # limit and three attempts on apt-get update and install: a mirror that
 # stops answering otherwise holds the job until its timeout-minutes.
+# CMake is the runner image's (/usr/local/bin, 3.31), not Ubuntu's: the
+# job always ran that one, and the 11 MB .deb is what a slow mirror
+# stalled on (every apt failure of 2026-10-22).
 
 on:
   push:
@@ -47,7 +50,7 @@ jobs:
         run: |
           set -ex
           .github/scripts/apt-install.sh \
-            cmake g++ pkg-config \
+            g++ pkg-config \
             liblua5.4-dev libyaml-dev libargon2-dev libncurses-dev
           cmake --version | head -1
           g++ --version | head -1
@@ -126,7 +129,7 @@ jobs:
       - name: Install toolchain
         run: |
           set -ex
-          .github/scripts/apt-install.sh cmake clang lld llvm zstd
+          .github/scripts/apt-install.sh clang lld llvm zstd
           clang --version | head -1
 
       - name: Sysroot (base.txz and packages, checksums and signature checked)
@@ -234,7 +237,7 @@ jobs:
         run: |
           set -ex
           .github/scripts/apt-install.sh \
-            cmake g++ pkg-config python3 curl \
+            g++ pkg-config python3 curl \
             liblua5.4-dev libyaml-dev libargon2-dev libncurses-dev
 
       - name: Configure
@@ -341,7 +344,7 @@ jobs:
         run: |
           set -ex
           .github/scripts/apt-install.sh \
-            cmake g++ pkg-config python3 curl \
+            g++ pkg-config python3 curl \
             liblua5.4-dev libyaml-dev libargon2-dev libncurses-dev
 
       - name: Configure
@@ -384,7 +387,7 @@ jobs:
         run: |
           set -ex
           .github/scripts/apt-install.sh \
-            cmake g++ pkg-config cppcheck clang-tidy \
+            g++ pkg-config cppcheck clang-tidy \
             liblua5.4-dev libyaml-dev libargon2-dev libncurses-dev
           cppcheck --version
           clang-tidy --version | head -2
@@ -436,7 +439,7 @@ jobs:
         run: |
           set -ex
           .github/scripts/apt-install.sh \
-            cmake g++ pkg-config python3 curl lcov \
+            g++ pkg-config python3 curl lcov \
             liblua5.4-dev libyaml-dev libargon2-dev libncurses-dev
 
       - name: Configure

@@ -130,7 +130,7 @@ jobs:
         run: |
           set -ex
           .github/scripts/apt-install.sh \
-            cmake g++ pkg-config \
+            g++ pkg-config \
             liblua5.4-dev libyaml-dev libargon2-dev libncurses-dev rpm
 
       - name: Build Release (stripped)
@@ -342,7 +342,7 @@ jobs:
       - name: Install toolchain
         run: |
           set -ex
-          .github/scripts/apt-install.sh cmake clang lld llvm zstd
+          .github/scripts/apt-install.sh clang lld llvm zstd
           clang --version | head -1
 
       - name: Sysroot (base.txz and packages, checksums and signature checked)

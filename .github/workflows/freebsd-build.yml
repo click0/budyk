@@ -53,7 +53,7 @@ jobs:
         if: matrix.freebsd-version == '15.1'
         run: |
           set -ex
-          .github/scripts/apt-install.sh cmake clang lld llvm
+          .github/scripts/apt-install.sh clang lld llvm
           cmake/toolchains/freebsd-sysroot.sh 14.4 amd64 "$RUNNER_TEMP/sysroot"
           cmake -B "$RUNNER_TEMP/build-cross" \
             --toolchain cmake/toolchains/freebsd-amd64.cmake \
