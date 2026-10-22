@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Disk and network totals on a busy host.** The total read, write,
+  receive and transmit rates were computed as delta x 1e9 / ns in 64
+  bits, which overflows once an interval moves more than 18.4 GB: at the
+  5-minute L1 heartbeat that is 61 MB/s, so a busy server showed a wrong,
+  much smaller rate. They are now computed in double, as the
+  per-device rates already were (`budyk_rate_u64()`), on Linux and
+  FreeBSD.
+
 ### Added
 
 - **The resource figures of spec §5 are tested**

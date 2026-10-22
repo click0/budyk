@@ -120,8 +120,8 @@ int budyk_collect_disk_linux_ex(budyk_disk_ctx_c* ctx, budyk_sample_c* s, budyk_
             memset(dev, 0, sizeof(*dev));
             snprintf(dev->name, sizeof(dev->name), "%.31s", name);
             if (p != NULL && ddns > 0) {
-                dev->read_bytes_per_sec  = (uint64_t)budyk_rate(now[0], &p->c[0], ddns);
-                dev->write_bytes_per_sec = (uint64_t)budyk_rate(now[1], &p->c[1], ddns);
+                dev->read_bytes_per_sec  = budyk_rate_u64(now[0], &p->c[0], ddns);
+                dev->write_bytes_per_sec = budyk_rate_u64(now[1], &p->c[1], ddns);
                 dev->reads_per_sec       = budyk_rate(now[2], &p->c[2], ddns);
                 dev->writes_per_sec      = budyk_rate(now[3], &p->c[3], ddns);
                 /* io_ticks is in ms: ms per s / 10 = percent */
@@ -142,17 +142,12 @@ int budyk_collect_disk_linux_ex(budyk_disk_ctx_c* ctx, budyk_sample_c* s, budyk_
         s->disk.read_bytes_per_sec  = 0;
         s->disk.write_bytes_per_sec = 0;
     } else {
-        uint64_t dr_sec = read_sectors  >= ctx->prev_read_sectors
-                        ? read_sectors  - ctx->prev_read_sectors  : 0;
-        uint64_t dw_sec = write_sectors >= ctx->prev_write_sectors
-                        ? write_sectors - ctx->prev_write_sectors : 0;
-        uint64_t dns    = s->timestamp_nanos - ctx->prev_ns;
-        /* bytes_per_sec = sectors * 512 * 1e9 / ns — compute in 128-bit
-         * space on platforms that have it, otherwise use 64-bit division
-         * which is accurate enough for real-world workloads.
-         */
-        s->disk.read_bytes_per_sec  = (dr_sec * 512ULL * 1000000000ULL) / dns;
-        s->disk.write_bytes_per_sec = (dw_sec * 512ULL * 1000000000ULL) / dns;
+        /* Sectors of 512 bytes; a counter that went back reads 0. */
+        const uint64_t dns = s->timestamp_nanos - ctx->prev_ns;
+        const uint64_t prev_read  = ctx->prev_read_sectors  * 512ULL;
+        const uint64_t prev_write = ctx->prev_write_sectors * 512ULL;
+        s->disk.read_bytes_per_sec  = budyk_rate_u64(read_sectors  * 512ULL, &prev_read,  dns);
+        s->disk.write_bytes_per_sec = budyk_rate_u64(write_sectors * 512ULL, &prev_write, dns);
     }
 
     if (d != NULL) {

@@ -133,6 +133,20 @@ int main() {
     }
 #endif
 
+    // 8. The byte rates in double: 60 GB in a 5-minute L1 interval is
+    //    200 MB/s (delta x 1e9 in 64 bits overflowed above 18.4 GB); a
+    //    counter that went back, no interval or no previous read is 0;
+    //    the most a rate can be is UINT64_MAX.
+    {
+        const uint64_t prev = 0, big = UINT64_MAX;
+        assert(budyk_rate_u64(60000000000ULL, &prev, 300000000000ULL) == 200000000ULL);
+        const uint64_t later = 70000000000ULL;
+        assert(budyk_rate_u64(60000000000ULL, &later, 300000000000ULL) == 0);
+        assert(budyk_rate_u64(60000000000ULL, &prev, 0) == 0);
+        assert(budyk_rate_u64(60000000000ULL, nullptr, 1) == 0);
+        assert(budyk_rate_u64(big, &prev, 1) == UINT64_MAX);
+    }
+
     std::printf("test_collect: PASS\n");
     return 0;
 }
