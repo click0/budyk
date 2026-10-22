@@ -81,8 +81,8 @@ int budyk_collect_disk_freebsd_ex(budyk_disk_ctx_c* ctx, budyk_sample_c* s, budy
             memset(dev, 0, sizeof(*dev));
             snprintf(dev->name, sizeof(dev->name), "%s", name);
             if (p != NULL && ddns > 0) {
-                dev->read_bytes_per_sec  = (uint64_t)budyk_rate(now[0], &p->c[0], ddns);
-                dev->write_bytes_per_sec = (uint64_t)budyk_rate(now[1], &p->c[1], ddns);
+                dev->read_bytes_per_sec  = budyk_rate_u64(now[0], &p->c[0], ddns);
+                dev->write_bytes_per_sec = budyk_rate_u64(now[1], &p->c[1], ddns);
                 dev->reads_per_sec       = budyk_rate(now[2], &p->c[2], ddns);
                 dev->writes_per_sec      = budyk_rate(now[3], &p->c[3], ddns);
                 /* microseconds busy per second / 10^4 = percent */
@@ -118,14 +118,10 @@ int budyk_collect_disk_freebsd_ex(budyk_disk_ctx_c* ctx, budyk_sample_c* s, budy
         if (dt_ns > 0) {
             /* Counters can roll on hot-unplug → reattach. Skip the
              * delta on a backwards step rather than emit a giant rate. */
-            if (total_read  >= ctx->prev_read_sectors) {
-                s->disk.read_bytes_per_sec =
-                    (total_read - ctx->prev_read_sectors) * 1000000000ULL / dt_ns;
-            }
-            if (total_write >= ctx->prev_write_sectors) {
-                s->disk.write_bytes_per_sec =
-                    (total_write - ctx->prev_write_sectors) * 1000000000ULL / dt_ns;
-            }
+            s->disk.read_bytes_per_sec  =
+                budyk_rate_u64(total_read,  &ctx->prev_read_sectors,  dt_ns);
+            s->disk.write_bytes_per_sec =
+                budyk_rate_u64(total_write, &ctx->prev_write_sectors, dt_ns);
         }
     }
 

@@ -67,8 +67,8 @@ int budyk_collect_network_freebsd_ex(budyk_net_ctx_c* ctx, budyk_sample_c* s, bu
             snprintf(ifc->name, sizeof(ifc->name), "%.31s", ifa->ifa_name);
             ifc->up = (uint8_t)((ifa->ifa_flags & IFF_UP) != 0);
             if (p != NULL && ddns > 0) {
-                ifc->rx_bytes_per_sec   = (uint64_t)budyk_rate(now[0], &p->c[0], ddns);
-                ifc->tx_bytes_per_sec   = (uint64_t)budyk_rate(now[1], &p->c[1], ddns);
+                ifc->rx_bytes_per_sec   = budyk_rate_u64(now[0], &p->c[0], ddns);
+                ifc->tx_bytes_per_sec   = budyk_rate_u64(now[1], &p->c[1], ddns);
                 ifc->rx_packets_per_sec = budyk_rate(now[2], &p->c[2], ddns);
                 ifc->tx_packets_per_sec = budyk_rate(now[3], &p->c[3], ddns);
                 ifc->rx_errors_per_sec  = budyk_rate(now[4], &p->c[4], ddns);
@@ -94,13 +94,9 @@ int budyk_collect_network_freebsd_ex(budyk_net_ctx_c* ctx, budyk_sample_c* s, bu
         s->net.rx_bytes_per_sec = 0;
         s->net.tx_bytes_per_sec = 0;
     } else {
-        uint64_t drx = rx_bytes >= ctx->prev_rx_bytes
-                     ? rx_bytes - ctx->prev_rx_bytes : 0;
-        uint64_t dtx = tx_bytes >= ctx->prev_tx_bytes
-                     ? tx_bytes - ctx->prev_tx_bytes : 0;
-        uint64_t dns = s->timestamp_nanos - ctx->prev_ns;
-        s->net.rx_bytes_per_sec = (drx * 1000000000ULL) / dns;
-        s->net.tx_bytes_per_sec = (dtx * 1000000000ULL) / dns;
+        const uint64_t dns = s->timestamp_nanos - ctx->prev_ns;
+        s->net.rx_bytes_per_sec = budyk_rate_u64(rx_bytes, &ctx->prev_rx_bytes, dns);
+        s->net.tx_bytes_per_sec = budyk_rate_u64(tx_bytes, &ctx->prev_tx_bytes, dns);
     }
 
     ctx->prev_rx_bytes = rx_bytes;

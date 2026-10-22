@@ -696,6 +696,44 @@ int main() {
         budyk_linux_set_proc_root(nullptr);
     }
 
+    // 8c2. The totals of a busy host over an L1 interval of 5 minutes:
+    //      60 GB written and 30 GB received are 200 MB/s and 100 MB/s
+    //      (delta x 1e9 in 64 bits overflowed above 18.4 GB), and the
+    //      per-device rates agree.
+    {
+        Fixture fx;
+        std::unique_ptr<budyk_detail_c> d(new budyk_detail_c());
+        budyk_linux_set_proc_root(fx.root.c_str());
+        auto files = [&](unsigned long long wsect, unsigned long long rx) {
+            char buf[512];
+            std::snprintf(buf, sizeof(buf), "   8       0 sda 1 0 8 0 1 0 %llu 0 0 1 0\n", wsect);
+            fx.file("diskstats", buf);
+            std::snprintf(buf, sizeof(buf),
+                "Inter-|   Receive  |  Transmit\n face |bytes packets errs drop fifo frame compressed multicast|bytes packets errs drop fifo colls carrier compressed\n"
+                "  eth0: %llu 10 0 0 0 0 0 0 1000 20 0 0 0 0 0 0\n", rx);
+            fx.file("net/dev", buf);
+        };
+        budyk_disk_ctx_c dctx;
+        budyk_net_ctx_c nctx;
+        std::memset(&dctx, 0, sizeof(dctx));
+        std::memset(&nctx, 0, sizeof(nctx));
+        budyk_sample_c s;
+        std::memset(&s, 0, sizeof(s));
+        s.timestamp_nanos = 1'000'000'000ULL;
+        files(0, 0);
+        assert(budyk_collect_disk_linux_ex(&dctx, &s, d.get()) == 0);
+        assert(budyk_collect_network_linux_ex(&nctx, &s, d.get()) == 0);
+        s.timestamp_nanos = 301'000'000'000ULL;                        // 300 s later
+        files(60000000000ULL / 512, 30000000000ULL);
+        assert(budyk_collect_disk_linux_ex(&dctx, &s, d.get()) == 0);
+        assert(budyk_collect_network_linux_ex(&nctx, &s, d.get()) == 0);
+        assert(s.disk.write_bytes_per_sec == 200000000ULL);
+        assert(d->disks[0].write_bytes_per_sec == 200000000ULL);
+        assert(s.net.rx_bytes_per_sec == 100000000ULL && s.net.tx_bytes_per_sec == 0);
+        assert(d->ifaces[0].rx_bytes_per_sec == 100000000ULL);
+        budyk_linux_set_proc_root(nullptr);
+    }
+
     // 8d. Filesystems with detail on this host: one entry per counted
     //     filesystem, with sizes that add up.
     {

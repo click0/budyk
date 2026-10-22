@@ -19,6 +19,11 @@ double budyk_rate(uint64_t now, const uint64_t* prev, uint64_t dns) {
     return (double)(now - *prev) * 1.0e9 / (double)dns;
 }
 
+uint64_t budyk_rate_u64(uint64_t now, const uint64_t* prev, uint64_t dns) {
+    const double r = budyk_rate(now, prev, dns);
+    return r >= 18446744073709551615.0 ? UINT64_MAX : (uint64_t)r;
+}
+
 /* --- The process tracker ------------------------------------------------ */
 
 void budyk_procs_begin(budyk_detail_c* d, uint64_t now_ns) {

@@ -325,6 +325,10 @@ const budyk_entity_prev_c* budyk_find_prev(const budyk_entity_prev_c* prev, uint
 /** Per-second rate of a cumulative counter between two reads `dns` apart;
  * 0 when there is no previous read or the counter went backwards. */
 double budyk_rate(uint64_t now, const uint64_t* prev, uint64_t dns);
+/** The same, whole, for the byte rates: computed in double, since
+ * delta x 1e9 overflows 64 bits above 18.4 GB per interval (61 MB/s over
+ * an L1 interval of 5 minutes); UINT64_MAX at most. */
+uint64_t budyk_rate_u64(uint64_t now, const uint64_t* prev, uint64_t dns);
 
 int budyk_collect_cpu_linux(budyk_cpu_ctx_c* ctx, budyk_sample_c* s);
 /// The same, filling d->cores too when d is not NULL (the _ex collectors
