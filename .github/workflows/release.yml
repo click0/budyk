@@ -1,8 +1,17 @@
 name: Release binaries
 
 # Builds release tarballs for Linux (x86_64), FreeBSD amd64 (14.4, 15.1) and
-# FreeBSD aarch64 (14.4, cross-compiled) when a semver tag is pushed, or on
-# manual workflow_dispatch.
+# FreeBSD aarch64 (14.4, cross-compiled), and publishes them as a release:
+#
+#   * a vX.Y.Z tag pushed: the release of that tag;
+#   * Run workflow on main with `tag` vX.Y.Z: the workflow checks that
+#     CMakeLists.txt and CHANGELOG.md are at that version, builds, and
+#     publishes the release, creating the tag on the commit it built;
+#   * Run workflow without `tag` (any branch, or `ref`): a dry run that
+#     builds and checks everything and publishes nothing.
+#
+# A release made by hand on GitHub first cannot be completed by the
+# workflow (its token may not update it), hence the `tag` input.
 #
 # Two variants per platform:
 #   budyk-<version>-<platform>.tar.gz          Release, stripped (distribution).
@@ -28,7 +37,11 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: 'Git ref to build (branch, tag, sha)'
+        description: 'Git ref to build (branch, tag, sha); a dry run'
+        required: false
+        default: ''
+      tag:
+        description: 'Publish as release vX.Y.Z (run on main, ref empty); empty = dry run'
         required: false
         default: ''
 
@@ -41,30 +54,64 @@ permissions:
 
 jobs:
   # ----------------------------------------------------------------------
-  # 1. Compute version string used in tarball names.
+  # 1. The version in the tarball names, and whether to publish: a tag
+  #    push or the `tag` input, checked against CMakeLists.txt and
+  #    CHANGELOG.md before anything is built.
   # ----------------------------------------------------------------------
   meta:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.v.outputs.version }}
-      is_tag:  ${{ steps.v.outputs.is_tag }}
+      publish: ${{ steps.v.outputs.publish }}
+      tag:     ${{ steps.v.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref }}
       - id: v
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_REF: ${{ inputs.ref }}
         run: |
-          set -ex
+          set -eu
+          SRC=$(sed -nE 's/.*project\(budyk VERSION ([0-9.]+).*/\1/p' CMakeLists.txt | head -1)
+          TAG=
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            VER="${GITHUB_REF_NAME#v}"
-            echo "is_tag=true" >> "$GITHUB_OUTPUT"
-          else
-            VER=$(sed -nE 's/.*project\(budyk VERSION ([0-9.]+).*/\1/p' CMakeLists.txt | head -1)
-            VER="${VER}-${GITHUB_SHA::8}"
-            echo "is_tag=false" >> "$GITHUB_OUTPUT"
+            TAG="${GITHUB_REF_NAME}"
+          elif [ -n "${INPUT_TAG}" ]; then
+            TAG="${INPUT_TAG}"
+            # A release is cut from main as it is: not from a branch or a ref.
+            if [ "${GITHUB_REF}" != "refs/heads/main" ] || [ -n "${INPUT_REF}" ]; then
+              echo "::error::tag ${TAG}: run the workflow on main, with ref empty"
+              exit 1
+            fi
+            if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" > /dev/null; then
+              echo "::error::tag ${TAG} exists already"
+              exit 1
+            fi
           fi
+          if [ -n "${TAG}" ]; then
+            if ! echo "${TAG}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+              echo "::error::tag '${TAG}' is not vX.Y.Z"
+              exit 1
+            fi
+            VER="${TAG#v}"
+            if [ "${SRC}" != "${VER}" ]; then
+              echo "::error::tag ${TAG}, but CMakeLists.txt says ${SRC}"
+              exit 1
+            fi
+            if ! grep -q "^## \[${VER}\]" CHANGELOG.md; then
+              echo "::error::CHANGELOG.md has no '## [${VER}]' section"
+              exit 1
+            fi
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            VER="${SRC}-${GITHUB_SHA::8}"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${VER}" >> "$GITHUB_OUTPUT"
-          echo "Resolved version: ${VER}"
+          echo "Resolved version: ${VER}${TAG:+ (publishing ${TAG})}"
 
   # ----------------------------------------------------------------------
   # 2. Linux x86_64 build — Release + RelWithDebInfo.
@@ -410,11 +457,12 @@ jobs:
           sha256sum -c ./*.sha256
 
   # ----------------------------------------------------------------------
-  # 6. Publish to GitHub Release when triggered by a tag push.
+  # 6. Publish the GitHub Release: a tag push, or the `tag` input (the
+  #    release then creates the tag, on the commit that was built).
   # ----------------------------------------------------------------------
   publish:
     needs: [meta, linux, freebsd, freebsd-aarch64, checksums]
-    if: needs.meta.outputs.is_tag == 'true'
+    if: needs.meta.outputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -453,8 +501,9 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
-          name: budyk ${{ github.ref_name }}
+          tag_name: ${{ needs.meta.outputs.tag }}
+          name: budyk ${{ needs.meta.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           draft: false
           prerelease: false
           generate_release_notes: true

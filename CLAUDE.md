@@ -265,9 +265,12 @@ in CI.
 3. Open the PR; start a `release.yml` dry run (`workflow_dispatch` from the
    branch — it builds everything and skips publish); merge when all checks
    and the dry run are green.
-4. The maintainer creates tag `vx.y.z` on `main` (a tag push only: a
-   release made by hand on GitHub first can keep the workflow from adding
-   its files). The tag push builds static tarballs, release and debug, for
+4. The maintainer publishes: **Actions → Release binaries → Run workflow**
+   on `main` with `tag` = `vx.y.z` (the workflow checks CMakeLists.txt and
+   CHANGELOG.md, builds, and creates the tag and the release itself), or a
+   push of tag `vx.y.z` on `main`. Never a release made by hand on GitHub
+   first: the workflow's token may not update it, so its files are never
+   attached (v0.6.5). Either way the run builds static tarballs, release and debug, for
    linux-amd64, freebsd14.4-amd64 and freebsd15.1-amd64 (built in VMs) and
    freebsd14.4-aarch64 (cross-compiled, smoke-tested in an emulated arm64
    VM), and the Linux .deb and .rpm (installed, run and removed first),
