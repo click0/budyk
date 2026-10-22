@@ -128,6 +128,7 @@ jobs:
             tests/smoke/escalate.sh build-static/src/budyk
             tests/smoke/fsck.sh build-static/src/budyk
             tests/smoke/modes.sh build-static/src/budyk
+            tests/smoke/resources.sh build-static/src/budyk
             echo "::endgroup::"
 
             if [ -e budyk-cross ]; then

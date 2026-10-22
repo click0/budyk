@@ -79,6 +79,12 @@ jobs:
       - name: Run ctest
         run: ctest --test-dir build --output-on-failure
 
+      # Spec §5 items 2-6 on the release configuration: RSS, CPU and disk
+      # idle and with a client, L1 -> L3, catch-up, the binary's size.
+      - name: Resource figures (spec §5)
+        if: matrix.link == 'static'
+        run: tests/smoke/resources.sh build/src/budyk
+
       # The .deb and .rpm of the static binary: installed, run as budyk
       # (under systemd here) and removed; the .rpm in a Fedora container.
       - name: Linux packages (deb, rpm)

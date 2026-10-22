@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The resource figures of spec §5 are tested**
+  (`tests/smoke/resources.sh`, in CI on the Linux static build and on
+  FreeBSD 14.4 and 15.1): idle for 60 s, RSS at most 10 MB, CPU at most
+  0.5 % of one CPU, under 1 KB a minute to disk; with one client at L3
+  for 30 s, RSS at most 25 MB and CPU at most 1 %; the first L3 sample
+  within 2 s of the connect; the catch-up of a full hot buffer (300
+  records) within 100 ms; the stripped static amd64 binary at most 5 MB.
+  The release build on a CI runner: 3.5 MB idle, 0.13 % at L3, L3 after
+  4 ms, the catch-up in 11 ms, 3.4 MB on disk.
+
 ## [0.8.0] — 2026-10-19
 
 Rules work as spec §3.6 describes: `cooldown` defaults to `for_ticks`,
