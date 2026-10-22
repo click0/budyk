@@ -112,7 +112,9 @@ tests/smoke/       — serve.sh (HTTP, WS, SIGHUP, fd check), crash.sh (SIGKILL 
                      escalate.sh (a sustained anomaly escalates L2 to L3),
                      fsck.sh (fsck, recovery after a crash, the data_dir lock),
                      upgrade.sh (rings of an older release converted on start),
-                     modes.sh (per-level metric sets, always / on-demand)
+                     modes.sh (per-level metric sets, always / on-demand),
+                     resources.sh (spec §5 items 2-6: RSS, CPU, disk, L1 -> L3,
+                     catch-up, binary size; release builds only)
 addons/            — FreeBSD port + rc.d, systemd unit, Docker; the .deb and
                      .rpm (addons/linux/mkpkg.sh, test-packages.sh)
 cmake/toolchains/  — cross-compiling for FreeBSD on Linux: freebsd-sysroot.sh
@@ -136,6 +138,7 @@ tests/smoke/escalate.sh build/src/budyk  # daemon: a sustained anomaly escalates
 tests/smoke/fsck.sh build/src/budyk      # fsck, start-up recovery, the data_dir lock
 tests/smoke/upgrade.sh build/src/budyk OLD/budyk  # rings of an older release converted
 tests/smoke/modes.sh build/src/budyk     # metric sets per level, always / on-demand
+tests/smoke/resources.sh build/src/budyk # spec §5 figures (a release build; ~2 min)
 tests/check_whitespace.sh                # trailing blanks, tabs, CR, final newline
 cmake --build build --target docs        # API reference (Doxygen), any warning fails it
 cmake/toolchains/freebsd-sysroot.sh 14.4 amd64 SYSROOT   # then, on Linux:
@@ -143,7 +146,9 @@ cmake -B build-fbsd --toolchain cmake/toolchains/freebsd-amd64.cmake -DFREEBSD_S
 ```
 
 CI (see `.github/workflows/linux-build.yml`) adds `-DENABLE_WERROR=ON`, builds
-and tests the .deb and .rpm (`addons/linux/test-packages.sh`), runs
+and tests the .deb and .rpm (`addons/linux/test-packages.sh`), holds the
+static builds (Linux, FreeBSD 14.4 and 15.1) to the spec's resource figures
+(`tests/smoke/resources.sh`), runs
 the tests under ASan + UBSan (`-DSTATIC_LINK=OFF -DENABLE_SANITIZERS=ON`)
 together with the smoke scripts, under ThreadSanitizer
 (`-DSTATIC_LINK=OFF -DENABLE_TSAN=ON`) with the serve smoke test, runs

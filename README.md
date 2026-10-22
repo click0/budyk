@@ -29,6 +29,14 @@ threshold clears. All intervals and thresholds are set in the config,
 and you can add your own levels (see [Custom levels](#custom-levels)).
 On a quiet host budyk mostly sleeps.
 
+CI holds it to the figures of the spec on every change
+(`tests/smoke/resources.sh`): idle, at most 10 MB of memory, about no
+CPU and under 1 KB a minute to disk; with a dashboard open at 1 Hz, at
+most 25 MB and 1 % of one CPU; L3 within 2 s of a client connecting,
+and its 300-record catch-up within 100 ms. The static amd64 binary is
+under 5 MB stripped. On a CI runner the release build uses about
+3.5 MB and 0.1 % of a CPU at L3.
+
 ## How it works
 
 budyk has no central server. Each server runs its own `budyk serve`,
