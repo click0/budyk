@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **A release can be published from Actions** (`release.yml`): Run
+  workflow on `main` with `tag` = `vX.Y.Z` checks that `CMakeLists.txt`
+  and `CHANGELOG.md` are at that version and the tag is new, builds
+  everything, and publishes the release, creating the tag on the commit
+  it built. No tag needs to be pushed by hand, and no release made by
+  hand first (which the workflow cannot complete). A tag push still
+  works, and is now checked against `CMakeLists.txt` too.
+
 ## [0.8.1] — 2026-10-22
 
 Two fixes in the readings, found by two new tests that hold budyk to
