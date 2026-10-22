@@ -16,7 +16,11 @@
 
 #include <ctime>
 #include <memory>
+#include <vector>
 
+#include <sys/types.h>
+#include <sys/sysctl.h>
+#include <sys/user.h>
 #include <unistd.h>
 
 namespace {
@@ -155,9 +159,8 @@ int main() {
         assert(budyk_collect_proc_freebsd   (nullptr) != 0);
     }
 
-    // 8. Process count — kern.proc.all size-only query. Total > 0 on
-    //    any running host (pid 1 + the test binary). `running` stays
-    //    Both populated via a single kern.proc.all walk now —
+    // 8. Process count — one kern.proc.proc walk. Total > 0 on any
+    //    running host (pid 1 + the test binary).
     //    `running` counts entries with ki_stat == SRUN. We *can't*
     //    assert running > 0 because at the nanosecond of the sysctl
     //    every process might be sleeping; the bound is the useful one.
@@ -173,6 +176,37 @@ int main() {
                s.proc.zombie <= s.proc.total);
         assert(s.proc.sleeping > 0);              // init sleeps
         assert(s.proc.threads >= s.proc.total);
+    }
+
+    // 8a. The counts are per process: the total against kern.proc.proc
+    //     read here (kern.proc.all has an entry per thread, and the
+    //     kernel alone has dozens), the threads against the sum of its
+    //     ki_numthreads (summed over per-thread entries they grew as the
+    //     square); each pid once among the top processes.
+    {
+        size_t len = 0;
+        assert(sysctlbyname("kern.proc.proc", nullptr, &len, nullptr, 0) == 0);
+        std::vector<struct kinfo_proc> procs(len / sizeof(struct kinfo_proc) + 32);
+        len = procs.size() * sizeof(struct kinfo_proc);
+        assert(sysctlbyname("kern.proc.proc", procs.data(), &len, nullptr, 0) == 0);
+        const uint64_t n = len / sizeof(struct kinfo_proc);
+        uint64_t threads = 0;
+        for (uint64_t i = 0; i < n; ++i) threads += static_cast<uint64_t>(procs[i].ki_numthreads);
+
+        std::unique_ptr<budyk_detail_c> d(new budyk_detail_c());
+        budyk_sample_c s;
+        std::memset(&s, 0, sizeof(s));
+        s.timestamp_nanos = now_ns();
+        assert(budyk_collect_proc_freebsd_ex(&s, d.get()) == 0);
+        const auto apart = [](uint64_t a, uint64_t b) { return a > b ? a - b : b - a; };
+        std::printf("test_freebsd_collector: %u processes, %u threads (kern.proc.proc: %llu, %llu)\n",
+                    s.proc.total, s.proc.threads,
+                    static_cast<unsigned long long>(n), static_cast<unsigned long long>(threads));
+        assert(apart(s.proc.total, n) <= 3 + n / 50);
+        assert(apart(s.proc.threads, threads) <= 10 + threads / 50);
+        for (uint32_t i = 0; i < d->nprocs; ++i) {
+            for (uint32_t j = i + 1; j < d->nprocs; ++j) assert(d->procs[i].pid != d->procs[j].pid);
+        }
     }
 
     // 9. Entropy — FreeBSD has no /proc/sys/kernel/random/entropy_avail

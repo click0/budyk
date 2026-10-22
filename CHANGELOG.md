@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **FreeBSD process counts.** `proc.total` counted threads and
+  `proc.threads` grew as the square of each process's thread count: the
+  collector walked `kern.proc.all`, which has an entry per thread, and
+  summed every entry's `ki_numthreads`. On a FreeBSD 14.4 VM that was
+  105 processes and 1561 threads where `ps` shows 42 and 106, and a
+  multi-threaded process reached the top-process tracker once per
+  thread. It now walks `kern.proc.proc`, one entry per process, as `ps`
+  without `-H` does. Found by the new cross-check below.
 - **Disk and network totals on a busy host.** The total read, write,
   receive and transmit rates were computed as delta x 1e9 / ns in 64
   bits, which overflows once an interval moves more than 18.4 GB: at the
