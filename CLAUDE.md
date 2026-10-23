@@ -67,8 +67,11 @@ There is no event-loop library (no libuv, kqueue or epoll). The daemon is:
   rules → WebSocket broadcast → sleep until the next tick. The sleep is a
   `poll()` on a wake pipe, so an escalation (a client connecting, a rule
   calling `escalate()`) cuts it short, though to no less than 250 ms after
-  the tick (`kMinWakeGapMs`: a rate over a few ms is noise). In on-demand
-  mode a tick whose level is L1 or L2 only sleeps, and nothing is stored.
+  the tick (`kMinWakeGapMs`: a rate over a few ms is noise). A SIGHUP is
+  applied inside the sleep, which goes on. The new rules file is loaded
+  into a scratch engine first, and one that does not load leaves the
+  rules as they were. In on-demand mode a tick whose level is L1 or L2
+  only sleeps, and nothing is stored.
 - **HTTP thread:** one blocking accept-handle-close loop. Every connection
   is bounded by `HttpServer::set_io_timeout_ms` (5 s) so a stalled client
   cannot hold it: the request by that, the response by that plus its size
@@ -220,7 +223,9 @@ in CI.
 - Numbers from a user (command line, config, rules) go through
   `parse_int_full()` (`src/core/parse_int.h`): whole string, in range, or
   an error that names the value. No `atoi()`; clang-tidy (`cert-err34-c`)
-  rejects it outside the collectors.
+  rejects it outside the collectors. In the config, durations take a unit
+  or none (`apply_seconds`: 300, 300s, 5m, 1h, 1d), and a value that does
+  not read is reported under its full name with the default kept.
 - Every descriptor is close-on-exec, short-lived ones too: `fopen(path,
   "re")` / `"we"`, `O_CLOEXEC`, `SOCK_CLOEXEC`, `mkostemp(..., O_CLOEXEC)`
   (worker threads fork while the main thread has a file open).

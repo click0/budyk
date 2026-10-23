@@ -142,6 +142,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   they were stamped later than the newest. The writes after them then
   overwrote the real records. Records stamped after now are no longer
   counted.
+- **A SIGHUP with a broken rules file dropped the working rules.** The
+  engine was shut down before the new file was loaded, so a typo at rule
+  200 of 300 left 199 rules running. The file is now loaded into a
+  scratch engine first, and one that does not load keeps the rules as
+  they were (logged).
+- **A SIGHUP ended the sleep**, and the tick right after the previous one
+  stored rates over a few milliseconds. The reload is now applied inside
+  the sleep, which goes on.
+- **Config numbers were read up to the first non-digit.** `interval: 5m`
+  was 5 seconds, `1.5h` was 1, `4294967596` was 300 and `nan` made a
+  threshold that never fires. Numbers are now read whole. Durations
+  take a unit or none (300, 300s, 5m, 1h, 1d; 500ms for a level's
+  interval), as the spec writes them. A value that does not read is
+  reported under its full name, and the default is kept.
 
 ## [0.8.1] — 2026-10-22
 

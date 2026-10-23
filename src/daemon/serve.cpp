@@ -29,6 +29,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -119,21 +120,26 @@ void warn_if_writable_by_others(const char* what, const char* path) {
 constexpr int kMinWakeGapMs = 250;
 
 // Sleep for at most `ms` milliseconds, returning early when:
-//   * a signal sets g_stop (shutdown) or g_reload (SIGHUP; the reload is
-//     applied at the top of the next tick, so it no longer waits out an
-//     L1 sleep);
+//   * a signal sets g_stop (shutdown);
 //   * wake_collection_loop() is called (a client connected), but not
 //     before kMinWakeGapMs into the sleep: a wake-up earlier than that
 //     shortens the sleep to it.
+// A SIGHUP (g_reload) is applied here, through `reload`, and the sleep
+// goes on: it no longer waits out an L1 sleep, and no longer ends it
+// either (a tick right after the last one stored rates over a few ms).
 // poll() is interrupted by signals because the handlers are installed
 // without SA_RESTART. Safe to call with ms <= 0 (no-op).
-void interruptible_sleep(int ms) {
-    if (ms <= 0 || g_stop || g_reload) return;
+void interruptible_sleep(int ms, const std::function<void()>& reload) {
+    if (ms <= 0 || g_stop) return;
     struct timespec ts{};
     ::clock_gettime(CLOCK_MONOTONIC, &ts);
     const int64_t start_ms = static_cast<int64_t>(ts.tv_sec) * 1000 + ts.tv_nsec / 1000000;
     int64_t deadline_ms    = start_ms + static_cast<int64_t>(ms);
     for (;;) {
+        if (g_reload) {
+            g_reload = 0;
+            reload();
+        }
         ::clock_gettime(CLOCK_MONOTONIC, &ts);
         const int64_t now_ms = static_cast<int64_t>(ts.tv_sec) * 1000 +
                                ts.tv_nsec / 1000000;
@@ -150,7 +156,7 @@ void interruptible_sleep(int ms) {
             continue;
         }
         if (rc < 0 && errno != EINTR) return;
-        if (g_stop || g_reload) return;
+        if (g_stop) return;
     }
 }
 
@@ -323,14 +329,43 @@ int cmd_serve(int argc, char* argv[], const char* version) {
     // channels are config-level (not reloadable) anyway — re-adding them
     // would append duplicates (add_channel has no dedup), firing every
     // alert N+1 times after N reloads.
-    auto setup_engine = [&](const char* restore_path, bool register_channels) -> int {
-        if (engine.init(cfg.rules_enable_exec) != 0) return -1;
-        engine.set_limits(static_cast<uint64_t>(cfg.rules_instruction_limit),
-                          static_cast<size_t>(cfg.rules_memory_mb) << 20);
-        if (!cfg.rules_exec_allow.empty()) {
-            engine.set_exec_allowlist(cfg.rules_exec_allow);
+    // The rules file into `e`, by extension: .yaml / .yml goes through
+    // the simple-YAML transpiler first, anything else is fed to Lua
+    // verbatim (the transpiler emits regular watch() calls, so the engine
+    // sees no difference downstream). 0, or nonzero with the reason in
+    // *err. No rules file (or none readable) is no rules: 0.
+    auto load_rules_into = [&cfg](budyk::LuaEngine& e, std::string* err) -> int {
+        if (cfg.rules_path[0] == '\0' || ::access(cfg.rules_path, R_OK) != 0) return 0;
+        const size_t plen = std::strlen(cfg.rules_path);
+        const bool   is_yaml =
+            (plen >= 5 && std::strcmp(cfg.rules_path + plen - 5, ".yaml") == 0) ||
+            (plen >= 4 && std::strcmp(cfg.rules_path + plen - 4, ".yml")  == 0);
+        int rc = 0;
+        if (is_yaml) {
+            std::string lua_src;
+            if (budyk::yaml_rules_to_lua_file(cfg.rules_path, &lua_src) != 0) {
+                rc   = -1;
+                *err = "YAML parse error";
+            } else if ((rc = e.load_string(lua_src.c_str())) != 0) {
+                *err = e.last_error();
+            }
+        } else if ((rc = e.load_file(cfg.rules_path)) != 0) {
+            *err = e.last_error();
         }
-        engine.set_freeze_enabled(cfg.rules_enable_freeze);
+        return rc;
+    };
+    // init() and what the config says of limits and gates.
+    auto init_engine = [&cfg](budyk::LuaEngine& e) -> int {
+        if (e.init(cfg.rules_enable_exec) != 0) return -1;
+        e.set_limits(static_cast<uint64_t>(cfg.rules_instruction_limit),
+                     static_cast<size_t>(cfg.rules_memory_mb) << 20);
+        if (!cfg.rules_exec_allow.empty()) e.set_exec_allowlist(cfg.rules_exec_allow);
+        e.set_freeze_enabled(cfg.rules_enable_freeze);
+        if (!cfg.rules_freeze_allow.empty()) e.set_freeze_allowlist(cfg.rules_freeze_allow);
+        return 0;
+    };
+    auto setup_engine = [&](const char* restore_path, bool register_channels) -> int {
+        if (init_engine(engine) != 0) return -1;
         {
             // Names escalate() accepts, and the custom levels' `when`
             // conditions. Re-applied on reload: shutdown() drops both.
@@ -347,32 +382,9 @@ int cmd_serve(int argc, char* argv[], const char* version) {
             }
             engine.set_level_names(std::move(names));
         }
-        if (!cfg.rules_freeze_allow.empty()) {
-            engine.set_freeze_allowlist(cfg.rules_freeze_allow);
-        }
-        if (cfg.rules_path[0] != '\0' && ::access(cfg.rules_path, R_OK) == 0) {
-            // Dispatch by extension: .yaml / .yml goes through the
-            // simple-YAML transpiler first, anything else is fed to Lua
-            // verbatim. The transpiler emits regular watch() calls, so
-            // the engine sees no difference downstream.
-            const size_t plen = std::strlen(cfg.rules_path);
-            const bool   is_yaml =
-                (plen >= 5 && std::strcmp(cfg.rules_path + plen - 5, ".yaml") == 0) ||
-                (plen >= 4 && std::strcmp(cfg.rules_path + plen - 4, ".yml")  == 0);
-            int         rc  = 0;
+        {
             std::string err;
-            if (is_yaml) {
-                std::string lua_src;
-                if (budyk::yaml_rules_to_lua_file(cfg.rules_path, &lua_src) != 0) {
-                    rc  = -1;
-                    err = "YAML parse error";
-                } else if ((rc = engine.load_string(lua_src.c_str())) != 0) {
-                    err = engine.last_error();
-                }
-            } else if ((rc = engine.load_file(cfg.rules_path)) != 0) {
-                err = engine.last_error();
-            }
-            if (rc != 0) {
+            if (load_rules_into(engine, &err) != 0) {
                 // Loading stops at the first error; rules defined above it
                 // stay registered, so report how many are actually active.
                 std::fprintf(stderr,
@@ -429,6 +441,25 @@ int cmd_serve(int argc, char* argv[], const char* version) {
     // Cooldowns / fire_count survive even when rules.persist_state is
     // disabled — the transient file lives only across the swap.
     auto reload_rules = [&]() {
+        // The new file is loaded into a scratch engine first: one with an
+        // error at rule 200 of 300 used to replace the working set with
+        // the 199 before it. A file that does not load leaves the rules
+        // as they are.
+        {
+            budyk::LuaEngine probe;
+            std::string err;
+            int rc = init_engine(probe);
+            if (rc == 0) rc = load_rules_into(probe, &err);
+            probe.shutdown();
+            if (rc != 0) {
+                std::fprintf(stderr,
+                    "budyk serve: SIGHUP — rules file '%s' failed to load: %s; "
+                    "keeping the %d rule(s) loaded before\n",
+                    cfg.rules_path, err.empty() ? "engine init failed" : err.c_str(),
+                    engine.rule_count());
+                return;
+            }
+        }
         const std::string rp = std::string(cfg.data_dir) + "/.reload.tsv";
         // If the snapshot can't be written (disk full, bad perms) the
         // restore below reads a missing/stale file and silently zeroes
@@ -641,7 +672,7 @@ int cmd_serve(int argc, char* argv[], const char* version) {
             if (idle_due != UINT64_MAX && idle_due / 1000000 + 1 < static_cast<uint64_t>(idle_ms)) {
                 idle_ms = static_cast<int>(idle_due / 1000000 + 1);
             }
-            interruptible_sleep(idle_ms);
+            interruptible_sleep(idle_ms, reload_rules);
             continue;
         }
         collect_one(&s, &collect_ctx, sched.metrics(collect_at));
@@ -748,7 +779,7 @@ int cmd_serve(int argc, char* argv[], const char* version) {
             const uint64_t due_ms = due_ns / 1000000 + 1;
             if (due_ms < static_cast<uint64_t>(sleep_ms)) sleep_ms = static_cast<int>(due_ms);
         }
-        interruptible_sleep(sleep_ms);
+        interruptible_sleep(sleep_ms, reload_rules);
     }
 
     std::fprintf(stderr, "budyk serve: shutting down\n");

@@ -351,10 +351,12 @@ int main() {
             "    - { name: DEEP, interval: 1, priority: 1 }\n"
             "    - { name: badhold, interval: 1, priority: 1, hold: -1 }\n"
             "    - { name: badmb, interval: 1, priority: 1, storage_mb: 0 }\n"
-            "    - { name: '30s', interval: 30s, priority: 1 }\n";
+            "    - { name: badunit, interval: 30x, priority: 1 }\n"
+            "    - { name: halfmin, interval: 30s, priority: 1, hold: 2m }\n";
         assert(config_load_string(y, &c) == 0);
         const auto& lv = c.scheduler.custom_levels;
-        assert(lv.size() == 2);
+        assert(lv.size() == 3);
+        assert(lv[2].name == "halfmin" && lv[2].interval_ms == 30000 && lv[2].hold_sec == 120);
         assert(lv[0].id == kFirstCustomLevel && lv[0].name == "burst");
         assert(lv[0].interval_ms == 500 && lv[0].priority == 40);
         assert(lv[0].when == "cpu.total_percent > 95");
@@ -362,6 +364,37 @@ int main() {
         assert(lv[1].id == kFirstCustomLevel + 1 && lv[1].name == "deep");
         assert(lv[1].interval_ms == 1800000 && lv[1].priority == 5);
         assert(lv[1].when.empty() && lv[1].hold_sec == 0 && lv[1].storage_mb == 50);
+    }
+
+    // N+0b. Numbers are read whole, durations with a unit or without:
+    //       strtol() kept the digits before any text, so "5m" was 5 s,
+    //       "1.5h" 1 s, "4294967596" 300 (truncated) and "nan" a threshold
+    //       that never fires. A value that does not read keeps the default.
+    {
+        Config c;
+        const Config def;
+        const char* y =
+            "port: 80a\n"
+            "collection:\n"
+            "  l1: { interval: 5m }\n"
+            "  l2: { interval: 1.5m, hysteresis: 10min, escalate_after: 4294967596,\n"
+            "        escalation_thresholds: { cpu_percent: nan, load_1m: 4.5 } }\n"
+            "  l3: { interval: 2s, grace_period: 1h }\n"
+            "  hot_buffer: { capacity: 10k, warm_grace: 1d }\n"
+            "web:\n"
+            "  auth: { login_window: 1.5s }\n";
+        assert(config_load_string(y, &c) == 0);
+        assert(c.listen_port == def.listen_port);                         // "80a"
+        assert(c.scheduler.l1_interval_sec == 300);
+        assert(c.scheduler.l2_interval_sec == 90);
+        assert(c.scheduler.hysteresis_sec == 600);
+        assert(c.scheduler.escalate_after_sec == def.scheduler.escalate_after_sec);
+        assert(c.scheduler.escalation_cpu_percent == def.scheduler.escalation_cpu_percent);
+        assert(c.scheduler.escalation_load_1m == 4.5);
+        assert(c.scheduler.l3_interval_sec == 2 && c.scheduler.grace_period_sec == 3600);
+        assert(c.hot_buffer_capacity == def.hot_buffer_capacity);         // "10k"
+        assert(c.hot_buffer_warm_grace == 86400);
+        assert(c.auth_login_window_sec == def.auth_login_window_sec);     // not whole
     }
 
     // N+1. At most kMaxCustomLevels levels are accepted.

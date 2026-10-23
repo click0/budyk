@@ -30,6 +30,12 @@ collection:
   # e.g. [standard, cpu.cores] or [disk, net.interfaces]; a list brings its
   # group. A rule that reads what its level does not collect is skipped
   # for that tick (collected("disk") tells).
+  #
+  # Durations here (interval, hysteresis, escalate_after, grace_period,
+  # warm_grace, a level's hold, web.auth.login_window) are seconds, with
+  # a unit or without: 300, 300s, 5m, 1h, 1d (a custom level's interval
+  # also 500ms). A value that does not read is reported and the default
+  # kept.
   l1:
     interval: 300          # heartbeat — seconds
     metrics: standard
