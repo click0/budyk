@@ -3,6 +3,7 @@
 
 #include "core/sample_c.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -22,6 +23,23 @@ double budyk_rate(uint64_t now, const uint64_t* prev, uint64_t dns) {
 uint64_t budyk_rate_u64(uint64_t now, const uint64_t* prev, uint64_t dns) {
     const double r = budyk_rate(now, prev, dns);
     return r >= 18446744073709551615.0 ? UINT64_MAX : (uint64_t)r;
+}
+
+void budyk_counted_add(const budyk_counted_c* prev, uint32_t nprev,
+                       budyk_counted_c* next, uint32_t* nnext, const char* name,
+                       uint64_t a, uint64_t b, uint64_t* moved_a, uint64_t* moved_b) {
+    for (uint32_t i = 0; i < nprev; ++i) {
+        if (strcmp(prev[i].name, name) != 0) continue;
+        if (a >= prev[i].a) *moved_a += a - prev[i].a;
+        if (b >= prev[i].b) *moved_b += b - prev[i].b;
+        break;
+    }
+    if (*nnext < BUDYK_MAX_COUNTED) {
+        budyk_counted_c* n = &next[(*nnext)++];
+        snprintf(n->name, sizeof(n->name), "%.31s", name);
+        n->a = a;
+        n->b = b;
+    }
 }
 
 /* --- The process tracker ------------------------------------------------ */

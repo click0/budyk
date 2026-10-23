@@ -265,6 +265,15 @@ typedef struct {
     uint64_t c[8];
 } budyk_entity_prev_c;
 
+#define BUDYK_MAX_COUNTED 256   /**< disks or interfaces the total rates follow, each */
+
+/** A device's two byte counters at the previous call, by name: what the
+ *  total disk and network rates sum the deltas of. */
+typedef struct {
+    char     name[32];
+    uint64_t a, b;
+} budyk_counted_c;
+
 typedef struct {
     /** The lists this tick has (MetricDetail bits, core/metric_set.h),
      * and those it read for the first time in a row (a rate's baseline,
@@ -329,6 +338,16 @@ double budyk_rate(uint64_t now, const uint64_t* prev, uint64_t dns);
  * delta x 1e9 overflows 64 bits above 18.4 GB per interval (61 MB/s over
  * an L1 interval of 5 minutes); UINT64_MAX at most. */
 uint64_t budyk_rate_u64(uint64_t now, const uint64_t* prev, uint64_t dns);
+/** Add what device `name`'s two counters (a, b) moved since the previous
+ * call to *moved_a and *moved_b: its own counters against its own last
+ * values in `prev` (nprev entries). A device not there last time, or
+ * whose counter went back (re-created), moves nothing this time, so one
+ * that comes or goes does not move the total by its whole counter. Its
+ * counters go into next[*nnext] for the next call (BUDYK_MAX_COUNTED at
+ * most; past that a device moves nothing). src/collector/detail.c. */
+void budyk_counted_add(const budyk_counted_c* prev, uint32_t nprev,
+                       budyk_counted_c* next, uint32_t* nnext, const char* name,
+                       uint64_t a, uint64_t b, uint64_t* moved_a, uint64_t* moved_b);
 
 int budyk_collect_cpu_linux(budyk_cpu_ctx_c* ctx, budyk_sample_c* s);
 /// The same, filling d->cores too when d is not NULL (the _ex collectors
@@ -339,19 +358,23 @@ int budyk_collect_cpu_linux_ex(budyk_cpu_ctx_c* ctx, budyk_sample_c* s, budyk_de
 /// monotonic byte counters and compute per-second rates from the delta.
 /// Caller must set s->timestamp_nanos before the call; collector uses the
 /// elapsed wall-clock since the previous call to divide the byte delta.
-/// First call records the baseline and sets rates to 0.
+/// First call records the baseline and sets rates to 0. The total is the
+/// sum of each device's own delta (budyk_counted_add()): the delta of
+/// the summed counters jumped by a whole counter when an interface or a
+/// disk came (a veth, a jail's vnet back on the host) and read 0 when one
+/// went.
 typedef struct {
-    uint64_t prev_read_sectors;   ///< summed across whole-disk devices
-    uint64_t prev_write_sectors;
-    uint64_t prev_ns;
-    int      has_prev;
+    budyk_counted_c dev[BUDYK_MAX_COUNTED];   ///< each whole disk's bytes read, written
+    uint32_t        ndev;
+    uint64_t        prev_ns;
+    int             has_prev;
 } budyk_disk_ctx_c;
 
 typedef struct {
-    uint64_t prev_rx_bytes;       ///< summed across non-loopback interfaces
-    uint64_t prev_tx_bytes;
-    uint64_t prev_ns;
-    int      has_prev;
+    budyk_counted_c dev[BUDYK_MAX_COUNTED];   ///< each non-loopback interface's bytes rx, tx
+    uint32_t        ndev;
+    uint64_t        prev_ns;
+    int             has_prev;
 } budyk_net_ctx_c;
 
 int budyk_collect_disk_linux   (budyk_disk_ctx_c* ctx, budyk_sample_c* s);

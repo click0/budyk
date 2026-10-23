@@ -93,9 +93,11 @@ int budyk_collect_disk_linux_ex(budyk_disk_ctx_c* ctx, budyk_sample_c* s, budyk_
     FILE* f = fopen(path, "re");
     if (f == NULL) return -errno;
 
-    uint64_t read_sectors  = 0;
-    uint64_t write_sectors = 0;
-    uint32_t device_count  = 0;
+    budyk_counted_c counted[BUDYK_MAX_COUNTED];
+    uint32_t ncounted     = 0;
+    uint64_t read_moved   = 0;
+    uint64_t write_moved  = 0;
+    uint32_t device_count = 0;
 
     char line[512];
     while (fgets(line, sizeof(line), f) != NULL) {
@@ -109,8 +111,9 @@ int budyk_collect_disk_linux_ex(budyk_disk_ctx_c* ctx, budyk_sample_c* s, budyk_
         if (is_noise_name(name))     continue;
         if (is_partition_name(name)) continue;
 
-        read_sectors  += rs;
-        write_sectors += ws;
+        /* Sectors of 512 bytes. */
+        budyk_counted_add(ctx->dev, ctx->ndev, counted, &ncounted, name, rs * 512ULL,
+                          ws * 512ULL, &read_moved, &write_moved);
         ++device_count;
 
         if (d != NULL && d->ndisks < BUDYK_MAX_ENTITIES) {
@@ -142,12 +145,10 @@ int budyk_collect_disk_linux_ex(budyk_disk_ctx_c* ctx, budyk_sample_c* s, budyk_
         s->disk.read_bytes_per_sec  = 0;
         s->disk.write_bytes_per_sec = 0;
     } else {
-        /* Sectors of 512 bytes; a counter that went back reads 0. */
-        const uint64_t dns = s->timestamp_nanos - ctx->prev_ns;
-        const uint64_t prev_read  = ctx->prev_read_sectors  * 512ULL;
-        const uint64_t prev_write = ctx->prev_write_sectors * 512ULL;
-        s->disk.read_bytes_per_sec  = budyk_rate_u64(read_sectors  * 512ULL, &prev_read,  dns);
-        s->disk.write_bytes_per_sec = budyk_rate_u64(write_sectors * 512ULL, &prev_write, dns);
+        const uint64_t dns  = s->timestamp_nanos - ctx->prev_ns;
+        const uint64_t zero = 0;
+        s->disk.read_bytes_per_sec  = budyk_rate_u64(read_moved,  &zero, dns);
+        s->disk.write_bytes_per_sec = budyk_rate_u64(write_moved, &zero, dns);
     }
 
     if (d != NULL) {
@@ -155,8 +156,8 @@ int budyk_collect_disk_linux_ex(budyk_disk_ctx_c* ctx, budyk_sample_c* s, budyk_
         d->ndisk_prev   = nnext;
         d->disk_prev_ns = s->timestamp_nanos;
     }
-    ctx->prev_read_sectors  = read_sectors;
-    ctx->prev_write_sectors = write_sectors;
+    memcpy(ctx->dev, counted, sizeof(counted[0]) * ncounted);
+    ctx->ndev               = ncounted;
     ctx->prev_ns            = s->timestamp_nanos;
     ctx->has_prev           = 1;
     return 0;

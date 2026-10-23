@@ -204,6 +204,13 @@ if [ "$before" -ge 3 ] && [ "$before" = "$after" ]; then
 else
     echo "FAIL: on-demand ticks: $before, then $after 2.5 s later"; fail=1
 fi
+# Back after the gap: the first read is a baseline, not CPU, disk and net
+# rates averaged over the idle minutes. This poll is answered with what
+# the hot buffer held before it, and wakes the loop.
+last_ts=$(curl -s "$URL/api/samples" | python3 -c 'import json, sys; s = json.load(sys.stdin)["samples"]; print(s[-1]["ts"] if s else 0)')
+sleep 1.5
+check "on-demand: the first sample after a gap is a baseline" \
+      "[s for s in doc['samples'] if s['ts'] > $last_ts][0].get('baseline', []).count('cpu') == 1" /api/samples
 grep -q "collection.mode on-demand: collecting only while a client is connected" "$DIR/ondemand.log" ||
     { echo "FAIL: the mode is not logged"; fail=1; }
 stop ondemand

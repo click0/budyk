@@ -23,6 +23,9 @@ struct CollectContext {
     /// row; one not read then has only a baseline now.
     uint32_t last_groups = 0;
     uint32_t last_detail = 0;
+    /// The groups whose collector failed on the last call: not in
+    /// s->groups, and a baseline when they read again.
+    uint32_t failed = 0;
 };
 
 /// One collection tick: runs the platform collectors (plain C, chosen by
@@ -31,7 +34,8 @@ struct CollectContext {
 /// ctx->detail gets the lists `set` asks for. A list brings its group.
 ///
 /// s->groups and ctx->detail->collected then say what this tick has:
-/// what was read (file_watch is the serve loop's to add), and not the rates
+/// what was read (file_watch is the serve loop's to add; a collector that
+/// failed is left out, logged when it starts failing), and not the rates
 /// read for the first time in a row: cpu, disk, net, tcp, udp, icmp and the
 /// cores, disks, interfaces and processes lists, whose first read is a
 /// baseline (on the first tick, or after a level that did not read them).

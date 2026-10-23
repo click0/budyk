@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #include "daemon/collect.h"
 
+#include <cstdio>
+#include <cstring>
+
 namespace budyk {
 
 void collect_one(Sample* s, CollectContext* ctx, const MetricSet& set) {
@@ -21,38 +24,52 @@ void collect_one(Sample* s, CollectContext* ctx, const MetricSet& set) {
     d->ncores = d->ndisks = d->nifaces = d->nmounts = d->nprocs = 0;
     auto list = [&](uint32_t bit) { return (lists & bit) != 0 ? d : nullptr; };
     auto wants = [&](uint32_t group) { return (want & group) != 0; };
+    // A collector that fails (-errno) leaves its groups zeroed: they are
+    // not collected on this tick, rather than zeros read as a reading
+    // (proc.total = 0 when kern.proc.proc failed in a fork storm).
+    // Logged when it starts failing, with the reason, not on every tick.
+    uint32_t failed = 0;
+    auto run = [&failed, ctx](uint32_t groups, int rc) {
+        if (rc >= 0) return;
+        if ((ctx->failed & groups) == 0) {
+            std::fprintf(stderr, "budyk: collecting %s failed: %s; left out until it reads again\n",
+                         metric_group_name(groups & (0u - groups)), std::strerror(-rc));
+        }
+        failed |= groups;
+    };
 
 #if defined(BUDYK_LINUX)
-    budyk_collect_cpu_linux_ex (&ctx->cpu, &c, list(kDetailCores));
-    budyk_collect_memory_linux (&c);
-    budyk_collect_uptime_linux (&c);
-    budyk_collect_load_linux   (&c);
-    if (wants(kGroupDisk))    budyk_collect_disk_linux_ex   (&ctx->disk, &c, list(kDetailDisks));
-    if (wants(kGroupNet))     budyk_collect_network_linux_ex(&ctx->net,  &c, list(kDetailInterfaces));
-    if (wants(kGroupProc))    budyk_collect_proc_linux_ex(&c, list(kDetailProcesses));
-    if (wants(kGroupEntropy)) budyk_collect_entropy_linux(&c);
-    if (wants(kGroupSelf))    budyk_collect_self_linux   (&c);
-    if (wants(kGroupThermal)) budyk_collect_thermal_linux(&c);
-    if (wants(kGroupTcp))     budyk_collect_netstat_linux(&ctx->netstat, &c);
-    if (wants(kGroupFs))      budyk_collect_fs_linux_ex  (&c, list(kDetailMounts));
-    if (wants(kGroupClock))   budyk_collect_clock_linux  (&c);
+    run(kGroupCpu, budyk_collect_cpu_linux_ex(&ctx->cpu, &c, list(kDetailCores)));
+    run(kGroupMem | kGroupSwap, budyk_collect_memory_linux(&c));
+    run(kGroupUptime, budyk_collect_uptime_linux(&c));
+    run(kGroupLoad,   budyk_collect_load_linux(&c));
+    if (wants(kGroupDisk))    run(kGroupDisk, budyk_collect_disk_linux_ex(&ctx->disk, &c, list(kDetailDisks)));
+    if (wants(kGroupNet))     run(kGroupNet,  budyk_collect_network_linux_ex(&ctx->net, &c, list(kDetailInterfaces)));
+    if (wants(kGroupProc))    run(kGroupProc, budyk_collect_proc_linux_ex(&c, list(kDetailProcesses)));
+    if (wants(kGroupEntropy)) run(kGroupEntropy, budyk_collect_entropy_linux(&c));
+    if (wants(kGroupSelf))    run(kGroupSelf,    budyk_collect_self_linux(&c));
+    if (wants(kGroupThermal)) run(kGroupThermal, budyk_collect_thermal_linux(&c));
+    if (wants(kGroupTcp))     run(kNetstat,      budyk_collect_netstat_linux(&ctx->netstat, &c));
+    if (wants(kGroupFs))      run(kGroupFs,      budyk_collect_fs_linux_ex(&c, list(kDetailMounts)));
+    if (wants(kGroupClock))   run(kGroupClock,   budyk_collect_clock_linux(&c));
 #elif defined(BUDYK_FREEBSD)
-    budyk_collect_cpu_freebsd_ex (&ctx->cpu, &c, list(kDetailCores));
-    budyk_collect_memory_freebsd (&c);
-    budyk_collect_uptime_freebsd (&c);
-    budyk_collect_load_freebsd   (&c);
-    if (wants(kGroupDisk))    budyk_collect_disk_freebsd_ex   (&ctx->disk, &c, list(kDetailDisks));
-    if (wants(kGroupNet))     budyk_collect_network_freebsd_ex(&ctx->net,  &c, list(kDetailInterfaces));
-    if (wants(kGroupProc))    budyk_collect_proc_freebsd_ex(&c, list(kDetailProcesses));
-    if (wants(kGroupEntropy)) budyk_collect_entropy_freebsd(&c);
-    if (wants(kGroupSelf))    budyk_collect_self_freebsd   (&c);
-    if (wants(kGroupThermal)) budyk_collect_thermal_freebsd(&c);
-    if (wants(kGroupTcp))     budyk_collect_netstat_freebsd(&ctx->netstat, &c);
-    if (wants(kGroupFs))      budyk_collect_fs_freebsd_ex  (&c, list(kDetailMounts));
-    if (wants(kGroupClock))   budyk_collect_clock_freebsd  (&c);
+    run(kGroupCpu, budyk_collect_cpu_freebsd_ex(&ctx->cpu, &c, list(kDetailCores)));
+    run(kGroupMem | kGroupSwap, budyk_collect_memory_freebsd(&c));
+    run(kGroupUptime, budyk_collect_uptime_freebsd(&c));
+    run(kGroupLoad,   budyk_collect_load_freebsd(&c));
+    if (wants(kGroupDisk))    run(kGroupDisk, budyk_collect_disk_freebsd_ex(&ctx->disk, &c, list(kDetailDisks)));
+    if (wants(kGroupNet))     run(kGroupNet,  budyk_collect_network_freebsd_ex(&ctx->net, &c, list(kDetailInterfaces)));
+    if (wants(kGroupProc))    run(kGroupProc, budyk_collect_proc_freebsd_ex(&c, list(kDetailProcesses)));
+    if (wants(kGroupEntropy)) run(kGroupEntropy, budyk_collect_entropy_freebsd(&c));
+    if (wants(kGroupSelf))    run(kGroupSelf,    budyk_collect_self_freebsd(&c));
+    if (wants(kGroupThermal)) run(kGroupThermal, budyk_collect_thermal_freebsd(&c));
+    if (wants(kGroupTcp))     run(kNetstat,      budyk_collect_netstat_freebsd(&ctx->netstat, &c));
+    if (wants(kGroupFs))      run(kGroupFs,      budyk_collect_fs_freebsd_ex(&c, list(kDetailMounts)));
+    if (wants(kGroupClock))   run(kGroupClock,   budyk_collect_clock_freebsd(&c));
 #else
     (void)list;
     (void)wants;
+    (void)run;
 #endif
 
     // Copy the C-shim back into the C++ Sample (same field names, scalar
@@ -128,21 +145,31 @@ void collect_one(Sample* s, CollectContext* ctx, const MetricSet& set) {
     constexpr uint32_t kRateGroups = kGroupCpu | kGroupDisk | kGroupNet | kNetstat;
     constexpr uint32_t kRateLists  = kDetailCores | kDetailDisks | kDetailInterfaces |
                                      kDetailProcesses;
-    const uint32_t have       = want & ~(kRateGroups & ~ctx->last_groups);
-    const uint32_t have_lists = lists & ~(kRateLists & ~ctx->last_detail);
-    ctx->last_groups = want;
-    ctx->last_detail = lists;
+    // A list goes with its group's collector.
+    uint32_t failed_lists = 0;
+    if ((failed & kGroupCpu)  != 0) failed_lists |= kDetailCores;
+    if ((failed & kGroupDisk) != 0) failed_lists |= kDetailDisks;
+    if ((failed & kGroupNet)  != 0) failed_lists |= kDetailInterfaces;
+    if ((failed & kGroupFs)   != 0) failed_lists |= kDetailMounts;
+    if ((failed & kGroupProc) != 0) failed_lists |= kDetailProcesses;
+    const uint32_t read       = want & ~failed;
+    const uint32_t read_lists = lists & ~failed_lists;
+    const uint32_t have       = read & ~(kRateGroups & ~ctx->last_groups);
+    const uint32_t have_lists = read_lists & ~(kRateLists & ~ctx->last_detail);
+    ctx->last_groups = read;
+    ctx->last_detail = read_lists;
+    ctx->failed      = failed;
 
     s->groups = kGroupsAll;
     clear_groups(s, kGroupsAll & ~have);
-    s->baseline = want & ~have;
+    s->baseline = read & ~have;
     if ((have_lists & kDetailCores)      == 0) d->ncores  = 0;
     if ((have_lists & kDetailDisks)      == 0) d->ndisks  = 0;
     if ((have_lists & kDetailInterfaces) == 0) d->nifaces = 0;
     if ((have_lists & kDetailMounts)     == 0) d->nmounts = 0;
     if ((have_lists & kDetailProcesses)  == 0) d->nprocs  = 0;
     d->collected = have_lists;
-    d->baseline  = lists & ~have_lists;
+    d->baseline  = read_lists & ~have_lists;
 }
 
 } // namespace budyk
