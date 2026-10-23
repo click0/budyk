@@ -112,7 +112,9 @@ rules:
     enabled: false         # `true` lets watch() actions invoke external
                            # programs; otherwise exec() is rejected
     # When enabled, exec() will only spawn programs whose absolute path
-    # is in this list. Empty list ⇒ any absolute path under the no-`..`
+    # is in this list: the same file (after symlinks) under the same
+    # name, since a multi-call binary such as BusyBox runs whatever its
+    # name says. Empty list ⇒ any absolute path under the no-`..`
     # traversal guard.
     allow:
       - /usr/local/bin/budyk-alerter

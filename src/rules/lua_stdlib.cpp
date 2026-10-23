@@ -365,12 +365,19 @@ int exec_impl(lua_State* L, budyk::LuaEngine* eng, ExecOutcome* out, char* err,
     }
     const auto& allow = eng->exec_allowlist_resolved();
     if (!allow.empty()) {
-        // Compare resolved paths (see LuaEngine::exec_allowlist_resolved).
+        // The resolved path and the name as written must both match one
+        // entry (see LuaEngine::exec_allowlist_resolved): a multi-call
+        // binary runs the program its argv[0] names, so with /usr/bin/logger
+        // allowed, /bin/sh resolving to the same BusyBox is not.
         char rbuf[PATH_MAX];
         const char* r = ::realpath(cmd.c_str(), rbuf);
         const std::string resolved = r != nullptr ? std::string(r) : cmd;
+        auto base = [](const std::string& p) { return p.substr(p.find_last_of('/') + 1); };
+        const auto& written = eng->exec_allowlist();
         bool found = false;
-        for (const auto& a : allow) if (a == resolved) { found = true; break; }
+        for (size_t i = 0; i < allow.size() && i < written.size() && !found; ++i) {
+            found = allow[i] == resolved && base(written[i]) == base(cmd);
+        }
         if (!found) {
             std::snprintf(err, err_cap, "exec: '%s' not in allowlist", cmd.c_str());
             return -1;

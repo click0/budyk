@@ -276,6 +276,23 @@ bool parse_severity(const char* s, AlertSeverity* out) {
     return false;
 }
 
+std::string header_value(const std::string& s) {
+    std::string out = s;
+    for (char& c : out) {
+        const auto u = static_cast<unsigned char>(c);
+        if (u < 0x20 || u == 0x7f) c = ' ';
+    }
+    return out;
+}
+
+std::vector<std::string> ntfy_headers(AlertSeverity sev, const std::string& rule_name) {
+    return {
+        "Title: budyk: " + header_value(rule_name),
+        std::string("Priority: ") + ntfy_priority(sev),
+        std::string("Tags: ") + severity_name(sev),
+    };
+}
+
 std::string ntfy_payload(AlertSeverity, const std::string&,
                          const std::string& message) {
     // ntfy.sh accepts a plain-text body — title / priority / tags are
@@ -322,9 +339,10 @@ std::string smtp_message(AlertSeverity sev, const std::string& from,
 
     std::string out;
     out.reserve(message.size() + rule_name.size() + 256);
-    out += "From: ";    out += from; out += "\r\n";
-    out += "To: ";      out += to;   out += "\r\n";
-    out += "Subject: [budyk:"; out += severity_name(sev); out += "] "; out += rule_name; out += "\r\n";
+    out += "From: ";    out += header_value(from); out += "\r\n";
+    out += "To: ";      out += header_value(to);   out += "\r\n";
+    out += "Subject: [budyk:"; out += severity_name(sev); out += "] "; out += header_value(rule_name);
+    out += "\r\n";
     out += "Date: ";    out += date_buf; out += "\r\n";
     out += "MIME-Version: 1.0\r\n";
     out += "Content-Type: text/plain; charset=utf-8\r\n";
@@ -416,12 +434,8 @@ int send_one(const AlertChannel& ch, AlertSeverity sev,
         std::string url = ch.url;
         if (!url.empty() && url.back() != '/') url.push_back('/');
         url += ch.topic;
-        std::vector<std::string> hdrs = {
-            std::string("Title: budyk: ") + rule_name,
-            std::string("Priority: ") + ntfy_priority(sev),
-            std::string("Tags: ") + severity_name(sev),
-        };
-        return curl_post(url.c_str(), ntfy_payload(sev, rule_name, message), hdrs, cancel);
+        return curl_post(url.c_str(), ntfy_payload(sev, rule_name, message),
+                         ntfy_headers(sev, rule_name), cancel);
     }
     if (ch.type == "discord") {
         std::vector<std::string> hdrs = {

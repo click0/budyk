@@ -99,6 +99,13 @@ private:
 };
 
 // --- Payload builders (exported for tests; no network) ---------------
+/// `s` as one header line's value: CR, LF and the other control
+/// characters become spaces. A rule or alert name can carry anyone's
+/// bytes (a process name, a mount point), and a line break in it would
+/// add a header of its own (ntfy's, or a Bcc: in the mail).
+std::string header_value    (const std::string& s);
+/// ntfy's headers: Title (from the rule name), Priority, Tags.
+std::vector<std::string> ntfy_headers(AlertSeverity sev, const std::string& rule_name);
 std::string ntfy_payload    (AlertSeverity sev, const std::string& rule_name,
                              const std::string& message);
 std::string discord_payload (AlertSeverity sev, const std::string& rule_name,
