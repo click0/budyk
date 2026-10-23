@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <vector>
 
 #include <sys/socket.h>
 #include <unistd.h>
@@ -316,6 +317,40 @@ int main() {
         assert(drain(fast_peer) == std::string("\x81\x0Astill here", 12));
         ::close(slow_peer);
         ::close(fast_peer);
+    }
+
+    // 11. drop_sessions(): a client whose session ended (logout, expiry)
+    //     is dropped with a close frame (1008) and its fd closed; one
+    //     still valid, and one let in without a session (auth off), stay.
+    //     The upgrade checked the session once, and the stream used to
+    //     outlive it.
+    {
+        WebSocketHub hub;
+        int a, a_peer, b, b_peer, c, c_peer;
+        pair(&a, &a_peer);
+        pair(&b, &b_peer);
+        pair(&c, &c_peer);
+        hub.add(a, "tok-a");
+        hub.add(b, "tok-b");
+        hub.add(c);
+        assert(hub.size() == 3);
+        std::vector<std::string> asked;
+        const size_t dropped = hub.drop_sessions([&asked](const std::string& t) {
+            asked.push_back(t);
+            return t == "tok-a";
+        });
+        assert(dropped == 1 && hub.size() == 2);
+        assert(asked.size() == 2);                       // not for the one without a session
+        const std::string got = drain(b_peer);
+        assert(got == std::string("\x88\x02\x03\xf0", 4));   // close, 1008
+        char x;
+        assert(::recv(b_peer, &x, 1, 0) == 0);           // and the fd is closed
+        assert(drain(a_peer).empty() && drain(c_peer).empty());
+        assert(hub.drop_sessions([](const std::string&) { return true; }) == 0);
+        hub.close_all();
+        ::close(a_peer);
+        ::close(b_peer);
+        ::close(c_peer);
     }
 
     std::printf("test_ws: PASS\n");

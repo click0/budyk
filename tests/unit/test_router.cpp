@@ -17,7 +17,9 @@
 #include <cstdlib>
 #include <mutex>
 #include <string>
+#include <sys/socket.h>
 #include <unistd.h>
+#include <vector>
 
 using namespace budyk;
 
@@ -274,6 +276,46 @@ int main() {
         std::snprintf(w.cfg.password_hash, sizeof(w.cfg.password_hash), "%s", "$argon2id$v=19$dummy");
         r = w.handler(up);
         assert(r.status == 401 && !r.hijack);
+    }
+
+    // 7b. /api/ws from another site's page (CSWSH): a browser always sends
+    //     Origin on a WebSocket, and one that is not the Host the request
+    //     went to (or a proxy's X-Forwarded-Host) is refused with 403.
+    //     Past WebSocketHub::kMaxClients, 503. Both used to get the stream.
+    {
+        World w; w.init();
+        auto upgrade = [](const char* origin, const char* host) {
+            HttpRequest up = get("/api/ws");
+            up.headers.push_back({"Upgrade", "websocket"});
+            up.headers.push_back({"Connection", "Upgrade"});
+            up.headers.push_back({"Sec-WebSocket-Version", "13"});
+            up.headers.push_back({"Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ=="});
+            if (host != nullptr)   up.headers.push_back({"Host", host});
+            if (origin != nullptr) up.headers.push_back({"Origin", origin});
+            return up;
+        };
+        HttpResponse r = w.handler(upgrade("http://evil.example", "127.0.0.1:8080"));
+        assert(r.status == 403 && !r.hijack);
+        assert(w.handler(upgrade("null", "127.0.0.1:8080")).status == 403);
+        assert(w.handler(upgrade("http://127.0.0.1:8081", "127.0.0.1:8080")).status == 403);
+        assert(static_cast<bool>(w.handler(upgrade("http://127.0.0.1:8080", "127.0.0.1:8080")).hijack));
+        assert(static_cast<bool>(w.handler(upgrade("http://LocalHost:8080", "localhost:8080")).hijack));
+        assert(static_cast<bool>(w.handler(upgrade(nullptr, "127.0.0.1:8080")).hijack));   // not a browser
+        HttpRequest proxied = upgrade("https://budyk.example.com", "127.0.0.1:8080");
+        proxied.headers.push_back({"X-Forwarded-Host", "budyk.example.com"});
+        assert(static_cast<bool>(w.handler(proxied).hijack));
+
+        std::vector<int> peers;
+        for (size_t i = 0; i < WebSocketHub::kMaxClients; ++i) {
+            int sp[2];
+            assert(::socketpair(AF_UNIX, SOCK_STREAM, 0, sp) == 0);
+            w.ws.add(sp[0]);
+            peers.push_back(sp[1]);
+        }
+        r = w.handler(upgrade(nullptr, "127.0.0.1:8080"));
+        assert(r.status == 503 && !r.hijack);
+        w.ws.close_all();
+        for (const int p : peers) ::close(p);
     }
 
     // 8. /api/levels: each level's metric set and whether it collects

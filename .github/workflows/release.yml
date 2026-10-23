@@ -419,6 +419,7 @@ jobs:
             tests/smoke/escalate.sh ./budyk-aarch64
             tests/smoke/fsck.sh ./budyk-aarch64
             tests/smoke/modes.sh ./budyk-aarch64
+            tests/smoke/auth.sh ./budyk-aarch64
 
       - name: Upload artefacts
         uses: actions/upload-artifact@v4

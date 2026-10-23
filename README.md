@@ -263,6 +263,10 @@ budyk speaks plain HTTP. To reach the dashboard from another machine,
 keep `listen: 127.0.0.1` and put a TLS reverse proxy in front that sets
 `X-Forwarded-Proto: https`; the session cookie is then marked `Secure`.
 With auth on and a non-loopback `listen`, the daemon warns at start-up.
+The proxy must pass the `Host` header on (or set `X-Forwarded-Host`):
+the dashboard's WebSocket is accepted only from a page of the same
+origin, so another site open in the browser cannot read the stream. A
+logout, or a session that expires, also ends the WebSocket it opened.
 
 If the dashboard is password-protected, `budyk tui` asks for the password
 once at startup (without echoing it) and logs in. If the session later

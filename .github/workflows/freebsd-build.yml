@@ -128,6 +128,7 @@ jobs:
             tests/smoke/escalate.sh build-static/src/budyk
             tests/smoke/fsck.sh build-static/src/budyk
             tests/smoke/modes.sh build-static/src/budyk
+            tests/smoke/auth.sh build-static/src/budyk
             tests/smoke/resources.sh build-static/src/budyk
             tests/smoke/crosscheck.sh build-static/src/budyk
             echo "::endgroup::"
@@ -142,6 +143,7 @@ jobs:
               tests/smoke/escalate.sh ./budyk-cross
               tests/smoke/fsck.sh ./budyk-cross
               tests/smoke/modes.sh ./budyk-cross
+              tests/smoke/auth.sh ./budyk-cross
               echo "::endgroup::"
             fi
 

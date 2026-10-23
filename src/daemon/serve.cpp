@@ -599,9 +599,14 @@ int cmd_serve(int argc, char* argv[], const char* version) {
         // dashboard) plus one for a recent /api/samples poller (the TUI).
         // service() first: it answers pings and drops clients that have
         // closed or stopped reading, so a vanished dashboard releases
-        // L3 on this tick rather than when a send finally fails.
+        // L3 on this tick rather than when a send finally fails. A
+        // client whose session ended (logout, expiry) goes too: the
+        // upgrade checked it once, and the stream used to outlive it.
         {
             ws.service();
+            if (cfg.auth_enabled) {
+                ws.drop_sessions([&sessions](const std::string& t) { return sessions.verify(t); });
+            }
             int clients = static_cast<int>(ws.size());
             const uint64_t last_poll = g_last_poll_ns.load();
             if (last_poll != 0 && s.timestamp_nanos >= last_poll &&

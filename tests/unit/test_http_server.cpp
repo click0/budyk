@@ -5,6 +5,8 @@
 #include <netinet/in.h>
 #include <pthread.h>
 #include <signal.h>
+#include <fcntl.h>
+#include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <unistd.h>
@@ -15,6 +17,8 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <thread>
+#include <vector>
 
 using namespace budyk;
 
@@ -470,6 +474,98 @@ int main() {
         // A header block past the 16 KiB cap: 431, not a silent close.
         std::string big = "GET /x HTTP/1.1\r\nX-Big: " + std::string(20000, 'a') + "\r\n\r\n";
         assert(status(send(big)) == "HTTP/1.1 431 Request Header Fields Too Large");
+        s.stop();
+    }
+
+    // 12. A client that reads the response slowly, a little within each
+    //     send timeout, used to hold the one HTTP thread for as long as
+    //     it liked (SO_SNDTIMEO restarts with every send). The response
+    //     now gets the I/O timeout plus its size at the minimum rate:
+    //     8 MiB (more than the kernel buffers take) at 4 MiB/s and a 1 s
+    //     timeout is cut after about 3 s, and the next request is served
+    //     then, not in the half hour this reader would take.
+    {
+        HttpServer s;
+        s.set_io_timeout_ms(1000);
+        s.set_min_send_rate(4u << 20);
+        const std::string big(8u << 20, 'z');
+        assert(s.start("127.0.0.1", 0, [&big](const HttpRequest& req) {
+                           HttpResponse r;
+                           r.status       = 200;
+                           r.content_type = "text/plain";
+                           r.body         = req.path == "/big" ? big : std::string("pong\n");
+                           return r;
+                       }) == 0);
+        int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+        assert(fd >= 0);
+        const int rcvbuf = 4096;
+        assert(::setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf)) == 0);
+        sockaddr_in sa_in{};
+        sa_in.sin_family = AF_INET;
+        sa_in.sin_port   = htons(static_cast<uint16_t>(s.bound_port()));
+        ::inet_pton(AF_INET, "127.0.0.1", &sa_in.sin_addr);
+        assert(::connect(fd, reinterpret_cast<sockaddr*>(&sa_in), sizeof(sa_in)) == 0);
+        const std::string req = "GET /big HTTP/1.1\r\nHost: x\r\n\r\n";
+        assert(::send(fd, req.data(), req.size(), 0) == static_cast<ssize_t>(req.size()));
+
+        // The slow reader on its own thread: 4 KiB every 0.4 s.
+        std::thread reader([fd] {
+            char buf[4096];
+            while (::recv(fd, buf, sizeof(buf), 0) > 0) ::usleep(400 * 1000);
+        });
+        ::usleep(200 * 1000);                     // the server is in its send loop
+        const auto t0 = std::chrono::steady_clock::now();
+        const std::string pong = http_round_trip(s.bound_port(), "GET /ping HTTP/1.1\r\nHost: x\r\n\r\n");
+        const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        assert(pong.find("pong") != std::string::npos);
+        assert(secs < 12.0);
+        // What the server's kernel still holds keeps arriving after it
+        // let go of the connection; the reader stops here.
+        ::shutdown(fd, SHUT_RDWR);
+        reader.join();
+        ::close(fd);
+        s.stop();
+    }
+
+    // 13. An accept() that fails for want of a descriptor (EMFILE: every
+    //     fd in use, WebSocket clients for one) used to end the HTTP
+    //     thread for good, and every later request went unanswered. Now
+    //     it waits and tries again: once fds are free, requests are
+    //     served. The alarm turns a regression into a failure, not a hang.
+    {
+        HttpServer s;
+        assert(s.start("127.0.0.1", 0, [](const HttpRequest&) {
+                           return HttpResponse{200, "text/plain", "ok\n"};
+                       }) == 0);
+        struct rlimit old_lim{};
+        assert(::getrlimit(RLIMIT_NOFILE, &old_lim) == 0);
+        const int probe = ::dup(0);
+        assert(probe >= 0);
+        ::close(probe);
+        struct rlimit lim = old_lim;
+        lim.rlim_cur = static_cast<rlim_t>(probe + 8);
+        assert(::setrlimit(RLIMIT_NOFILE, &lim) == 0);
+        // The client's socket first, then every fd left taken, so the
+        // server's accept4() for the connection finds the table full.
+        const int c = ::socket(AF_INET, SOCK_STREAM, 0);
+        assert(c >= 0);
+        std::vector<int> held;
+        for (int d; (d = ::fcntl(c, F_DUPFD_CLOEXEC, 0)) >= 0; ) held.push_back(d);
+        assert(errno == EMFILE);
+        sockaddr_in sa_in{};
+        sa_in.sin_family = AF_INET;
+        sa_in.sin_port   = htons(static_cast<uint16_t>(s.bound_port()));
+        ::inet_pton(AF_INET, "127.0.0.1", &sa_in.sin_addr);
+        assert(::connect(c, reinterpret_cast<sockaddr*>(&sa_in), sizeof(sa_in)) == 0);
+        ::usleep(300 * 1000);                      // the server meets EMFILE
+        ::close(c);
+        for (const int d : held) ::close(d);
+        assert(::setrlimit(RLIMIT_NOFILE, &old_lim) == 0);
+
+        ::alarm(30);
+        const std::string resp = http_round_trip(s.bound_port(), "GET / HTTP/1.1\r\nHost: x\r\n\r\n");
+        ::alarm(0);
+        assert(resp.find("ok") != std::string::npos);
         s.stop();
     }
 
