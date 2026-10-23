@@ -38,7 +38,7 @@ int budyk_collect_network_freebsd_ex(budyk_net_ctx_c* ctx, budyk_sample_c* s, bu
     struct ifaddrs* ifap = NULL;
     if (getifaddrs(&ifap) != 0) return -errno;
 
-    budyk_counted_c counted[BUDYK_MAX_COUNTED];
+    budyk_counted_c counted[BUDYK_MAX_COUNTED] = {{"", 0, 0}};
     uint32_t ncounted    = 0;
     uint64_t rx_moved    = 0;
     uint64_t tx_moved    = 0;
