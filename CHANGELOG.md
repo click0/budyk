@@ -40,6 +40,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rename, and a failed save is logged with its reason.
 - **YAML rules**: a control character before a digit in a name or
   message became another character (`\1` then `23` read as `\123`).
+- **The instruction limit could be dodged, and the tick then waited
+  forever.** There were three ways:
+  - a `pcall()` around a loop caught the limit's error and the loop
+    went on;
+  - an `xpcall()` message handler and a `__gc` finalizer run with Lua's
+    hooks off;
+  - several library calls run in C, where the count hook sees one
+    instruction for the whole call: a backtracking pattern
+    (`string.find(s, "a*a*a*b")` on a long string), a plain `find` with
+    a long needle, `string.rep("", n)`, `table.move` over a huge range,
+    and the table functions over a `__len` or a C `__index`.
+
+  Now:
+  - past the limit every instruction raises;
+  - `xpcall` calls its handler after the call;
+  - `setmetatable` refuses `__gc`;
+  - `find`, `match`, `gmatch` and `gsub` are Lua 5.4.7's own,
+    vendored, and charge their steps to the limit;
+  - `rep("")` returns at once and `table.move` is charged;
+  - `table.concat`, `insert`, `remove` and `sort` refuse a table with
+    `__len`, `__index` or `__newindex`.
 
 ## [0.8.1] — 2026-10-22
 

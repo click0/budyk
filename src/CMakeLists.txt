@@ -96,12 +96,17 @@ add_library(budyk_rules STATIC
     rules/lua_engine.cpp
     rules/lua_bindings.cpp
     rules/lua_stdlib.cpp
+    rules/lua_pattern.c
     rules/exec_action.cpp
     rules/alert.cpp
     rules/worker.cpp
     rules/freeze.cpp
     rules/yaml_compat.cpp
 )
+# Lua's own pattern matcher (from lstrlib.c), kept as Lua writes it: its
+# int / size_t / ptrdiff_t mixing is Lua's, not ours to rewrite.
+set_source_files_properties(rules/lua_pattern.c PROPERTIES
+    COMPILE_OPTIONS "-Wno-conversion;-Wno-sign-conversion")
 find_package(Threads REQUIRED)
 target_link_libraries(budyk_rules PRIVATE budyk_core budyk_util ${LUA_LIBRARIES})
 target_link_libraries(budyk_rules PUBLIC Threads::Threads)   # Worker threads

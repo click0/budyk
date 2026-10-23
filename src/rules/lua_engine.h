@@ -162,6 +162,14 @@ public:
     /// Bytes currently held by the Lua state (0 when not initialised).
     size_t   memory_used()       const;
 
+    /// Charge `n` units of work done in C (a pattern match, table.move)
+    /// to the instruction limit of the engine that owns `L`, as the count
+    /// hook charges VM instructions; raises once the limit is spent (so
+    /// charge(L, 0) raises if it already is). Past the limit every
+    /// further instruction raises too, so a pcall() in the rule cannot
+    /// carry on.
+    static void charge(lua_State* L, uint64_t n);
+
     /// exec() hardening: when the allowlist is non-empty, exec() rejects
     /// any argv[0] that is not exactly one of the listed absolute paths.
     /// An empty allowlist allows any absolute-path command (still subject
@@ -221,7 +229,12 @@ private:
     /// needs a registry lookup on the hot path.
     static void* alloc(void* ud, void* ptr, size_t osize, size_t nsize);
     static void  count_hook(lua_State* L, lua_Debug* ar);
-    /// Resets the instruction count; called before every entry into Lua.
+    static LuaEngine* engine_of(lua_State* L);
+    /// Raises the limit's error and sets the hook to fire on every
+    /// instruction until the next begin_call().
+    static int   raise_limit(lua_State* L, const LuaEngine* self);
+    /// Resets the instruction count and the hook's interval; called
+    /// before every entry into Lua.
     void begin_call();
     /// Binds `s` (and the file-watch state) in a protected call. False,
     /// logged once per distinct error, when the bind raised: the tick's
