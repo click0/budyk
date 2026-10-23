@@ -67,6 +67,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one allowed them all, each run as itself. The name as written must
   now match the allowed entry's too. A link to an allowed binary under
   another name is no longer allowed.
+- **The file watcher went blind after the first save by rename.**
+  inotify and kqueue watch an inode, not a path. vim, visudo, `sed -i`
+  and package managers write a new file and rename it over the old one,
+  and after the first such save every later change to the path was
+  missed, while the path still counted as watched. A path whose file is
+  deleted or replaced is now watched again as soon as it exists (Deleted
+  then Created, usually in the same poll). Two paths to one inode (hard
+  links) both get the events, instead of the second taking the watch
+  over. If inotify's queue overflows, every path is reported changed and
+  each watch is checked again, with one line logged. `watched_count`
+  counts the paths watched right now.
 - **A line break in a rule or alert name went into a header** (ntfy's
   `Title:`, the mail's `Subject:`), adding headers of its own: a `Bcc:`,
   any ntfy header. A name can carry anyone's bytes, such as a process

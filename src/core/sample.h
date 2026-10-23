@@ -171,7 +171,8 @@ struct ThermalStats {
 struct FileWatchSample {
     uint32_t events_this_tick;   ///< distinct watched paths that fired an
                                  ///< event since the previous tick
-    uint32_t watched_count;      ///< configured paths under watch
+    uint32_t watched_count;      ///< configured paths under watch now (a deleted or replaced file
+                                 ///< counts again once it is watched anew)
     bool     present;            ///< file_watch enabled this run
 };
 
