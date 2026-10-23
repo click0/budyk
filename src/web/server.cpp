@@ -4,6 +4,7 @@
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <unistd.h>
@@ -198,24 +199,35 @@ const char* status_phrase(int status) {
     }
 }
 
-// send(2) until everything is written, the peer is gone or the deadline
-// passes. A large body (/api/range at its 5000-sample cap is a few MB)
-// rarely goes out in one call, and a signal (SIGHUP is routine) returns
-// short too. SO_SNDTIMEO bounds each call, the deadline the whole.
+// send(2) until everything is written, the peer is gone, or it stalls:
+// no room for io_timeout_ms, or the deadline passes. A large body
+// (/api/range at its 5000-sample cap is a few MB) rarely goes out in one
+// call, and a signal (SIGHUP is routine) cuts a wait short too. Each send
+// takes what fits, without waiting (MSG_DONTWAIT), and poll() does the
+// waiting, so the deadline holds: a blocking send() on FreeBSD returns
+// only once all of it is in, however slowly the peer reads, and
+// SO_SNDTIMEO there bounds each wait for room, not the call.
 // MSG_NOSIGNAL: a client that hung up mid-response is a failed send,
 // not SIGPIPE to the daemon.
-ssize_t send_all(int fd, const void* data, size_t len, Deadline deadline) {
+ssize_t send_all(int fd, const void* data, size_t len, Deadline deadline, int io_timeout_ms) {
     const char* p = static_cast<const char*>(data);
     size_t total = 0;
     while (total < len) {
-        if (Clock::now() >= deadline) return -1;
-        const ssize_t n = ::send(fd, p + total, len - total, MSG_NOSIGNAL);
-        if (n < 0) {
-            if (errno == EINTR) continue;
-            return -1;
+        const ssize_t n = ::send(fd, p + total, len - total, MSG_NOSIGNAL | MSG_DONTWAIT);
+        if (n > 0) {
+            total += static_cast<size_t>(n);
+            continue;
         }
         if (n == 0) return -1;
-        total += static_cast<size_t>(n);
+        if (errno == EINTR) continue;
+        if (errno != EAGAIN && errno != EWOULDBLOCK) return -1;
+        const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
+            deadline - Clock::now()).count();
+        if (left <= 0) return -1;
+        struct pollfd pfd{fd, POLLOUT, 0};
+        const int pr = ::poll(&pfd, 1, static_cast<int>(left < io_timeout_ms ? left : io_timeout_ms));
+        if (pr < 0 && errno != EINTR) return -1;
+        if (pr == 0) return -1;                    // no room for io_timeout_ms, or the deadline
     }
     return static_cast<ssize_t>(total);
 }
@@ -246,8 +258,9 @@ ssize_t send_response(int fd, const HttpResponse& r, int io_timeout_ms, size_t m
     }
     head.append("\r\n");
 
-    if (send_all(fd, head.data(), head.size(), deadline) < 0) return -1;
-    if (!r.body.empty() && send_all(fd, r.body.data(), r.body.size(), deadline) < 0) return -1;
+    if (send_all(fd, head.data(), head.size(), deadline, io_timeout_ms) < 0) return -1;
+    if (!r.body.empty() &&
+        send_all(fd, r.body.data(), r.body.size(), deadline, io_timeout_ms) < 0) return -1;
     return static_cast<ssize_t>(head.size() + r.body.size());
 }
 
