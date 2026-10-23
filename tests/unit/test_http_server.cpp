@@ -5,6 +5,7 @@
 #include <netinet/in.h>
 #include <pthread.h>
 #include <signal.h>
+#include <fcntl.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/time.h>
@@ -544,15 +545,13 @@ int main() {
         struct rlimit lim = old_lim;
         lim.rlim_cur = static_cast<rlim_t>(probe + 8);
         assert(::setrlimit(RLIMIT_NOFILE, &lim) == 0);
-        // Every fd but one taken; the client's socket takes the last, so
-        // the server's accept4() for it finds the table full.
-        std::vector<int> held;
-        for (int d; (d = ::dup(0)) >= 0; ) held.push_back(d);
-        assert(errno == EMFILE && !held.empty());
-        ::close(held.back());
-        held.pop_back();
+        // The client's socket first, then every fd left taken, so the
+        // server's accept4() for the connection finds the table full.
         const int c = ::socket(AF_INET, SOCK_STREAM, 0);
         assert(c >= 0);
+        std::vector<int> held;
+        for (int d; (d = ::fcntl(c, F_DUPFD_CLOEXEC, 0)) >= 0; ) held.push_back(d);
+        assert(errno == EMFILE);
         sockaddr_in sa_in{};
         sa_in.sin_family = AF_INET;
         sa_in.sin_port   = htons(static_cast<uint16_t>(s.bound_port()));
