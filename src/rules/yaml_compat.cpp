@@ -32,8 +32,10 @@ std::string lua_escape(const char* s) {
             case '\t': out += "\\t";  break;
             default:
                 if (c < 0x20) {
+                    // Three digits: Lua reads up to three, so "\1" before
+                    // a digit would take it in ("\1" "2" is "\12").
                     char buf[8];
-                    std::snprintf(buf, sizeof(buf), "\\%d", c);
+                    std::snprintf(buf, sizeof(buf), "\\%03d", c);
                     out += buf;
                 } else {
                     out += static_cast<char>(c);

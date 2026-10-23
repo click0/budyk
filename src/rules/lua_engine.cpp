@@ -15,6 +15,7 @@ extern "C" {
 #include <cerrno>
 #include <climits>
 #include <strings.h>
+#include <unistd.h>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -45,6 +46,36 @@ void log_skip(std::string* last, const char* what, const char* msg) {
     *last = m;
     std::fprintf(stderr, "budyk: %s skipped while the level does not collect what it reads: %s\n",
                  what, m);
+}
+
+// The error object at `idx` as text, without converting it: a number's
+// lua_tostring() allocates, and this runs outside any protected call,
+// after a call that failed (perhaps for want of memory).
+const char* error_text(lua_State* L, int idx) {
+    static char buf[64];
+    switch (lua_type(L, idx)) {
+        case LUA_TSTRING:
+            return lua_tostring(L, idx);
+        case LUA_TNUMBER:
+            if (lua_isinteger(L, idx)) {
+                std::snprintf(buf, sizeof(buf), "%lld", static_cast<long long>(lua_tointeger(L, idx)));
+            } else {
+                std::snprintf(buf, sizeof(buf), "%.14g", static_cast<double>(lua_tonumber(L, idx)));
+            }
+            return buf;
+        default:
+            std::snprintf(buf, sizeof(buf), "error object is a %s value", luaL_typename(L, idx));
+            return buf;
+    }
+}
+
+// An error outside any protected call: Lua aborts once this returns.
+// Every entry into Lua is protected; this is the message if one is not.
+int on_panic(lua_State* L) {
+    const char* msg = lua_tostring(L, -1);
+    std::fprintf(stderr, "budyk: unprotected Lua error, aborting: %s\n",
+                 msg != nullptr ? msg : "unknown error");
+    return 0;
 }
 
 void open_sandbox_libs(lua_State* L) {
@@ -112,6 +143,7 @@ int LuaEngine::init(bool enable_exec) {
     memory_used_ = 0;
     lua_State* L = lua_newstate(&LuaEngine::alloc, this);
     if (L == nullptr) return -2;
+    lua_atpanic(L, on_panic);
 
     open_sandbox_libs(L);
 
@@ -161,7 +193,7 @@ int LuaEngine::load_string(const char* code) {
     const int rc = luaL_dostring(L_, code);
     loading_ = false;
     if (rc != LUA_OK) {
-        const char* msg = lua_tostring(L_, -1);
+        const char* msg = error_text(L_, -1);
         last_error_ = msg != nullptr ? msg : "unknown Lua error";
         lua_pop(L_, 1);
         return -2;
@@ -176,7 +208,7 @@ int LuaEngine::load_file(const char* path) {
     const int rc = luaL_dofile(L_, path);
     loading_ = false;
     if (rc != LUA_OK) {
-        const char* msg = lua_tostring(L_, -1);
+        const char* msg = error_text(L_, -1);
         last_error_ = msg != nullptr ? msg : "unknown Lua error";
         lua_pop(L_, 1);
         return -2;
@@ -194,26 +226,39 @@ int LuaEngine::save_state(const char* path) const {
     std::FILE* f = std::fopen(tmp.c_str(), "we");
     if (f == nullptr) return -errno;
 
-    std::fputs("# budyk rule state v1\n", f);
-    std::fputs("# cooldown_remaining\tconsecutive_hits\tfire_count\tname\n", f);
+    // Any failed write (a full disk) keeps the old file: a truncated one
+    // renamed over it would reset every cooldown, the alert storm this
+    // file is there to prevent.
+    int e = 0;
+    auto failed = [&e](bool bad) {
+        if (bad && e == 0) e = errno != 0 ? errno : EIO;
+    };
+    errno = 0;
+    failed(std::fputs("# budyk rule state v1\n", f) < 0);
+    failed(std::fputs("# cooldown_remaining\tconsecutive_hits\tfire_count\tname\n", f) < 0);
     for (const auto& r : rules_) {
         // A newline in a rule name would corrupt the line-based format.
         // Such names are pathological (the name comes from watch()'s
         // first arg); skip persisting them rather than risk a mangled
         // file that breaks every subsequent rule's restore.
         if (r.name.find('\n') != std::string::npos) continue;
-        std::fprintf(f, "%d\t%d\t%llu\t%s\n",
-                     r.cooldown_remaining, r.consecutive_hits,
-                     static_cast<unsigned long long>(r.fire_count),
-                     r.name.c_str());
+        failed(std::fprintf(f, "%d\t%d\t%llu\t%s\n",
+                            r.cooldown_remaining, r.consecutive_hits,
+                            static_cast<unsigned long long>(r.fire_count),
+                            r.name.c_str()) < 0);
     }
-    std::fflush(f);
-    std::fclose(f);
+    failed(std::fflush(f) != 0);
+    failed(::fsync(::fileno(f)) != 0);
+    failed(std::fclose(f) != 0);
+    if (e != 0) {
+        std::remove(tmp.c_str());
+        return -e;
+    }
 
     if (std::rename(tmp.c_str(), path) != 0) {
-        const int e = -errno;
+        e = errno;
         std::remove(tmp.c_str());
-        return e;
+        return -e;
     }
     return 0;
 }
@@ -260,14 +305,30 @@ int LuaEngine::load_state(const char* path) {
     return 0;
 }
 
+bool LuaEngine::bind(const Sample& s, const budyk_detail_c* detail) {
+    begin_call();
+    if (budyk_lua_bind(L_, s, detail, has_file_state_ ? &file_state_ : nullptr) == LUA_OK) {
+        bind_error_.clear();
+        return true;
+    }
+    // A failed allocation, as a rule that holds the state at the memory
+    // limit makes it: the tick goes without rules, logged once.
+    const char* m = error_text(L_, -1);
+    const std::string msg = m != nullptr ? m : "unknown error";
+    lua_pop(L_, 1);
+    if (bind_error_ != msg) {
+        bind_error_ = msg;
+        std::fprintf(stderr, "budyk: rules not evaluated: binding the sample failed: %s\n",
+                     msg.c_str());
+    }
+    return false;
+}
+
 int LuaEngine::eval_tick(const Sample& s, const budyk_detail_c* detail) {
     if (L_ == nullptr) return -1;
 
-    budyk_lua_bind_sample(L_, s, detail);
-    if (has_file_state_) {
-        budyk_lua_bind_files(L_, file_state_);
-    }
     last_fire_count_ = 0;
+    if (!bind(s, detail)) return 0;
 
     for (auto& r : rules_) {
         if (r.cooldown_remaining > 0) {
@@ -284,12 +345,12 @@ int LuaEngine::eval_tick(const Sample& s, const budyk_detail_c* detail) {
                 // passes in a tick; a level that does not collect it is
                 // worth a line.
                 if (why == 1) {
-                    log_skip(&r.last_skip, ("rule '" + r.name + "'").c_str(), lua_tostring(L_, -1));
+                    log_skip(&r.last_skip, ("rule '" + r.name + "'").c_str(), error_text(L_, -1));
                 }
                 lua_pop(L_, 1);
                 continue;
             }
-            log_rule_error(&r.last_error, r.name.c_str(), "when", lua_tostring(L_, -1));
+            log_rule_error(&r.last_error, r.name.c_str(), "when", error_text(L_, -1));
             lua_pop(L_, 1);
             r.consecutive_hits = 0;
             continue;
@@ -333,7 +394,7 @@ void LuaEngine::run_actions(LuaRule* r) {
         if (lua_rawgeti(L_, list, i) == LUA_TFUNCTION) {
             begin_call();
             if (lua_pcall(L_, 0, 0, 0) != LUA_OK) {
-                log_rule_error(&r->last_error, r->name.c_str(), "action", lua_tostring(L_, -1));
+                log_rule_error(&r->last_error, r->name.c_str(), "action", error_text(L_, -1));
                 lua_pop(L_, 1);
             }
             continue;
@@ -429,7 +490,7 @@ int LuaEngine::add_level_condition(uint8_t level_id, const std::string& expr) {
     const std::string chunk = "return (" + expr + ")";
     const std::string name  = "=level " + std::to_string(level_id) + " when";
     if (luaL_loadbuffer(L_, chunk.data(), chunk.size(), name.c_str()) != LUA_OK) {
-        const char* msg = lua_tostring(L_, -1);
+        const char* msg = error_text(L_, -1);
         last_error_ = msg != nullptr ? msg : "unknown Lua error";
         lua_pop(L_, 1);
         return -2;
@@ -445,10 +506,7 @@ void LuaEngine::eval_level_conditions(const Sample& s, std::vector<uint8_t>* act
     active->clear();
     if (L_ == nullptr || level_conditions_.empty()) return;
 
-    budyk_lua_bind_sample(L_, s, detail);
-    if (has_file_state_) {
-        budyk_lua_bind_files(L_, file_state_);
-    }
+    if (!bind(s, detail)) return;
     for (auto& c : level_conditions_) {
         lua_rawgeti(L_, LUA_REGISTRYINDEX, c.ref);
         begin_call();
@@ -456,12 +514,12 @@ void LuaEngine::eval_level_conditions(const Sample& s, std::vector<uint8_t>* act
             if (const int why = budyk_lua_uncollected(L_, -1); why != 0) {
                 if (why == 1) {
                     const std::string what = "level " + std::to_string(c.level_id) + " condition";
-                    log_skip(&c.last_skip, what.c_str(), lua_tostring(L_, -1));
+                    log_skip(&c.last_skip, what.c_str(), error_text(L_, -1));
                 }
                 lua_pop(L_, 1);
                 continue;
             }
-            const char* m = lua_tostring(L_, -1);
+            const char* m = error_text(L_, -1);
             const std::string msg = m != nullptr ? m : "unknown error";
             if (c.last_error != msg) {
                 c.last_error = msg;

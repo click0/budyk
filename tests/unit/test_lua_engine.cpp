@@ -5,6 +5,7 @@
 #include "rules/alert.h"
 
 #include <cassert>
+#include <cerrno>
 #include <memory>
 #include <chrono>
 #include <cstdio>
@@ -1378,6 +1379,145 @@ int main() {
         assert(e.eval_tick(x) == 0);
         assert(e.rules()[0].last_skip.find("icmp is not collected at this level") != std::string::npos);
         e.shutdown();
+    }
+
+    // N+8. A "strict globals" guard on _G (a __newindex that raises for
+    //      an undeclared global) does not trip the bind: the sample
+    //      globals and `files` are raw-set. The bind used to call it
+    //      outside any protected call: a Lua panic, the daemon aborted.
+    {
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        FileWatchState fs;
+        fs.modifies["/etc/passwd"] = 2;
+        e.set_file_state(fs);
+        assert(e.load_string(
+            "watch('hot', { cooldown = 0, when = function()\n"
+            "  return cpu.total_percent > 50 and files['/etc/passwd'].modifies == 2\n"
+            "    and uptime_seconds > 0\n"
+            "end })\n"
+            "setmetatable(_G, { __newindex = function(_, k) error('undeclared global ' .. k) end })\n")
+            == 0);
+        assert(e.eval_tick(mk(90, 50, 0, 0)) == 1);
+        assert(e.rules()[0].last_error.empty());
+        // A rule's own assignment to a new global still meets the guard.
+        assert(e.load_string("watch('w', { cooldown = 0, when = function() x = 1 return true end })")
+               == 0);
+        assert(e.eval_tick(mk(90, 50, 0, 0)) == 1);
+        assert(e.rules()[1].last_error.find("undeclared global x") != std::string::npos);
+        e.shutdown();
+    }
+
+    // N+9. A rule that holds the state at rules.limits.memory_mb makes
+    //      the next bind's allocations fail: the tick goes without rules
+    //      (logged), the daemon goes on, and the rules run again once
+    //      there is room. That bind used to raise unprotected: a panic.
+    {
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        e.set_limits(LuaEngine::kDefaultInstructionLimit, 2u << 20);
+        assert(e.load_string(
+            "watch('fill', { cooldown = 0, when = function()\n"
+            "  if filled then return false end\n"
+            "  filled = true\n"
+            "  while true do hog = { hog } end\n"   // small tables, up to the last bytes
+            "end })\n"
+            "watch('ok', { cooldown = 0, when = function() return true end })\n") == 0);
+        const Sample x = mk(10, 50, 0, 0);
+        e.eval_tick(x);                                   // 'fill' fills the state
+        assert(e.rules()[0].last_error.find("not enough memory") != std::string::npos);
+        const uint64_t ok_fired = e.rules()[1].fire_count;
+
+        // New processes: new item tables and names, so the bind allocates.
+        std::unique_ptr<budyk_detail_c> d(new budyk_detail_c());
+        d->collected = kDetailAll;
+        d->nprocs = 2 * BUDYK_TOP_EACH;
+        for (uint32_t i = 0; i < d->nprocs; ++i) {
+            d->procs[i] = budyk_process_c{ static_cast<int32_t>(i + 1), "", 'S', 1, 0.0, 1 };
+            std::snprintf(d->procs[i].name, sizeof(d->procs[i].name), "proc-%u", i);
+        }
+        assert(e.eval_tick(x, d.get()) == 0);
+        assert(e.rules()[1].fire_count == ok_fired);      // nothing evaluated
+
+        e.set_limits(LuaEngine::kDefaultInstructionLimit, 64u << 20);
+        assert(e.eval_tick(x, d.get()) == 1);             // 'ok' again
+        assert(e.rules()[1].fire_count == ok_fired + 1);
+        e.shutdown();
+    }
+
+    // N+10. pairs() over a sample table hands out the proxy, not the data
+    //       behind it: a rule cannot write through it, and the next rule
+    //       reads the real value.
+    {
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        assert(e.load_string(
+            "watch('writer', { cooldown = 0, when = function()\n"
+            "  local _, t = pairs(cpu)\n"
+            "  local ok = pcall(function() t.total_percent = 0 end)\n"
+            "  return t == cpu and not ok\n"
+            "end })\n"
+            "watch('reader', { cooldown = 0, when = function()\n"
+            "  local seen\n"
+            "  for k, v in pairs(cpu) do if k == 'total_percent' then seen = v end end\n"
+            "  return cpu.total_percent == 75 and seen == 75\n"
+            "end })\n") == 0);
+        assert(e.eval_tick(mk(75, 50, 0, 0)) == 2);
+        e.shutdown();
+    }
+
+    // N+11. watch() reads each field of opts once: an __index that
+    //       answers differently the second time (a table where a string
+    //       was) used to crash the load, the message read again by C++.
+    {
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        assert(e.load_string(
+            "local seen = {}\n"
+            "local fields = { message = 'first', when = function() return true end }\n"
+            "watch('flip', setmetatable({ cooldown = 0 }, { __index = function(_, k)\n"
+            "  if seen[k] then return {} end\n"
+            "  seen[k] = true\n"
+            "  return fields[k]\n"
+            "end }))\n") == 0);
+        assert(e.rule_count() == 1);
+        assert(e.rules()[0].message == "first");
+        assert(e.eval_tick(mk(0, 0, 0, 0)) == 1);
+        e.shutdown();
+    }
+
+    // N+12. save_state() that cannot write keeps the old file: a write
+    //       that fails (a full disk: /dev/full) used to be renamed over
+    //       it, and every cooldown reset on the next start.
+    if (access("/dev/full", W_OK) == 0) {
+        char tmpl[] = "/tmp/budyk_state_XXXXXX";
+        const char* dir = ::mkdtemp(tmpl);
+        assert(dir != nullptr);
+        const std::string path = std::string(dir) + "/state.tsv";
+        const std::string tmp  = path + ".tmp";
+
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        assert(e.load_string("watch('r', { for_ticks = 1, cooldown = 5, when = function() return true end })")
+               == 0);
+        assert(e.eval_tick(mk(0, 0, 0, 0)) == 1);                // cooldown 5
+        assert(e.save_state(path.c_str()) == 0);
+
+        assert(::symlink("/dev/full", tmp.c_str()) == 0);        // the next write fails
+        e.eval_tick(mk(0, 0, 0, 0));                             // cooldown 4
+        assert(e.save_state(path.c_str()) == -ENOSPC);
+        assert(access(tmp.c_str(), F_OK) != 0);                  // the temp file is gone
+
+        LuaEngine back;                                          // the old file is intact
+        assert(back.init(false) == 0);
+        assert(back.load_string("watch('r', { for_ticks = 1, cooldown = 5, when = function() return true end })")
+               == 0);
+        assert(back.load_state(path.c_str()) == 0);
+        assert(back.rules()[0].cooldown_remaining == 5);
+        back.shutdown();
+        e.shutdown();
+        ::unlink(path.c_str());
+        ::rmdir(dir);
     }
 
     std::printf("test_lua_engine: PASS\n");

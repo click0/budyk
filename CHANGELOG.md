@@ -17,6 +17,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hand first (which the workflow cannot complete). A tag push still
   works, and is now checked against `CMakeLists.txt` too.
 
+### Fixed
+
+- **A rule could abort the daemon.** Each tick's bind of the sample ran
+  outside any protected call, so a Lua error there was a panic: a rules
+  file with a "strict globals" guard on `_G` (a `__newindex` that
+  raises) aborted on the first tick, and so did a rule that kept the
+  state at `rules.limits.memory_mb` (a history table it never trims)
+  once the bind needed memory. The bind is now protected and sets the
+  globals raw; when it fails the tick goes without rules, logged once.
+- **`pairs()` over a sample table handed out the table behind the
+  read-only proxy**: a rule could change what the next rule read, or
+  give it a metatable the next bind would run. It now hands out the
+  proxy.
+- **`watch()` read `message` and `when` twice**: an `opts` with an
+  `__index` that answered a table the second time crashed the load.
+  Each field is read once. `exec()` builds its result table only after
+  its C++ objects are gone, and formats a number argument itself.
+- **The rule state file on a full disk**: a write that failed was
+  renamed over the good file, and every cooldown reset on the next
+  start. Write errors are checked (and the file synced) before the
+  rename, and a failed save is logged with its reason.
+- **YAML rules**: a control character before a digit in a name or
+  message became another character (`\1` then `23` read as `\123`).
+
 ## [0.8.1] — 2026-10-22
 
 Two fixes in the readings, found by two new tests that hold budyk to

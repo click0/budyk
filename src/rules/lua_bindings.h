@@ -28,6 +28,16 @@
 #include "core/sample_c.h"
 struct lua_State;
 namespace budyk { struct Sample; struct FileWatchState; }
+/// Bind the sample (and `files`, when given) in a protected call: an
+/// allocation that fails (a rule holding the state at
+/// rules.limits.memory_mb) is an error, not a Lua panic. LUA_OK, or the
+/// error status with the message on the stack. The globals are raw-set:
+/// a __newindex a rules file put on _G does not run.
+int  budyk_lua_bind           (lua_State* L, const budyk::Sample& s,
+                               const budyk_detail_c* d,
+                               const budyk::FileWatchState* files);
+/// The binds budyk_lua_bind() runs. They raise when an allocation fails:
+/// call them only inside a protected call.
 void budyk_lua_bind_sample    (lua_State* L, const budyk::Sample& s,
                                const budyk_detail_c* d = nullptr);
 void budyk_lua_bind_files     (lua_State* L, const budyk::FileWatchState& s);
