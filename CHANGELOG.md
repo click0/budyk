@@ -102,6 +102,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   each send, so a client reading a little within each one kept the
   thread as long as it liked. A response now gets the I/O timeout plus
   its size at 256 KiB/s.
+- **Under the packaged systemd unit, filesystems never reported full.**
+  The read-only test used the mount's options in budyk's own mount
+  namespace, and `ProtectSystem=strict` makes every mount read-only there
+  except the data directory: `/`, `/srv`, `/var/lib/...` were skipped.
+  It now reads `/proc/self/mountinfo` and goes by the filesystem's own
+  options.
+- **A process could hide from the counts and the top list** by putting a
+  newline in its name (one `prctl()`): `/proc/PID/stat` was read up to
+  the first newline, which then had no `)`. The whole file is read now.
+- **The total disk and network rates jumped when a device came or went.**
+  The rates were the delta of the summed counters. An interface
+  arriving with its counters (a jail's vnet back on the host, a moved
+  netns) showed as gigabytes per second for one tick, and one leaving (a
+  container's veth) showed 0 while the others moved. Each device's own
+  delta is now summed, and a new one starts from a baseline.
+- **UDP over IPv6 read 0 on Linux.** IPv6's counters are kept apart, in
+  `/proc/net/snmp6`, and are now added.
+- **A collector that failed passed zeros off as readings**: for example
+  `proc.total = 0` when `kern.proc.proc` failed during a fork storm. Its
+  groups are now left out of the sample (logged when it starts failing),
+  and a group read again starts from a baseline.
+- **On-demand mode: the first sample after an idle gap** had CPU, disk
+  and network rates averaged over the whole gap (70 % CPU on an idle
+  box, from the minutes before). A tick that reads nothing now makes the
+  next read a baseline.
 
 ## [0.8.1] — 2026-10-22
 

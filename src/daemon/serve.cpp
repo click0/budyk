@@ -629,6 +629,12 @@ int cmd_serve(int argc, char* argv[], const char* version) {
         if (!sched.collects(collect_at)) {
             housekeeping();
             slept_at = collect_at;
+            // A tick that reads nothing ends the run of reads: the first
+            // read after it is a baseline, not a rate over the idle gap
+            // (on-demand mode showed 70 % CPU on an idle box, the busy
+            // minutes before a client came back).
+            collect_ctx.last_groups = 0;
+            collect_ctx.last_detail = 0;
             int idle_ms = sched.interval_ms(collect_at);
             const uint64_t idle_due = warm.ns_until_due(now_realtime_ns());
             if (idle_due != UINT64_MAX && idle_due / 1000000 + 1 < static_cast<uint64_t>(idle_ms)) {

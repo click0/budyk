@@ -256,13 +256,17 @@ int main() {
             fx.file(std::to_string(100 + i) + "/stat", std::string(line) + rest);
         }
         fx.file("self/stat", "1 (self) R 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 1 0\n");
+        // A name with a line break (prctl(PR_SET_NAME, "miner\n") is one
+        // call for any process): read up to a newline, its line had no
+        // ')' and the process hid from the counts and the top list.
+        fx.file("110/stat", "110 (miner\n) R 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 9 0 1 0\n");
         budyk_linux_set_proc_root(fx.root.c_str());
         budyk_sample_c s;
         std::memset(&s, 0, sizeof(s));
         assert(budyk_collect_proc_linux(&s) == 0);
-        assert(s.proc.total == 8 && s.proc.running == 1 && s.proc.sleeping == 3);
+        assert(s.proc.total == 9 && s.proc.running == 2 && s.proc.sleeping == 3);
         assert(s.proc.blocked == 1 && s.proc.stopped == 2 && s.proc.zombie == 1);
-        assert(s.proc.threads == 1 + 2 + 3 + 4 + 5 + 6 + 7 + 8);
+        assert(s.proc.threads == 1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 + 9);
     }
 
     // 7g2. The top processes against a fixture /proc: CPU% from the
@@ -408,8 +412,22 @@ int main() {
         assert(near(s.tcp.retransmits_per_sec, 2.0));
         assert(near(s.udp.in_datagrams_per_sec, 100.0));
         assert(near(s.tcp.passive_opens_per_sec, 0.0));
+        // UDP over IPv6 is counted apart, in snmp6, and added: 40 more
+        // datagrams in and 2 more errors in these 2 s. (IPv6's UDP read 0.)
+        fx.file("net/snmp6", "Ip6InReceives 5\nUdp6InDatagrams 1000\nUdp6NoPorts 0\n"
+                             "Udp6InErrors 7\nUdp6OutDatagrams 50\nUdpLite6InDatagrams 9\n");
+        s.timestamp_nanos = 3'500'000'000ULL;
+        assert(budyk_collect_netstat_linux(&ctx, &s) == 0);   // IPv6 appears: a jump, once
+        fx.file("net/snmp6", "Ip6InReceives 5\nUdp6InDatagrams 1040\nUdp6NoPorts 0\n"
+                             "Udp6InErrors 9\nUdp6OutDatagrams 50\nUdpLite6InDatagrams 9\n");
+        snmp(30, 6, 54, 340);                               // and 40 over IPv4
+        s.timestamp_nanos = 5'500'000'000ULL;
+        assert(budyk_collect_netstat_linux(&ctx, &s) == 0);
+        assert(near(s.udp.in_datagrams_per_sec, 40.0));     // (40 + 40) / 2 s
+        assert(near(s.udp.in_errors_per_sec, 1.0));
+        ::unlink((fx.root + "/net/snmp6").c_str());
         snmp(5, 6, 54, 300);                                // a counter went back
-        s.timestamp_nanos = 4'000'000'000ULL;
+        s.timestamp_nanos = 6'500'000'000ULL;
         assert(budyk_collect_netstat_linux(&ctx, &s) == 0);
         assert(s.tcp.active_opens_per_sec == 0.0);
 
@@ -464,7 +482,8 @@ int main() {
     //     counted. Against a fixture mounts file whose entries point at
     //     real, distinct filesystems (the one under /tmp, /dev, /dev/shm),
     //     so each rule alone decides the count: pseudo, network, FUSE and
-    //     read-only mounts are skipped, a second mount of the same
+    //     read-only filesystems are skipped (a mount read-only only in
+    //     this namespace is not one), a second mount of the same
     //     filesystem counts once, an escaped mount point (\040) is
     //     unescaped, a mount point that is gone is skipped.
     {
@@ -482,22 +501,36 @@ int main() {
         const std::string spaced = fx.root + "/with space";
         assert(::mkdir(spaced.c_str(), 0700) == 0);
         const bool shm = ::access("/dev/shm", F_OK) == 0;
-        fx.file("self/mounts",
-            "proc /proc proc rw 0 0\n"
-            "sysfs /sys sysfs rw 0 0\n"
-            "/dev/sdz1 " + fx.root + "/with\\040space ext4 rw 0 0\n"   // counted
-            "/dev/sdz3 /dev ext4 ro 0 0\n"                    // read-only
-            "server:/x /dev nfs4 rw 0 0\n"                    // network
-            "sshfs#u@h: /dev fuse.sshfs rw 0 0\n"             // FUSE
-            "/dev/loop0 /dev squashfs rw 0 0\n"               // an image
-            "tmpfs /dev/shm tmpfs rw,nosuid 0 0\n"            // counted
-            "tmpfs /dev/shm tmpfs rw 0 0\n"                   // the same again
-            "/dev/sdz9 /nonexistent-mount ext4 rw 0 0\n");    // gone
+        // mountinfo: mount ID, parent, dev, root, mount point, the mount's
+        // options, optional fields, "-", type, source, the filesystem's
+        // own options.
+        fx.file("self/mountinfo",
+            "20 1 0:5 / /proc rw - proc proc rw\n"
+            "21 1 0:6 / /sys rw - sysfs sysfs rw\n"
+            // Read-only only in this mount namespace (systemd's
+            // ProtectSystem=strict): the filesystem itself is rw, counted.
+            "22 1 8:1 / " + fx.root + "/with\\040space ro,relatime shared:1 - ext4 /dev/sdz1 rw,errors=remount-ro\n"
+            "23 1 8:3 / /dev ro - ext4 /dev/sdz3 ro\n"                 // read-only filesystem
+            "24 1 8:5 / /dev rw - ext4 /dev/sdz5 ro\n"                 // the same, mounted rw
+            "25 1 0:40 / /dev rw - nfs4 server:/x rw\n"               // network
+            "26 1 0:41 / /dev rw - fuse.sshfs sshfs#u@h: rw\n"        // FUSE
+            "27 1 7:0 / /dev rw - squashfs /dev/loop0 ro\n"           // an image
+            "28 1 0:26 / /dev/shm rw,nosuid - tmpfs tmpfs rw\n"       // counted
+            "29 1 0:26 / /dev/shm rw - tmpfs tmpfs rw\n"              // the same again
+            "30 1 8:9 / /nonexistent-mount rw - ext4 /dev/sdz9 rw\n"); // gone
         budyk_linux_set_proc_root(fx.root.c_str());
         std::memset(&s, 0, sizeof(s));
         assert(budyk_collect_fs_linux(&s) == 0);
         assert(s.fs.present);
         assert(s.fs.count == (shm ? 2u : 1u));
+        // Which ones: the one read-only only in this namespace, not the
+        // read-only filesystem mounted rw.
+        std::unique_ptr<budyk_detail_c> det(new budyk_detail_c());
+        std::memset(&s, 0, sizeof(s));
+        assert(budyk_collect_fs_linux_ex(&s, det.get()) == 0);
+        assert(det->nmounts == s.fs.count);
+        assert(fx.root + "/with space" == det->mounts[0].mount);
+        for (uint32_t i = 0; i < det->nmounts; ++i) assert(std::strcmp(det->mounts[i].mount, "/dev") != 0);
         budyk_linux_set_proc_root(nullptr);
     }
 
@@ -657,14 +690,15 @@ int main() {
         assert(near(d->disks[0].reads_per_sec, 10.0));
         assert(near(d->disks[0].busy_percent, 50.0));                  // 1000 ms of 2000
         assert(std::strcmp(d->disks[1].name, "sdb") == 0 && d->disks[1].read_bytes_per_sec == 0);
-        // The totals sum every disk's counters, so a disk that appears
-        // adds all of its counters once (sdb's 8 sectors here); the
-        // per-device rates start it at a baseline instead.
-        assert(s.disk.read_bytes_per_sec == (2000 + 8) * 512 / 2);
+        // The totals are each disk's own delta summed: a disk that
+        // appears is a baseline there too. (The delta of the summed
+        // counters added all of sdb's 8 sectors at once.)
+        assert(s.disk.read_bytes_per_sec == 2000 * 512 / 2);
         s.timestamp_nanos = 13'000'000'000ULL;
-        diskstats(3000, 2000, 30, 20, 1100, false);                     // sdb gone
+        diskstats(4000, 2000, 30, 20, 1100, false);                     // sdb gone, sda reads on
         assert(budyk_collect_disk_linux_ex(&dctx, &s, d.get()) == 0);
         assert(d->ndisks == 1 && d->ndisk_prev == 1);
+        assert(s.disk.read_bytes_per_sec == 1000 * 512);               // sda's, not 0
 
         auto netdev = [&](unsigned rx, unsigned tx, unsigned rxerr) {
             char buf[1024];
@@ -689,6 +723,29 @@ int main() {
         netdev(100, 900, 3);                    // the interface was reset: rx went back
         assert(budyk_collect_network_linux_ex(&nctx, &s, d.get()) == 0);
         assert(d->ifaces[0].rx_bytes_per_sec == 0 && d->ifaces[0].tx_bytes_per_sec == 200);
+        assert(s.net.rx_bytes_per_sec == 0 && s.net.tx_bytes_per_sec == 200);
+
+        // An interface that comes with 40 GB on its counters (a jail's
+        // vnet back on the host, a moved netns) is a baseline in the
+        // total too; one that goes (a container's veth) takes nothing
+        // with it. The delta of the summed counters read 40 GB/s for the
+        // first and 0 B/s for the second while eth0 moved 1 MB/s.
+        auto netdev2 = [&](unsigned long long eth0_rx, const char* extra) {
+            char buf[1024];
+            std::snprintf(buf, sizeof(buf),
+                "Inter-|   Receive  |  Transmit\n face |bytes packets errs drop fifo frame compressed multicast|bytes packets errs drop fifo colls carrier compressed\n"
+                "  eth0: %llu 10 0 0 0 0 0 0 900 20 0 0 0 0 0 0\n%s", eth0_rx, extra);
+            fx.file("net/dev", buf);
+        };
+        const char* veth = "veth9: 40000000000 1 0 0 0 0 0 0 40000000000 1 0 0 0 0 0 0\n";
+        s.timestamp_nanos = 23'000'000'000ULL;
+        netdev2(1'000'100, veth);               // veth9 appears; eth0 +1 MB
+        assert(budyk_collect_network_linux(&nctx, &s) == 0);
+        assert(s.net.rx_bytes_per_sec == 1'000'000 && s.net.tx_bytes_per_sec == 0);
+        s.timestamp_nanos = 24'000'000'000ULL;
+        netdev2(2'000'100, "");                 // veth9 gone; eth0 +1 MB
+        assert(budyk_collect_network_linux(&nctx, &s) == 0);
+        assert(s.net.rx_bytes_per_sec == 1'000'000);
 
         budyk_cpu_ctx_c c2;
         std::memset(&c2, 0, sizeof(c2));

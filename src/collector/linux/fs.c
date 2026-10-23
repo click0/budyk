@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause */
-/* collector/linux/fs.c — local filesystem usage: /proc/self/mounts,
+/* collector/linux/fs.c — local filesystem usage: /proc/self/mountinfo,
  * then statvfs(3) on each mount point that is worth watching. */
 
 #include "core/sample_c.h"
@@ -15,8 +15,8 @@
  * full (squashfs snaps, iso9660), overlay (a container's view of a
  * filesystem counted already), and network or FUSE filesystems, whose
  * statvfs() can block on a server that stopped answering: the
- * collector tick must not wait (CLAUDE.md). Read-only mounts are
- * skipped too: they do not fill up. */
+ * collector tick must not wait (CLAUDE.md). A read-only filesystem is
+ * skipped too: it does not fill up. */
 static int skipped_type(const char* t) {
     static const char* kSkip[] = {
         "autofs", "binfmt_misc", "bpf", "cgroup", "cgroup2", "configfs",
@@ -32,12 +32,25 @@ static int skipped_type(const char* t) {
     return strncmp(t, "fuse", 4) == 0;
 }
 
+/* Whether a comma-separated option list says "ro". */
 static int read_only(const char* opts) {
     return strcmp(opts, "ro") == 0 || strncmp(opts, "ro,", 3) == 0;
 }
 
-/* Mount points in /proc/self/mounts escape space, tab, newline and
- * backslash as \040, \011, \012, \134. */
+/* One line of /proc/self/mountinfo:
+ *   36 35 98:0 /root /mnt rw,noatime master:1 - ext4 /dev/sda1 rw,errors=continue
+ * the mount point (field 5), and after the " - " the type, the source
+ * and the filesystem's own options. 0 when the line does not read. */
+static int parse_mountinfo(char* line, char* mnt, char* type, char* dev, char* sopts) {
+    char* sep = strstr(line, " - ");
+    if (sep == NULL) return 0;
+    *sep = '\0';
+    return sscanf(line, "%*s %*s %*s %*s %1023s", mnt) == 1 &&
+           sscanf(sep + 3, "%63s %1023s %1023s", type, dev, sopts) == 3;
+}
+
+/* Mount points in /proc/self/mounts and mountinfo escape space, tab,
+ * newline and backslash as \040, \011, \012, \134. */
 void budyk_linux_unescape_mount(char* s) {
     char* out = s;
     for (const char* p = s; *p != '\0'; ++p) {
@@ -61,17 +74,22 @@ int budyk_collect_fs_linux_ex(budyk_sample_c* s, budyk_detail_c* d) {
     memset(&s->fs, 0, sizeof(s->fs));
     if (d != NULL) d->nmounts = 0;
 
+    /* mountinfo, not mounts: the read-only test must be the filesystem's
+     * own ("ro" after the " - "). The mount's options are this mount
+     * namespace's view, and under systemd's ProtectSystem=strict (the
+     * packaged unit) every mount but the data directory reads "ro" there:
+     * /, /srv, /var/lib/... were skipped and never reported full. */
     char path[512];
-    snprintf(path, sizeof(path), "%s/self/mounts", budyk_linux_proc_root());
+    snprintf(path, sizeof(path), "%s/self/mountinfo", budyk_linux_proc_root());
     FILE* f = fopen(path, "re");
     if (f == NULL) return -errno;
 
-    dev_t    seen[64];
+    dev_t    seen[256];
     size_t   nseen = 0;
     char     line[4096];
     while (fgets(line, sizeof(line), f) != NULL) {
         char dev[1024], mnt[1024], type[64], opts[1024];
-        if (sscanf(line, "%1023s %1023s %63s %1023s", dev, mnt, type, opts) != 4) continue;
+        if (!parse_mountinfo(line, mnt, type, dev, opts)) continue;
         if (skipped_type(type) || read_only(opts)) continue;
         budyk_linux_unescape_mount(mnt);
 

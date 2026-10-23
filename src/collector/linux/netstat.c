@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: BSD-3-Clause */
 /* collector/linux/netstat.c — TCP / UDP / ICMP counters from
- * /proc/net/snmp and /proc/net/sockstat (all address families for TCP
- * and UDP, whose MIB counters IPv4 and IPv6 share; ICMP is IPv4's). */
+ * /proc/net/snmp, /proc/net/snmp6 and /proc/net/sockstat. TCP's MIB
+ * counters are IPv4's and IPv6's together; UDP's are not (IPv6's are
+ * Udp6* in snmp6, added here); ICMP is IPv4's. */
 
 #include "core/sample_c.h"
 
@@ -88,6 +89,26 @@ int budyk_collect_netstat_linux(budyk_netstat_ctx_c* ctx, budyk_sample_c* s) {
         snmp_value(udp_n, udp_v, "OutDatagrams", &uout) &&
         snmp_value(udp_n, udp_v, "NoPorts",      &unoport) &&
         snmp_value(udp_n, udp_v, "InErrors",     &uerr);
+
+    /* UDP over IPv6: "Udp6InDatagrams 123" lines in snmp6, absent with
+     * IPv6 off. Without them a resolver or QUIC service on IPv6 read 0. */
+    snprintf(path, sizeof(path), "%s/net/snmp6", budyk_linux_proc_root());
+    f = fopen(path, "re");
+    if (f != NULL) {
+        static const char* const kUdp6[] = {
+            "Udp6InDatagrams", "Udp6OutDatagrams", "Udp6NoPorts", "Udp6InErrors",
+        };
+        unsigned long long* const to[] = { &uin, &uout, &unoport, &uerr };
+        char name[64];
+        unsigned long long v;
+        while (fgets(line, sizeof(line), f) != NULL) {
+            if (sscanf(line, "%63s %llu", name, &v) != 2) continue;
+            for (size_t i = 0; i < sizeof(kUdp6) / sizeof(kUdp6[0]); ++i) {
+                if (strcmp(name, kUdp6[i]) == 0) *to[i] += v;
+            }
+        }
+        fclose(f);
+    }
 
     unsigned long long iin = 0, iout = 0, ierr = 0, iunr = 0;
     const int icmp_ok =

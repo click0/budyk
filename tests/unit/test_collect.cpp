@@ -127,6 +127,25 @@ int main() {
         assert((x.groups & kGroupIcmp) != 0 && x.icmp.present);
         assert(x.icmp.in_msgs_per_sec == 100.0 && x.icmp.out_msgs_per_sec == 20.0);
         assert(x.icmp.in_errors_per_sec == 2.0 && x.icmp.in_dest_unreachs_per_sec == 10.0);
+        // The fixture has no /proc/stat: the cpu collector fails, and its
+        // group is left out rather than zeros passed off as a reading
+        // (0 % busy). Once /proc/stat is there, cpu reads again, first as
+        // a baseline.
+        assert((x.groups & kGroupCpu) == 0);
+        assert((c3.failed & kGroupCpu) != 0 && (x.baseline & kGroupCpu) == 0);
+        {
+            FILE* f = std::fopen((std::string(dir) + "/stat").c_str(), "w");
+            assert(f != nullptr);
+            std::fputs("cpu  10 0 10 80 0 0 0 0 0 0\ncpu0 10 0 10 80 0 0 0 0 0 0\n", f);
+            std::fclose(f);
+        }
+        budyk_linux_set_proc_root(dir);
+        x = Sample{};
+        x.timestamp_nanos = 4000000000ULL;
+        collect_one(&x, &c3, set);
+        budyk_linux_set_proc_root(nullptr);
+        assert((c3.failed & kGroupCpu) == 0 && (x.baseline & kGroupCpu) != 0);
+        ::unlink((std::string(dir) + "/stat").c_str());
         ::unlink((net + "/snmp").c_str());
         ::rmdir(net.c_str());
         ::rmdir(dir);

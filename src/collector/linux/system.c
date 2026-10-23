@@ -148,8 +148,13 @@ int budyk_collect_proc_linux_ex(budyk_sample_c* s, budyk_detail_c* d) {
         if (n <= 0 || (size_t)n >= sizeof(path)) continue;
         FILE* f = fopen(path, "re");
         if (f == NULL) continue;
+        /* The whole file, not a line: the kernel prints the name as it
+         * is, and a process named "x\n" (one prctl()) ended fgets() before
+         * its ')': it went uncounted and out of the top list. */
         char line[1024];
-        const int got = fgets(line, sizeof(line), f) != NULL;
+        const size_t len = fread(line, 1, sizeof(line) - 1, f);
+        line[len] = '\0';
+        const int got = len > 0;
         fclose(f);
         budyk_proc_read_c r;
         uint32_t flags = 0;

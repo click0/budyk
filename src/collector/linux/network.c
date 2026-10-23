@@ -48,8 +48,10 @@ int budyk_collect_network_linux_ex(budyk_net_ctx_c* ctx, budyk_sample_c* s, budy
     FILE* f = fopen(path, "re");
     if (f == NULL) return -errno;
 
-    uint64_t rx_bytes = 0;
-    uint64_t tx_bytes = 0;
+    budyk_counted_c counted[BUDYK_MAX_COUNTED] = {{"", 0, 0}};
+    uint32_t ncounted    = 0;
+    uint64_t rx_moved    = 0;
+    uint64_t tx_moved    = 0;
     uint32_t iface_count = 0;
 
     char line[512];
@@ -77,8 +79,8 @@ int budyk_collect_network_linux_ex(budyk_net_ctx_c* ctx, budyk_sample_c* s, budy
                             &txb, &txp, &txe, &txd, &txfi, &txco, &txca, &txcm);
         if (parsed < 16) continue;
 
-        rx_bytes += rxb;
-        tx_bytes += txb;
+        budyk_counted_add(ctx->dev, ctx->ndev, counted, &ncounted, name, rxb, txb,
+                          &rx_moved, &tx_moved);
         ++iface_count;
 
         if (d != NULL && d->nifaces < BUDYK_MAX_ENTITIES) {
@@ -111,9 +113,10 @@ int budyk_collect_network_linux_ex(budyk_net_ctx_c* ctx, budyk_sample_c* s, budy
         s->net.rx_bytes_per_sec = 0;
         s->net.tx_bytes_per_sec = 0;
     } else {
-        const uint64_t dns = s->timestamp_nanos - ctx->prev_ns;
-        s->net.rx_bytes_per_sec = budyk_rate_u64(rx_bytes, &ctx->prev_rx_bytes, dns);
-        s->net.tx_bytes_per_sec = budyk_rate_u64(tx_bytes, &ctx->prev_tx_bytes, dns);
+        const uint64_t dns  = s->timestamp_nanos - ctx->prev_ns;
+        const uint64_t zero = 0;
+        s->net.rx_bytes_per_sec = budyk_rate_u64(rx_moved, &zero, dns);
+        s->net.tx_bytes_per_sec = budyk_rate_u64(tx_moved, &zero, dns);
     }
 
     if (d != NULL) {
@@ -121,8 +124,8 @@ int budyk_collect_network_linux_ex(budyk_net_ctx_c* ctx, budyk_sample_c* s, budy
         d->niface_prev   = nnext;
         d->iface_prev_ns = s->timestamp_nanos;
     }
-    ctx->prev_rx_bytes = rx_bytes;
-    ctx->prev_tx_bytes = tx_bytes;
+    memcpy(ctx->dev, counted, sizeof(counted[0]) * ncounted);
+    ctx->ndev          = ncounted;
     ctx->prev_ns       = s->timestamp_nanos;
     ctx->has_prev      = 1;
     return 0;

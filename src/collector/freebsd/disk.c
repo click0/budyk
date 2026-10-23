@@ -53,21 +53,24 @@ int budyk_collect_disk_freebsd_ex(budyk_disk_ctx_c* ctx, budyk_sample_c* s, budy
         return -EIO;
     }
 
-    uint64_t total_read  = 0;
-    uint64_t total_write = 0;
+    budyk_counted_c counted[BUDYK_MAX_COUNTED] = {{"", 0, 0}};
+    uint32_t ncounted    = 0;
+    uint64_t read_moved  = 0;
+    uint64_t write_moved = 0;
     uint32_t devs        = 0;
     for (int i = 0; i < stats.dinfo->numdevs; ++i) {
         const struct devstat* d = &stats.dinfo->devices[i];
         if ((d->device_type & DEVSTAT_TYPE_MASK) != DEVSTAT_TYPE_DIRECT) continue;
         if (d->device_type & DEVSTAT_TYPE_PASS) continue;
         if (d->device_name[0] == '\0') continue;
-        total_read  += d->bytes[DEVSTAT_READ];
-        total_write += d->bytes[DEVSTAT_WRITE];
+        char name[32];
+        snprintf(name, sizeof(name), "%.20s%d", d->device_name, d->unit_number);
+        budyk_counted_add(ctx->dev, ctx->ndev, counted, &ncounted, name,
+                          (uint64_t)d->bytes[DEVSTAT_READ], (uint64_t)d->bytes[DEVSTAT_WRITE],
+                          &read_moved, &write_moved);
         ++devs;
 
         if (detail != NULL && detail->ndisks < BUDYK_MAX_ENTITIES) {
-            char name[32];
-            snprintf(name, sizeof(name), "%.20s%d", d->device_name, d->unit_number);
             const uint64_t busy_us = (uint64_t)d->busy_time.sec * 1000000ULL +
                                      (((uint64_t)(d->busy_time.frac >> 32) * 1000000ULL) >> 32);
             const uint64_t now[5] = {
@@ -105,9 +108,6 @@ int budyk_collect_disk_freebsd_ex(budyk_disk_ctx_c* ctx, budyk_sample_c* s, budy
     if (stats.dinfo->mem_ptr != NULL) free(stats.dinfo->mem_ptr);
     free(stats.dinfo);
 
-    /* The Linux side uses the same ctx struct fields for raw sector
-     * deltas; on FreeBSD we just stash bytes there — fields are opaque
-     * state, not part of the wire format. */
     s->disk.device_count       = devs;
     s->disk.read_bytes_per_sec = 0;
     s->disk.write_bytes_per_sec = 0;
@@ -116,17 +116,16 @@ int budyk_collect_disk_freebsd_ex(budyk_disk_ctx_c* ctx, budyk_sample_c* s, budy
         const uint64_t now_ns = s->timestamp_nanos;
         const uint64_t dt_ns  = (now_ns > ctx->prev_ns) ? (now_ns - ctx->prev_ns) : 0;
         if (dt_ns > 0) {
-            /* Counters can roll on hot-unplug → reattach. Skip the
-             * delta on a backwards step rather than emit a giant rate. */
-            s->disk.read_bytes_per_sec  =
-                budyk_rate_u64(total_read,  &ctx->prev_read_sectors,  dt_ns);
-            s->disk.write_bytes_per_sec =
-                budyk_rate_u64(total_write, &ctx->prev_write_sectors, dt_ns);
+            /* Each disk's own delta: one that comes back after a
+             * hot-unplug starts again from a baseline. */
+            const uint64_t zero = 0;
+            s->disk.read_bytes_per_sec  = budyk_rate_u64(read_moved,  &zero, dt_ns);
+            s->disk.write_bytes_per_sec = budyk_rate_u64(write_moved, &zero, dt_ns);
         }
     }
 
-    ctx->prev_read_sectors  = total_read;
-    ctx->prev_write_sectors = total_write;
+    memcpy(ctx->dev, counted, sizeof(counted[0]) * ncounted);
+    ctx->ndev               = ncounted;
     ctx->prev_ns            = s->timestamp_nanos;
     ctx->has_prev           = 1;
     return 0;

@@ -28,6 +28,13 @@ dependencies at runtime, no database. BSD-3-Clause license.
   `cpu.cores` / `disk.devices` / `net.interfaces` / `fs.mounts` /
   `proc.top`), never stored. JSON strings are made valid UTF-8
   (`json_escape`): process names and mount points are anyone's bytes.
+  The disk and network totals are each device's own delta summed
+  (`budyk_counted_add()`): a device that comes or goes moves nothing.
+  A collector that fails leaves its groups out of the sample (logged when
+  it starts failing), and a tick that reads nothing makes the next read
+  a baseline. Filesystems are read from `/proc/self/mountinfo`, read-only
+  by the filesystem's own options (systemd's ProtectSystem=strict makes
+  every mount look read-only).
 - **Storage:** one ring file per level (mmap'd header, `pwrite` records,
   CRC32C, level markers). While L3 or a custom level collects,
   `TierManager::store()` also folds its samples (`TierAggregator`) into one
