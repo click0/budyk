@@ -28,6 +28,12 @@ public:
     /// index update). 0, or -1 if the ring is not open for writing.
     int  advance_write_index(uint64_t n);
     uint64_t write_index() const;
+    /// One past the last record whose write has begun: write_index(), or
+    /// one more while append() is between its pwrite and the index update.
+    /// A reader that read slot `logical % capacity()` and finds
+    /// write_begun() > logical + capacity() may hold the newer record
+    /// written over it.
+    uint64_t write_begun() const;
     uint64_t count() const;
     uint64_t capacity() const;
     uint8_t  tier() const;
@@ -47,9 +53,12 @@ public:
 
     /// Why the last open() failed. describe() turns an open() return
     /// code into words; last_errno() is the errno of the failed syscall
-    /// behind -3/-4/-5/-7 (0 for the format mismatches). Together they
-    /// give an operator "open failed: Permission denied" rather than
-    /// "rc=-3".
+    /// behind -3/-4/-5/-7/-14 (0 for the format mismatches), and of the
+    /// write behind a failed append() (-3). Together they give an
+    /// operator "open failed: Permission denied" rather than "rc=-3".
+    /// A new ring's header goes in with pwrite (-14 if it cannot: the
+    /// file is left empty); a ring file of the right size whose header is
+    /// all zero bytes (a start that died before writing it) is made anew.
     static const char* describe(int rc);
     int                last_errno() const;
 
@@ -70,6 +79,7 @@ private:
     /// on arm64 (SIGBUS). The writer stores each new value into the
     /// header too (append(), advance_write_index()).
     std::atomic<uint64_t> widx_{0};
+    std::atomic<uint64_t> begun_{0};   ///< write_begun()
 };
 
 } // namespace budyk

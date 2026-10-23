@@ -3,6 +3,7 @@
 // recovery of records written past write_idx (a crash between the
 // pwrite and the index update).
 
+#include "core/clock.h"
 #include "core/codec.h"
 #include "core/sample.h"
 #include "storage/codec.h"
@@ -190,6 +191,34 @@ int main() {
         set_write_idx(p, 20);
         c = check(p, true);
         assert(c.unindexed == 1 && c.recovered == 1);
+        rmrf(d);
+    }
+
+    // 3b. The clock stepped back by more than the ring spans: past
+    //     write_idx lie the records from before the step, stamped later
+    //     than the newest. They used to be counted in as unindexed (on
+    //     every start, crash or not), and the writes after that overwrote
+    //     the real records instead. Stamped after now, they are not.
+    {
+        const std::string d = tmp_dir(), p = d + "/tier1.ring";
+        const uint64_t now = now_realtime_ns();
+        RingFile r;
+        assert(r.open(p.c_str(), 1, static_cast<uint32_t>(kRec), 8) == 0);
+        uint8_t buf[1024];
+        auto put = [&](uint64_t ts) {
+            Sample s{};
+            s.timestamp_nanos = ts;
+            s.level = Level::L3;
+            size_t len = 0;
+            assert(record_encode(s, buf, sizeof(buf), &len) == 0);
+            assert(r.append(buf, len) == 0);
+        };
+        const uint64_t day = 86400ULL * 1000000000ULL;
+        for (uint64_t i = 0; i < 8; ++i) put(now + day + i);       // a day ahead
+        for (uint64_t i = 0; i < 5; ++i) put(now - 100 + i);       // then set right
+        r.close();
+        RingCheck c = check(p, false);
+        assert(c.unindexed == 0);
         rmrf(d);
     }
 

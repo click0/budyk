@@ -6,6 +6,9 @@
 # Keep assert() live in the tests whatever the build type.
 add_compile_options(-UNDEBUG)
 
+# For the tests that run a thread of their own (a writer against a reader).
+find_package(Threads REQUIRED)
+
 # budyk_add_test(<name> LIBS <lib>... [INCLUDES <dir>...] [ARGS <arg>...])
 #
 # One unit test: unit/<name>.cpp built into <name>, linked against LIBS,
@@ -28,7 +31,7 @@ budyk_add_test(test_hot_buffer      LIBS budyk_hot_buffer budyk_core)
 budyk_add_test(test_scheduler       LIBS budyk_scheduler budyk_core)
 budyk_add_test(test_ring_file       LIBS budyk_storage budyk_core)
 budyk_add_test(test_tier_aggregator LIBS budyk_storage budyk_core)
-budyk_add_test(test_tier_manager    LIBS budyk_storage budyk_core)
+budyk_add_test(test_tier_manager    LIBS budyk_storage budyk_core Threads::Threads)
 budyk_add_test(test_ring_check      LIBS budyk_storage budyk_core)
 
 # AI suggestions

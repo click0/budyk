@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <cerrno>
 #include <cstring>
 
 namespace budyk {
@@ -227,7 +228,7 @@ int TierManager::init(const char* data_dir,
             return -9;
         }
         recover(leaf.c_str(), ring.get());
-        custom_.push_back(CustomRing{spec.level_id, std::move(ring)});
+        custom_.push_back(CustomRing{spec.level_id, std::move(ring), leaf});
     }
 
     ready_ = true;
@@ -321,9 +322,22 @@ int TierManager::append(RingFile* ring, const Sample& s) {
     uint8_t buf[1024];
     size_t  len = 0;
     if (record_encode(s, buf, sizeof(buf), &len) != 0) return -3;
-    if (ring->append(buf, len) != 0)                   return -4;
+    if (ring->append(buf, len) != 0) {
+        // Kept for the daemon's log: a full disk used to stop the
+        // history without a word.
+        const char* leaf = ring == &tier1_ ? "tier1.ring" : ring == &tier2_ ? "tier2.ring"
+                         : ring == &tier3_ ? "tier3.ring" : nullptr;
+        for (const auto& c : custom_) {
+            if (c.ring.get() == ring) leaf = c.leaf.c_str();
+        }
+        store_error_ = std::string(leaf != nullptr ? leaf : "ring") + ": writing a record failed: " +
+                       std::strerror(ring->last_errno() != 0 ? ring->last_errno() : EIO);
+        return -4;
+    }
     return 0;
 }
+
+const std::string& TierManager::store_error() const { return store_error_; }
 
 int TierManager::feed(TierAggregator* agg, RingFile* ring, uint64_t window_ns,
                       const Sample& s) {
@@ -506,6 +520,11 @@ int TierManager::query_ring(const RingFile* ring, int override_level,
         const uint64_t logical = widx - 1 - k;
         const uint64_t slot    = logical % cap;
         if (ring->read_at(slot, buf.data(), rsize) != 0) continue;
+        // The writer laps a slow walk of a full ring: once its write of
+        // this slot's next record (logical + cap) has begun, what was read
+        // may be that newer one, which landed at the front of the
+        // "oldest-first" result. Every older slot is overwritten too: stop.
+        if (ring->write_begun() > logical + cap) break;
         Sample s{};
         if (record_decode(buf.data(), rsize, &s) != 0) continue;   // torn / CRC
         if (s.timestamp_nanos < since_ns) break;                   // window floor

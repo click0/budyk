@@ -11,9 +11,11 @@ namespace budyk {
 /// a crash between a record's pwrite and the write_idx update leaves one
 /// (a lost header page, more). They are the consecutive slots after the
 /// newest indexed record that decode, carry the ring's level and are
-/// newer than the record before; in a wrapped ring the oldest record ends
-/// the run. TierManager::init() indexes them on start, fsck --repair too.
-uint64_t count_unindexed(const RingFile& ring);
+/// newer than the record before and not stamped after `now_ns` (0: the
+/// realtime clock now); in a wrapped ring the oldest record ends the run,
+/// and so does one from before the clock stepped back. TierManager::init()
+/// indexes them on start, fsck --repair too.
+uint64_t count_unindexed(const RingFile& ring, uint64_t now_ns = 0);
 
 /// Rewrites the ring at `path`, written by an older budyk with smaller
 /// records (an older codec version), at `record_size` x `capacity`: the
