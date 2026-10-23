@@ -297,6 +297,21 @@ fi
 
 kill -HUP "$PID"
 sleep 1.5
+
+# A SIGHUP with a rules file that does not load keeps the rules loaded
+# before. (It used to keep only the ones above the error, here none.)
+printf 'watch("cut", {  -- the file ends mid-rule\n' >> "$DIR/rules.lua"
+kill -HUP "$PID"
+sleep 1
+beats=$(grep -c 'budyk alert: critical beat' "$DIR/log" || true)
+sleep 1.5
+if grep -q "failed to load: .*; keeping the 3 rule(s) loaded before" "$DIR/log" &&
+   [ "$(grep -c 'budyk alert: critical beat' "$DIR/log")" -gt "$beats" ]; then
+    echo "ok   a rules file that does not load keeps the rules running"
+else
+    echo "FAIL: a broken rules file on SIGHUP replaced the working rules"; fail=1
+fi
+
 kill -TERM "$PID"
 if ! wait "$PID"; then
     echo "FAIL: daemon exited non-zero"; fail=1

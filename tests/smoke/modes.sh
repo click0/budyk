@@ -11,6 +11,7 @@
 #   3. on-demand: nothing collected until a client polls, then samples in
 #      the hot buffer but none in the rings; collection stops again once
 #      the client is gone (poller window + grace_period).
+#   4. SIGHUP between ticks reloads the rules and does not end the sleep.
 #
 # A rule that logs on every tick counts the ticks collected.
 #
@@ -215,8 +216,34 @@ grep -q "collection.mode on-demand: collecting only while a client is connected"
     { echo "FAIL: the mode is not logged"; fail=1; }
 stop ondemand
 
+# 4. SIGHUP between ticks ---------------------------------------------------
+# The rules are reloaded at once, and the sleep goes on: SIGHUP used to end
+# it, and the tick right after the last one stored rates over a few ms.
+cat > "$DIR/hup.yaml" <<EOF
+data_dir: $DIR/hup
+listen: 127.0.0.1
+port: $PORT
+rules: { path: $DIR/hup.lua }
+collection:
+  l1: { interval: 4 }
+EOF
+echo 'watch("tick", { when = function() return true end, action = "log", message = "tick", cooldown = 0 })' \
+    > "$DIR/hup.lua"
+start hup
+sleep 1                                      # the first L1 tick is in
+before=$(ticks hup)
+kill -HUP "$PID"
+sleep 1.5
+after=$(ticks hup)
+if grep -q 'rules reloaded' "$DIR/hup.log" && [ "$before" -ge 1 ] && [ "$after" = "$before" ]; then
+    echo "ok   SIGHUP reloads the rules without an extra tick ($before tick(s))"
+else
+    echo "FAIL: SIGHUP: $before tick(s) before, $after 1.5 s after (or no reload)"; fail=1
+fi
+stop hup
+
 if [ "$fail" -ne 0 ]; then
-    for f in sets always ondemand; do echo "--- $f.log ---"; cat "$DIR/$f.log"; done
+    for f in sets always ondemand hup; do echo "--- $f.log ---"; cat "$DIR/$f.log"; done
     exit 1
 fi
 echo "modes smoke test: PASS"

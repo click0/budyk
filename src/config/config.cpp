@@ -6,6 +6,9 @@ extern "C" {
 #include <yaml.h>
 }
 
+#include "core/parse_int.h"
+
+#include <climits>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -26,20 +29,70 @@ void apply_str(yaml_document_t* d, const yaml_node_t* m, const char* key,
     dst[dst_cap - 1] = '\0';
 }
 
-void apply_int(yaml_document_t* d, const yaml_node_t* m, const char* key, int* dst) {
-    const char* v = yaml_scalar(yaml_find_key(d, m, key));
-    if (v == nullptr) return;
+// The numbers are read whole: strtol() / strtod() stopped at the first
+// character that was not a digit and kept what they had, so "5m" was 5,
+// "1.5h" 1, "4294967596" 300 and "nan" a threshold that never fires. A
+// value that does not read is reported, under its full name (`path`),
+// and the default is kept.
+
+// Seconds from a duration: a number with an optional unit, ms, s, m (or
+// min), h or d: "300", "300s" (the spec's form), "5m", "1.5h", "500ms".
+bool parse_duration_full(const char* v, double* seconds) {
+    if (v == nullptr || *v == '\0') return false;
+    errno = 0;
     char* end = nullptr;
-    long n = std::strtol(v, &end, 10);
-    if (end != v) *dst = static_cast<int>(n);
+    const double x = std::strtod(v, &end);
+    if (end == v || errno == ERANGE || !std::isfinite(x)) return false;
+    double unit = 0;
+    if      (*end == '\0' || std::strcmp(end, "s") == 0)   unit = 1.0;
+    else if (std::strcmp(end, "ms") == 0)                   unit = 0.001;
+    else if (std::strcmp(end, "m") == 0 || std::strcmp(end, "min") == 0) unit = 60.0;
+    else if (std::strcmp(end, "h") == 0)                    unit = 3600.0;
+    else if (std::strcmp(end, "d") == 0)                    unit = 86400.0;
+    else return false;
+    *seconds = x * unit;
+    return true;
 }
 
-void apply_double(yaml_document_t* d, const yaml_node_t* m, const char* key, double* dst) {
+void apply_int(yaml_document_t* d, const yaml_node_t* m, const char* key, int* dst,
+               const char* path) {
     const char* v = yaml_scalar(yaml_find_key(d, m, key));
     if (v == nullptr) return;
+    long n = 0;
+    if (!parse_int_full(v, INT_MIN, INT_MAX, &n)) {
+        std::fprintf(stderr, "budyk config: %s: '%s' is not a whole number; using %d\n",
+                     path, v, *dst);
+        return;
+    }
+    *dst = static_cast<int>(n);
+}
+
+// Whole seconds, with a unit or without (parse_duration_full).
+void apply_seconds(yaml_document_t* d, const yaml_node_t* m, const char* key, int* dst,
+                   const char* path) {
+    const char* v = yaml_scalar(yaml_find_key(d, m, key));
+    if (v == nullptr) return;
+    double x = 0;
+    if (!parse_duration_full(v, &x) || x != std::floor(x) || x < INT_MIN || x > INT_MAX) {
+        std::fprintf(stderr, "budyk config: %s: '%s' is not whole seconds (300, 300s, 5m, 1h); "
+                             "using %d\n", path, v, *dst);
+        return;
+    }
+    *dst = static_cast<int>(x);
+}
+
+void apply_double(yaml_document_t* d, const yaml_node_t* m, const char* key, double* dst,
+                  const char* path) {
+    const char* v = yaml_scalar(yaml_find_key(d, m, key));
+    if (v == nullptr) return;
+    errno = 0;
     char* end = nullptr;
-    double x = std::strtod(v, &end);
-    if (end != v) *dst = x;
+    const double x = std::strtod(v, &end);
+    if (end == v || *end != '\0' || errno == ERANGE || !std::isfinite(x)) {
+        std::fprintf(stderr, "budyk config: %s: '%s' is not a number; using %g\n", path, v, *dst);
+        return;
+    }
+    *dst = x;
 }
 
 void apply_bool(yaml_document_t* d, const yaml_node_t* m, const char* key, bool* dst) {
@@ -101,15 +154,6 @@ bool parse_long_full(const char* v, long* out) {
     const long n = std::strtol(v, &end, 10);
     if (end == v || *end != '\0') return false;
     *out = n;
-    return true;
-}
-
-bool parse_double_full(const char* v, double* out) {
-    if (v == nullptr || *v == '\0') return false;
-    char* end = nullptr;
-    const double x = std::strtod(v, &end);
-    if (end == v || *end != '\0') return false;
-    *out = x;
     return true;
 }
 
@@ -189,9 +233,9 @@ void apply_custom_levels(yaml_document_t* d, const yaml_node_t* col,
         if (dup) { reject("duplicate name"); continue; }
 
         double interval_s = 0;
-        if (!parse_double_full(yaml_scalar(yaml_find_key(d, n, "interval")), &interval_s) ||
+        if (!parse_duration_full(yaml_scalar(yaml_find_key(d, n, "interval")), &interval_s) ||
             interval_s < 0.1 || interval_s > 86400) {
-            reject("'interval' is required: seconds from 0.1 to 86400");
+            reject("'interval' is required: seconds from 0.1 to 86400 (0.5, 500ms, 30s, 5m)");
             continue;
         }
         lv.interval_ms = static_cast<int>(std::lround(interval_s * 1000.0));
@@ -207,9 +251,10 @@ void apply_custom_levels(yaml_document_t* d, const yaml_node_t* col,
         if (const char* w = yaml_scalar(yaml_find_key(d, n, "when"))) lv.when = w;
 
         if (const yaml_node_t* h = yaml_find_key(d, n, "hold")) {
-            long hold = 0;
-            if (!parse_long_full(yaml_scalar(h), &hold) || hold < 0 || hold > 86400) {
-                reject("'hold' must be whole seconds from 0 to 86400");
+            double hold = 0;
+            if (!parse_duration_full(yaml_scalar(h), &hold) || hold != std::floor(hold) ||
+                hold < 0 || hold > 86400) {
+                reject("'hold' must be whole seconds from 0 to 86400 (30, 30s, 5m)");
                 continue;
             }
             lv.hold_sec = static_cast<int>(hold);
@@ -283,32 +328,38 @@ void apply_collection(yaml_document_t* d, const yaml_node_t* col, Config* out) {
         }
     }
     if (auto* l1 = yaml_find_key(d, col, "l1")) {
-        apply_int(d, l1, "interval", &out->scheduler.l1_interval_sec);
+        apply_seconds(d, l1, "interval", &out->scheduler.l1_interval_sec, "collection.l1.interval");
         apply_metrics(d, l1, "collection.l1", &out->scheduler.l1_metrics);
     }
 
     if (auto* l2 = yaml_find_key(d, col, "l2")) {
-        apply_int (d, l2, "interval",   &out->scheduler.l2_interval_sec);
-        apply_bool(d, l2, "always_on",  &out->scheduler.l2_always_on);
-        apply_int (d, l2, "hysteresis", &out->scheduler.hysteresis_sec);
-        apply_int (d, l2, "escalate_after", &out->scheduler.escalate_after_sec);   // seconds
+        apply_seconds(d, l2, "interval",   &out->scheduler.l2_interval_sec, "collection.l2.interval");
+        apply_bool   (d, l2, "always_on",  &out->scheduler.l2_always_on);
+        apply_seconds(d, l2, "hysteresis", &out->scheduler.hysteresis_sec, "collection.l2.hysteresis");
+        apply_seconds(d, l2, "escalate_after", &out->scheduler.escalate_after_sec,
+                      "collection.l2.escalate_after");
         apply_metrics(d, l2, "collection.l2", &out->scheduler.l2_metrics);
         if (auto* e = yaml_find_key(d, l2, "escalation_thresholds")) {
-            apply_double(d, e, "load_1m",           &out->scheduler.escalation_load_1m);
-            apply_double(d, e, "cpu_percent",       &out->scheduler.escalation_cpu_percent);
-            apply_double(d, e, "swap_used_percent", &out->scheduler.escalation_swap_percent);
+            apply_double(d, e, "load_1m",           &out->scheduler.escalation_load_1m,
+                         "collection.l2.escalation_thresholds.load_1m");
+            apply_double(d, e, "cpu_percent",       &out->scheduler.escalation_cpu_percent,
+                         "collection.l2.escalation_thresholds.cpu_percent");
+            apply_double(d, e, "swap_used_percent", &out->scheduler.escalation_swap_percent,
+                         "collection.l2.escalation_thresholds.swap_used_percent");
         }
     }
     if (auto* l3 = yaml_find_key(d, col, "l3")) {
-        apply_int(d, l3, "interval",     &out->scheduler.l3_interval_sec);
-        apply_int(d, l3, "grace_period", &out->scheduler.grace_period_sec);
+        apply_seconds(d, l3, "interval",     &out->scheduler.l3_interval_sec, "collection.l3.interval");
+        apply_seconds(d, l3, "grace_period", &out->scheduler.grace_period_sec,
+                      "collection.l3.grace_period");
         apply_metrics(d, l3, "collection.l3", &out->scheduler.l3_metrics);
     }
     apply_custom_levels(d, col, &out->scheduler.custom_levels);
 
     if (auto* hb = yaml_find_key(d, col, "hot_buffer")) {
-        apply_int(d, hb, "capacity",    &out->hot_buffer_capacity);
-        apply_int(d, hb, "warm_grace",  &out->hot_buffer_warm_grace);
+        apply_int    (d, hb, "capacity",   &out->hot_buffer_capacity, "collection.hot_buffer.capacity");
+        apply_seconds(d, hb, "warm_grace", &out->hot_buffer_warm_grace,
+                      "collection.hot_buffer.warm_grace");
     }
 }
 
@@ -323,15 +374,15 @@ int parse_document(yaml_parser_t* parser, Config* out) {
     }
 
     apply_str(&doc, root, "listen",   out->listen_addr, sizeof(out->listen_addr));
-    apply_int(&doc, root, "port",    &out->listen_port);
+    apply_int(&doc, root, "port",    &out->listen_port, "port");
     apply_str(&doc, root, "data_dir", out->data_dir,    sizeof(out->data_dir));
 
     apply_collection(&doc, yaml_find_key(&doc, root, "collection"), out);
 
     if (auto* storage = yaml_find_key(&doc, root, "storage")) {
-        apply_int(&doc, storage, "tier1_max_mb", &out->tier1_max_mb);
-        apply_int(&doc, storage, "tier2_max_mb", &out->tier2_max_mb);
-        apply_int(&doc, storage, "tier3_max_mb", &out->tier3_max_mb);
+        apply_int(&doc, storage, "tier1_max_mb", &out->tier1_max_mb, "storage.tier1_max_mb");
+        apply_int(&doc, storage, "tier2_max_mb", &out->tier2_max_mb, "storage.tier2_max_mb");
+        apply_int(&doc, storage, "tier3_max_mb", &out->tier3_max_mb, "storage.tier3_max_mb");
     }
 
     if (auto* rules = yaml_find_key(&doc, root, "rules")) {
@@ -366,8 +417,9 @@ int parse_document(yaml_parser_t* parser, Config* out) {
         // Nested `rules.limits` block — how much a single call into Lua
         // may run and how much memory the engine may hold.
         if (auto* lim = yaml_find_key(&doc, rules, "limits")) {
-            apply_int(&doc, lim, "instructions", &out->rules_instruction_limit);
-            apply_int(&doc, lim, "memory_mb",    &out->rules_memory_mb);
+            apply_int(&doc, lim, "instructions", &out->rules_instruction_limit,
+                      "rules.limits.instructions");
+            apply_int(&doc, lim, "memory_mb",    &out->rules_memory_mb, "rules.limits.memory_mb");
         }
     }
 
@@ -391,8 +443,10 @@ int parse_document(yaml_parser_t* parser, Config* out) {
                        out->password_hash, sizeof(out->password_hash));
             apply_bool(&doc, auth, "persist_sessions",
                        &out->auth_persist_sessions);
-            apply_int (&doc, auth, "max_login_failures", &out->auth_max_login_failures);
-            apply_int (&doc, auth, "login_window",       &out->auth_login_window_sec);
+            apply_int    (&doc, auth, "max_login_failures", &out->auth_max_login_failures,
+                          "web.auth.max_login_failures");
+            apply_seconds(&doc, auth, "login_window",       &out->auth_login_window_sec,
+                          "web.auth.login_window");
         }
     }
 
