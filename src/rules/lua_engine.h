@@ -85,7 +85,9 @@ public:
     /// A when() that reads a group or list `s` lacks (see lua_bindings.h)
     /// skips the rule for this tick: its sustain count stays where it was
     /// (spec §3.6.5). The first skip of each kind is logged, unless it was
-    /// only a rate's first read.
+    /// only a rate's first read. A bind that fails (the rules hold the
+    /// state at rules.limits.memory_mb) evaluates nothing and returns 0;
+    /// its error is logged once.
     int  eval_tick(const Sample& s, const budyk_detail_c* detail = nullptr);
 
     /// Custom-level entry conditions (collection.levels[].when). The
@@ -221,6 +223,10 @@ private:
     static void  count_hook(lua_State* L, lua_Debug* ar);
     /// Resets the instruction count; called before every entry into Lua.
     void begin_call();
+    /// Binds `s` (and the file-watch state) in a protected call. False,
+    /// logged once per distinct error, when the bind raised: the tick's
+    /// rules and level conditions are then not evaluated.
+    bool bind(const Sample& s, const budyk_detail_c* detail);
 
     lua_State*               L_               = nullptr;
     uint64_t                 instruction_limit_ = kDefaultInstructionLimit;
@@ -237,6 +243,7 @@ private:
     AlertDispatcher          alerts_;
     Worker                   exec_worker_{"exec"};
     std::string              last_error_;
+    std::string              bind_error_;
     std::vector<LevelCondition> level_conditions_;
     std::vector<std::string>    level_names_;
     std::vector<Escalation>     escalations_;

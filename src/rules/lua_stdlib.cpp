@@ -11,9 +11,11 @@ extern "C" {
 }
 
 #include <climits>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -111,10 +113,11 @@ int l_watch(lua_State* L) {
 
     // Validate every field before creating any registry ref or C++ object:
     // luaL_error longjmps, which would leak a ref and skip destructors.
+    // Each field is read once and kept on the stack: opts may have an
+    // __index that answers differently the second time.
     lua_getfield(L, 2, "when");
-    const bool when_ok = lua_isfunction(L, -1);
-    lua_pop(L, 1);
-    if (!when_ok) {
+    const int when_idx = lua_gettop(L);
+    if (!lua_isfunction(L, when_idx)) {
         return luaL_error(L, "watch(%s): 'when' must be a function", name);
     }
 
@@ -156,8 +159,8 @@ int l_watch(lua_State* L) {
     }
 
     lua_getfield(L, 2, "message");
-    const int msg_type = lua_type(L, -1);
-    lua_pop(L, 1);
+    const int msg_idx  = lua_gettop(L);
+    const int msg_type = lua_type(L, msg_idx);
     if (msg_type != LUA_TNIL && msg_type != LUA_TSTRING) {
         return luaL_error(L, "watch(%s): 'message' must be a string", name);
     }
@@ -180,16 +183,9 @@ int l_watch(lua_State* L) {
         return luaL_error(L, "watch: engine not bound");
     }
 
-    // Nothing below raises.
-    std::string message = name;
-    if (msg_type == LUA_TSTRING) {
-        lua_getfield(L, 2, "message");
-        message = lua_tostring(L, -1);
-        lua_pop(L, 1);
-    }
-
-    lua_getfield(L, 2, "when");
-    const int when_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    // The refs and the action list allocate, and so may raise: they come
+    // before the C++ objects. (A ref made before a later one fails is the
+    // only leak, and only when the state is out of memory.)
     lua_createtable(L, static_cast<int>(n_actions), 0);          // the action list
     if (action_type == LUA_TNIL) {
         lua_pushliteral(L, "alert");
@@ -206,7 +202,13 @@ int l_watch(lua_State* L) {
         lua_rawseti(L, -2, 1);
     }
     const int actions_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    lua_pushvalue(L, when_idx);
+    const int when_ref = luaL_ref(L, LUA_REGISTRYINDEX);
 
+    // Nothing below raises.
+    size_t msg_len = 0;
+    const char* msg = msg_type == LUA_TSTRING ? lua_tolstring(L, msg_idx, &msg_len) : nullptr;
+    const std::string message = msg != nullptr ? std::string(msg, msg_len) : std::string(name);
     eng->add_rule(name, when_ref, actions_ref, severity, message,
                   static_cast<int>(for_ticks), static_cast<int>(cooldown_ticks));
     return 0;
@@ -255,18 +257,58 @@ int l_escalate(lua_State* L) {
     return 1;
 }
 
-// Does the work of exec(). Returns 1 (result table pushed), 0 while the
-// rules file loads (checked, nothing run, nothing pushed), or -1 with a
-// message in err. It never raises: luaL_error longjmps past C++
+// What exec_impl did, for l_exec to hand back to Lua once exec_impl's
+// C++ objects are gone.
+struct ExecOutcome {
+    enum Kind { Checked, Queued, QueueFull, Ran } kind = Checked;
+    int               rc  = 0;     // Ran: exec_command()'s return
+    budyk::ExecResult res{};       // Ran
+};
+
+// An argv element: a string as it is, a number as tostring() writes it
+// (Lua's "%.14g", ".0" on a float that reads as an integer). Formatted
+// here, not by lua_tostring(), which allocates and so may raise.
+bool argv_element(lua_State* L, int idx, std::string* out) {
+    switch (lua_type(L, idx)) {
+        case LUA_TSTRING: {
+            size_t len = 0;
+            const char* s = lua_tolstring(L, idx, &len);
+            out->assign(s, len);
+            return true;
+        }
+        case LUA_TNUMBER: {
+            char buf[64];
+            if (lua_isinteger(L, idx)) {
+                std::snprintf(buf, sizeof(buf), "%lld",
+                              static_cast<long long>(lua_tointeger(L, idx)));
+            } else {
+                std::snprintf(buf, sizeof(buf), "%.14g", static_cast<double>(lua_tonumber(L, idx)));
+            }
+            out->assign(buf);
+            if (!lua_isinteger(L, idx) && buf[std::strspn(buf, "-0123456789")] == '\0') {
+                out->append(".0");
+            }
+            return true;
+        }
+        default:
+            return false;
+    }
+}
+
+// Does the work of exec(): 0 with *out saying what it did (Checked while
+// the rules file loads: nothing run), or -1 with a message in err. It
+// never raises and pushes nothing: luaL_error longjmps past C++
 // destructors, and this function owns std::string / std::vector objects,
-// so l_exec raises only after they are gone. Raw table access keeps
-// metamethods from raising in here too.
-int exec_impl(lua_State* L, budyk::LuaEngine* eng, char* err, size_t err_cap) {
+// so l_exec raises, and builds the result table, only after they are
+// gone. Raw table access keeps metamethods from raising in here too.
+int exec_impl(lua_State* L, budyk::LuaEngine* eng, ExecOutcome* out, char* err,
+              size_t err_cap) {
     // Accept either exec("/path/to/cmd")          (single-arg form)
     //            or exec({"/bin/sh", "-c", "..."}) (argv table form).
     std::vector<std::string> argv_storage;
-    if (lua_isstring(L, 1)) {
-        argv_storage.emplace_back(lua_tostring(L, 1));
+    std::string              arg;
+    if (argv_element(L, 1, &arg)) {
+        argv_storage.push_back(std::move(arg));
     } else if (lua_istable(L, 1)) {
         const lua_Integer n = static_cast<lua_Integer>(lua_rawlen(L, 1));
         if (n <= 0) {
@@ -275,14 +317,14 @@ int exec_impl(lua_State* L, budyk::LuaEngine* eng, char* err, size_t err_cap) {
         }
         for (lua_Integer i = 1; i <= n; ++i) {
             lua_rawgeti(L, 1, i);
-            if (!lua_isstring(L, -1)) {
-                lua_pop(L, 1);
+            const bool ok = argv_element(L, -1, &arg);
+            lua_pop(L, 1);
+            if (!ok) {
                 std::snprintf(err, err_cap, "exec: argv[%d] is not a string",
                                   static_cast<int>(i));
                 return -1;
             }
-            argv_storage.emplace_back(lua_tostring(L, -1));
-            lua_pop(L, 1);
+            argv_storage.push_back(std::move(arg));
         }
     } else {
         std::snprintf(err, err_cap, "exec: expected string or argv table");
@@ -400,13 +442,8 @@ int exec_impl(lua_State* L, budyk::LuaEngine* eng, char* err, size_t err_cap) {
                                  what.c_str(), res.exit_status, res.elapsed_seconds);
                 }
             });
-        lua_newtable(L);
-        lua_pushboolean(L, queued); lua_setfield(L, -2, "queued");
-        lua_pushboolean(L, queued); lua_setfield(L, -2, "ok");
-        if (!queued) {
-            lua_pushstring(L, "exec queue full"); lua_setfield(L, -2, "error");
-        }
-        return 1;
+        out->kind = queued ? ExecOutcome::Queued : ExecOutcome::QueueFull;
+        return 0;
     }
 
     // wait = true: run inline and hand the result back. The tick waits,
@@ -419,23 +456,9 @@ int exec_impl(lua_State* L, budyk::LuaEngine* eng, char* err, size_t err_cap) {
     for (const auto& s : argv_storage) argv_ptrs.push_back(s.c_str());
     argv_ptrs.push_back(nullptr);
 
-    budyk::ExecResult res{};
-    const int rc = budyk::exec_command(argv_ptrs.data(), timeout_s, &res);
-
-    // Push result table regardless of rc — rc < 0 just means fork/setup
-    // failed before the child could run; surface that via `error`.
-    lua_newtable(L);
-    lua_pushinteger(L, res.exit_status);     lua_setfield(L, -2, "exit_status");
-    lua_pushinteger(L, res.signal);          lua_setfield(L, -2, "signal");
-    lua_pushboolean(L, res.timed_out);       lua_setfield(L, -2, "timed_out");
-    lua_pushnumber (L, res.elapsed_seconds); lua_setfield(L, -2, "elapsed_seconds");
-    lua_pushboolean(L, rc == 0 && res.exit_status == 0 &&
-                       res.signal == 0 && !res.timed_out);
-    lua_setfield(L, -2, "ok");
-    if (rc != 0) {
-        lua_pushinteger(L, rc); lua_setfield(L, -2, "error");
-    }
-    return 1;
+    out->kind = ExecOutcome::Ran;
+    out->rc   = budyk::exec_command(argv_ptrs.data(), timeout_s, &out->res);
+    return 0;
 }
 
 // exec(cmd [, timeout | { timeout, wait }]) — see exec_impl. Written in
@@ -450,15 +473,43 @@ int l_exec(lua_State* L) {
     if (eng == nullptr || !eng->exec_enabled()) {
         return luaL_error(L, "exec is disabled (enable with --enable-exec)");
     }
-    char err[512] = "";
-    const int n = exec_impl(L, eng, err, sizeof(err));
-    if (n < 0) return luaL_error(L, "%s", err);
-    if (n == 0) {                       // loading: the command as an action
-        lua_settop(L, 2);
-        lua_pushcclosure(L, deferred_exec, 2);
-        return 1;
+    char        err[512] = "";
+    ExecOutcome out;
+    if (exec_impl(L, eng, &out, err, sizeof(err)) != 0) return luaL_error(L, "%s", err);
+    switch (out.kind) {
+        case ExecOutcome::Checked:      // loading: the command as an action
+            lua_settop(L, 2);
+            lua_pushcclosure(L, deferred_exec, 2);
+            return 1;
+        case ExecOutcome::Queued:
+        case ExecOutcome::QueueFull: {
+            const bool queued = out.kind == ExecOutcome::Queued;
+            lua_newtable(L);
+            lua_pushboolean(L, queued); lua_setfield(L, -2, "queued");
+            lua_pushboolean(L, queued); lua_setfield(L, -2, "ok");
+            if (!queued) {
+                lua_pushstring(L, "exec queue full"); lua_setfield(L, -2, "error");
+            }
+            return 1;
+        }
+        case ExecOutcome::Ran:
+            break;
     }
-    return n;
+    // The result table regardless of rc: rc < 0 means fork / setup failed
+    // before the child could run, surfaced as `error`.
+    const budyk::ExecResult& res = out.res;
+    lua_newtable(L);
+    lua_pushinteger(L, res.exit_status);     lua_setfield(L, -2, "exit_status");
+    lua_pushinteger(L, res.signal);          lua_setfield(L, -2, "signal");
+    lua_pushboolean(L, res.timed_out);       lua_setfield(L, -2, "timed_out");
+    lua_pushnumber (L, res.elapsed_seconds); lua_setfield(L, -2, "elapsed_seconds");
+    lua_pushboolean(L, out.rc == 0 && res.exit_status == 0 &&
+                       res.signal == 0 && !res.timed_out);
+    lua_setfield(L, -2, "ok");
+    if (out.rc != 0) {
+        lua_pushinteger(L, out.rc); lua_setfield(L, -2, "error");
+    }
+    return 1;
 }
 
 // The action exec() returned while loading: runs exec() with the

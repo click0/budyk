@@ -434,10 +434,10 @@ int cmd_serve(int argc, char* argv[], const char* version) {
         // restore below reads a missing/stale file and silently zeroes
         // every cooldown — warn so an operator can see why rules that
         // were mid-cooldown suddenly re-fire after the reload.
-        if (engine.save_state(rp.c_str()) != 0) {
+        if (const int rc = engine.save_state(rp.c_str()); rc != 0) {
             std::fprintf(stderr,
-                "budyk serve: SIGHUP — could not snapshot rule state to '%s'; "
-                "cooldowns may reset\n", rp.c_str());
+                "budyk serve: SIGHUP — could not snapshot rule state to '%s': %s; "
+                "cooldowns may reset\n", rp.c_str(), std::strerror(-rc));
         }
         engine.shutdown();
         if (setup_engine(rp.c_str(), /*register_channels=*/false) != 0) {
@@ -548,10 +548,16 @@ int cmd_serve(int argc, char* argv[], const char* version) {
     // create() also purge, but a quiet daemon sees neither for hours,
     // and the table (and sessions.tsv) would hold every past login.
     time_t next_session_purge = next_state_save;
+    int    state_save_rc      = 0;   // the last save's: a failure is logged once
     auto housekeeping = [&] {
         const time_t now = ::time(nullptr);
         if (cfg.rules_persist_state && now >= next_state_save) {
-            engine.save_state(state_path.c_str());
+            const int rc = engine.save_state(state_path.c_str());
+            if (rc != 0 && rc != state_save_rc) {
+                std::fprintf(stderr, "budyk serve: cannot save the rule state to '%s': %s\n",
+                             state_path.c_str(), std::strerror(-rc));
+            }
+            state_save_rc   = rc;
             next_state_save = now + 60;
         }
         if (now >= next_session_purge) {
@@ -722,7 +728,10 @@ int cmd_serve(int argc, char* argv[], const char* version) {
     std::fprintf(stderr, "budyk serve: shutting down\n");
     // Final flush so a graceful stop captures the exact cooldown state.
     if (cfg.rules_persist_state) {
-        engine.save_state(state_path.c_str());
+        if (const int rc = engine.save_state(state_path.c_str()); rc != 0) {
+            std::fprintf(stderr, "budyk serve: cannot save the rule state to '%s': %s\n",
+                         state_path.c_str(), std::strerror(-rc));
+        }
     }
     http.stop();
     ws.close_all();

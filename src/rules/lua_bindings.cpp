@@ -11,6 +11,7 @@ extern "C" {
 }
 
 #include <cstring>
+#include <string>
 #include <utility>
 
 namespace {
@@ -26,6 +27,33 @@ inline void set_integer(lua_State* L, const char* key, lua_Integer v) {
 inline void set_boolean(lua_State* L, const char* key, bool v) {
     lua_pushboolean(L, v ? 1 : 0);
     lua_setfield(L, -2, key);
+}
+
+// _G[name] = the value on top of the stack, popped. Raw: a rules file
+// may give _G a __newindex (a "strict globals" guard), and the bind
+// must not run it.
+void set_global(lua_State* L, const char* name) {
+    lua_pushglobaltable(L);                               // value, G
+    lua_insert(L, -2);                                    // G, value
+    lua_pushstring(L, name);
+    lua_insert(L, -2);                                    // G, name, value
+    lua_rawset(L, -3);                                    // G
+    lua_pop(L, 1);
+}
+
+// Leave files[path] of the table at `files` on the stack, created with
+// zero counts on the path's first use.
+void push_file_entry(lua_State* L, int files, const std::string& path) {
+    lua_pushlstring(L, path.data(), path.size());
+    if (lua_rawget(L, files) == LUA_TTABLE) return;
+    lua_pop(L, 1);
+    lua_createtable(L, 0, 3);
+    set_integer(L, "modifies", 0);
+    set_integer(L, "deletes",  0);
+    set_boolean(L, "tampered", false);
+    lua_pushlstring(L, path.data(), path.size());
+    lua_pushvalue(L, -2);
+    lua_rawset(L, files);
 }
 
 // registry["budyk.sample"][group] = { [1] = proxy, [2] = data }
@@ -44,19 +72,22 @@ int sample_ro_newindex(lua_State* L) {
     return lua_error(L);
 }
 
-// Iterator for __pairs: walks the data table (upvalue 1 of __pairs).
+// Iterator for __pairs: walks the data table, its upvalue 1. The state
+// pairs() hands the rule is the proxy, never the data table: a rule that
+// held that table could change what the next rule reads, or give it a
+// metatable the next bind would run.
 int sample_ro_next(lua_State* L) {
-    luaL_checktype(L, 1, LUA_TTABLE);
     lua_settop(L, 2);
-    if (lua_next(L, 1) != 0) return 2;
+    if (lua_next(L, lua_upvalueindex(1)) != 0) return 2;
     lua_pushnil(L);
     return 1;
 }
 
 // __pairs of a sample proxy: pairs(cpu) iterates the real fields.
+// Upvalue 1: the iterator over the proxy's data.
 int sample_ro_pairs(lua_State* L) {
-    lua_pushcfunction(L, sample_ro_next);
     lua_pushvalue(L, lua_upvalueindex(1));
+    lua_pushvalue(L, 1);
     lua_pushnil(L);
     return 3;
 }
@@ -79,6 +110,7 @@ void push_ro_proxy(lua_State* L, int data_idx, const char* name) {
     lua_pushcclosure(L, sample_ro_newindex, 1);
     lua_setfield(L, -2, "__newindex");
     lua_pushvalue(L, data_idx);
+    lua_pushcclosure(L, sample_ro_next, 1);
     lua_pushcclosure(L, sample_ro_pairs, 1);
     lua_setfield(L, -2, "__pairs");
     lua_pushvalue(L, data_idx);
@@ -91,15 +123,19 @@ void push_ro_proxy(lua_State* L, int data_idx, const char* name) {
 
 // The registry keys of the error that a read of something not collected
 // (uncollected()) or not yet rated (baseline()) raised last; see
-// budyk_lua_uncollected().
-constexpr const char* kUncollectedKey = "budyk.uncollected";
-constexpr const char* kBaselineKey    = "budyk.baseline";
+// budyk_lua_uncollected(). Light userdata, their addresses: the engine
+// looks them up after a failed call, outside any protected call, and a
+// string key could need allocating there.
+const char kUncollectedTag = 'u';
+const char kBaselineTag    = 'b';
+const void* const kUncollectedKey = &kUncollectedTag;
+const void* const kBaselineKey    = &kBaselineTag;
 
 // Raise "<position>: <upvalue 1><what>" from a proxy handler and keep the
 // error under `key`, so the engine can tell it apart. The position is
 // the rule's line: the nearest Lua frame (pairs() or # put a C function
 // in between).
-int raise_unread(lua_State* L, const char* what, const char* key) {
+int raise_unread(lua_State* L, const char* what, const void* key) {
     lua_Debug ar;
     int level = 1;
     while (lua_getstack(L, level, &ar) != 0 && lua_getinfo(L, "Sl", &ar) != 0 &&
@@ -110,7 +146,7 @@ int raise_unread(lua_State* L, const char* what, const char* key) {
     lua_pushfstring(L, "%s%s", lua_tostring(L, lua_upvalueindex(1)), what);
     lua_concat(L, 2);
     lua_pushvalue(L, -1);
-    lua_setfield(L, LUA_REGISTRYINDEX, key);
+    lua_rawsetp(L, LUA_REGISTRYINDEX, key);
     return lua_error(L);
 }
 
@@ -228,7 +264,7 @@ void push_group_data(lua_State* L, const char* group, ProxyState state) {
     set_state(L, -1, state);
     lua_rawgeti(L, -1, 1);                                // reg, entry, proxy
     clear_raw_keys(L, -1);
-    lua_setglobal(L, group);                              // reg, entry
+    set_global(L, group);                                 // reg, entry
     lua_rawgeti(L, -1, 2);                                // reg, entry, data
     lua_replace(L, -3);                                   // data, entry
     lua_pop(L, 1);                                        // data
@@ -575,14 +611,14 @@ void budyk_lua_bind_sample(lua_State* L, const budyk::Sample& s, const budyk_det
     lua_pop(L, 1);
 
     lua_pushnumber(L, s.uptime_seconds);
-    lua_setglobal(L, "uptime_seconds");
+    set_global(L, "uptime_seconds");
 }
 
 int budyk_lua_uncollected(lua_State* L, int idx) {
     idx = lua_absindex(L, idx);
     int which = 0;
     for (const auto& k : { std::make_pair(kUncollectedKey, 1), std::make_pair(kBaselineKey, 2) }) {
-        lua_getfield(L, LUA_REGISTRYINDEX, k.first);
+        lua_rawgetp(L, LUA_REGISTRYINDEX, k.first);
         if (lua_type(L, -1) == LUA_TSTRING && lua_rawequal(L, -1, idx) != 0) which = k.second;
         lua_pop(L, 1);
     }
@@ -608,7 +644,31 @@ int l_collected(lua_State* L) {
     return 1;
 }
 
+struct BindArgs {
+    const budyk::Sample*         s;
+    const budyk_detail_c*        d;
+    const budyk::FileWatchState* files;
+};
+
+// The protected half of budyk_lua_bind(): upvalue-free, its one argument
+// the BindArgs.
+int bind_all(lua_State* L) {
+    const auto* a = static_cast<const BindArgs*>(lua_touserdata(L, 1));
+    lua_settop(L, 0);
+    budyk_lua_bind_sample(L, *a->s, a->d);
+    if (a->files != nullptr) budyk_lua_bind_files(L, *a->files);
+    return 0;
+}
+
 } // namespace
+
+int budyk_lua_bind(lua_State* L, const budyk::Sample& s, const budyk_detail_c* d,
+                   const budyk::FileWatchState* files) {
+    BindArgs a{&s, d, files};
+    lua_pushcfunction(L, bind_all);
+    lua_pushlightuserdata(L, &a);
+    return lua_pcall(L, 1, 0, 0);
+}
 
 void budyk_lua_register_collected(lua_State* L) {
     lua_register(L, "collected", l_collected);
@@ -624,61 +684,25 @@ void budyk_lua_bind_files(lua_State* L, const budyk::FileWatchState& s) {
     // Path coverage is the union of every path the watcher has ever
     // seen an event for. A watched-but-never-modified path is absent
     // until its first event — rules should guard with `if files[p]`.
+    //
+    // No C++ object is made in here: the engine runs the bind in a
+    // protected call, and an allocation that fails raises past this frame.
     lua_newtable(L);
-    auto bump_modify = [&](const std::string& path) {
-        // Find or create files[path]
-        lua_pushlstring(L, path.data(), path.size());
-        lua_pushvalue(L, -1);
-        lua_gettable(L, -3);
-        if (lua_isnil(L, -1)) {
-            lua_pop(L, 1);
-            lua_newtable(L);
-            set_integer(L, "modifies", 0);
-            set_integer(L, "deletes",  0);
-            lua_pushboolean(L, 0);
-            lua_setfield(L, -2, "tampered");
-        }
-        // Sub-table now on top, path-key just below.
-        return; // caller continues editing the sub-table
-    };
-    (void)bump_modify;   // unused — kept for clarity; we walk inline.
-
-    // Inline path-walk: union over modifies + deletes + tampered.
-    std::unordered_map<std::string, int> seen;   // path → table-index (1-based)
-    int                                  count = 0;
-    auto ensure_entry = [&](const std::string& path) {
-        auto it = seen.find(path);
-        if (it != seen.end()) return it->second;
-        ++count;
-        lua_newtable(L);
-        set_integer(L, "modifies", 0);
-        set_integer(L, "deletes",  0);
-        lua_pushboolean(L, 0);
-        lua_setfield(L, -2, "tampered");
-        lua_setfield(L, -2, path.c_str());
-        seen.emplace(path, count);
-        return count;
-    };
-
+    const int files = lua_gettop(L);
     for (const auto& kv : s.modifies) {
-        ensure_entry(kv.first);
-        lua_getfield(L, -1, kv.first.c_str());
+        push_file_entry(L, files, kv.first);
         set_integer(L, "modifies", static_cast<lua_Integer>(kv.second));
         lua_pop(L, 1);
     }
     for (const auto& kv : s.deletes) {
-        ensure_entry(kv.first);
-        lua_getfield(L, -1, kv.first.c_str());
+        push_file_entry(L, files, kv.first);
         set_integer(L, "deletes", static_cast<lua_Integer>(kv.second));
         lua_pop(L, 1);
     }
     for (const auto& p : s.tampered_this_tick) {
-        ensure_entry(p);
-        lua_getfield(L, -1, p.c_str());
-        lua_pushboolean(L, 1);
-        lua_setfield(L, -2, "tampered");
+        push_file_entry(L, files, p);
+        set_boolean(L, "tampered", true);
         lua_pop(L, 1);
     }
-
-    lua_setglobal(L, "files");
+    set_global(L, "files");
 }

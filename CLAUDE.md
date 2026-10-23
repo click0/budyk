@@ -224,7 +224,9 @@ in CI.
    work (alert delivery, `exec()`) on Worker threads with bounded queues.
 2. Lua rules are sandboxed: no `io`/`os`/`load`/`loadfile`/`dofile`/`require`;
    the sample tables are read-only proxies, created once and updated in
-   place (`src/rules/lua_bindings.cpp`);
+   place (`src/rules/lua_bindings.cpp`), bound in a protected call with
+   raw sets (a failed bind skips the tick's rules; nothing after a
+   failed call may allocate on the Lua heap outside one);
    `exec()` is gated by `--enable-exec` or `rules.exec.enabled` plus an
    allowlist; every call into Lua is limited to `rules.limits.instructions`
    (default 1 000 000) and the engine to `rules.limits.memory_mb`

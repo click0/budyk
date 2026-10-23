@@ -245,6 +245,23 @@ int main() {
         e.shutdown();
     }
 
+    // 16. A control character before a digit keeps both: Lua's decimal
+    //     escape takes up to three digits, so "\1" then "23" must not
+    //     become "\123" ('{').
+    {
+        const char* y =
+            "- name: \"a\\x0123\"\n"
+            "  when: \"true\"\n";
+        std::string lua;
+        assert(yaml_rules_to_lua(y, &lua) == 0);
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        assert(e.load_string(lua.c_str()) == 0);
+        assert(e.rule_count() == 1);
+        assert(e.rules()[0].name == std::string("a\x01" "23"));
+        e.shutdown();
+    }
+
     std::printf("test_yaml_rules: PASS\n");
     return 0;
 }
