@@ -32,6 +32,22 @@ static std::string make_tmp() {
     return std::string(tmpl);
 }
 
+// Whether `events` has (path, kind).
+static bool has(const std::vector<FileChangeEvent>& events, const std::string& path,
+                FileChangeKind kind) {
+    for (const auto& ev : events) {
+        if (ev.path == path && ev.kind == kind) return true;
+    }
+    return false;
+}
+
+// Poll until (path, kind) arrives or 2 s pass; the events seen go in *all.
+static bool wait_for(FileWatcher& fw, const std::string& path, FileChangeKind kind,
+                     std::vector<FileChangeEvent>* all) {
+    for (int i = 0; i < 20 && !has(*all, path, kind); ++i) fw.poll(100, all);
+    return has(*all, path, kind);
+}
+
 static void touch(const std::string& path, const char* content) {
     std::FILE* f = std::fopen(path.c_str(), "a");
     assert(f != nullptr);
@@ -163,6 +179,146 @@ int main() {
         fw.shutdown();
         fw.shutdown();   // double-shutdown is safe too
     }
+
+    // 8. A save by rename (vim, visudo, sed -i: write a new file, rename
+    //    it over the old) is Deleted then Created, and the path is
+    //    watched again: the next write is seen. The watch used to stay on
+    //    the old inode, gone, and nothing after the first save showed up.
+    {
+        FileWatcher fw;
+        assert(fw.init() == 0);
+        const std::string p   = make_tmp();
+        const std::string tmp = p + ".new";
+        assert(fw.add(p) > 0);
+        for (int round = 0; round < 3; ++round) {
+            touch(tmp, "replaced");
+            assert(::rename(tmp.c_str(), p.c_str()) == 0);
+            std::vector<FileChangeEvent> events;
+            assert(wait_for(fw, p, FileChangeKind::Deleted, &events));
+            assert(wait_for(fw, p, FileChangeKind::Created, &events));
+            assert(fw.count() == 1);
+
+            touch(p, "then edited in place");
+            events.clear();
+            assert(wait_for(fw, p, FileChangeKind::Modified, &events));
+        }
+        fw.shutdown();
+        ::unlink(p.c_str());
+    }
+
+    // 9. rm, then the file comes back later: not watched (count 0) in
+    //    between, Created and watched again once it is there.
+    {
+        FileWatcher fw;
+        assert(fw.init() == 0);
+        const std::string p = make_tmp();
+        assert(fw.add(p) > 0);
+        ::unlink(p.c_str());
+        std::vector<FileChangeEvent> events;
+        assert(wait_for(fw, p, FileChangeKind::Deleted, &events));
+        assert(fw.count() == 0);
+        events.clear();
+        assert(fw.poll(0, &events) == 0);
+
+        touch(p, "back");
+        assert(wait_for(fw, p, FileChangeKind::Created, &events));
+        assert(fw.count() == 1);
+        events.clear();
+        touch(p, "and changed");
+        assert(wait_for(fw, p, FileChangeKind::Modified, &events));
+        fw.shutdown();
+        ::unlink(p.c_str());
+    }
+
+    // 10. Two paths to one inode (a hard link): a write is reported for
+    //     both (inotify gives both the same wd, and the second path used
+    //     to take it over), and removing one keeps the other watched.
+    {
+        FileWatcher fw;
+        assert(fw.init() == 0);
+        const std::string p = make_tmp();
+        const std::string q = p + ".link";
+        assert(::link(p.c_str(), q.c_str()) == 0);
+        assert(fw.add(p) > 0);
+        assert(fw.add(q) > 0);
+        assert(fw.count() == 2);
+        touch(p, "x");
+        std::vector<FileChangeEvent> events;
+        assert(wait_for(fw, p, FileChangeKind::Modified, &events));
+        assert(wait_for(fw, q, FileChangeKind::Modified, &events));
+
+        fw.remove(q);
+        assert(fw.count() == 1);
+        events.clear();
+        touch(q, "y");                          // the same file, through the other name
+        assert(wait_for(fw, p, FileChangeKind::Modified, &events));
+        assert(!has(events, q, FileChangeKind::Modified));
+        fw.shutdown();
+        ::unlink(p.c_str());
+        ::unlink(q.c_str());
+    }
+
+    // 11. The watched file moved away: Deleted for its path, and writes to
+    //     it where it went are not reported as the path's.
+    {
+        FileWatcher fw;
+        assert(fw.init() == 0);
+        const std::string p     = make_tmp();
+        const std::string moved = p + ".moved";
+        assert(fw.add(p) > 0);
+        assert(::rename(p.c_str(), moved.c_str()) == 0);
+        std::vector<FileChangeEvent> events;
+        assert(wait_for(fw, p, FileChangeKind::Deleted, &events));
+        events.clear();
+        touch(moved, "elsewhere");
+        fw.poll(300, &events);
+        assert(!has(events, p, FileChangeKind::Modified));
+        assert(fw.count() == 0);
+        fw.shutdown();
+        ::unlink(moved.c_str());
+    }
+
+#if defined(BUDYK_LINUX)
+    // 12. inotify's queue overflows (more events than
+    //     fs.inotify.max_queued_events between two polls; alternating
+    //     kinds, which the kernel does not merge): every path is reported,
+    //     and a path whose file was replaced meanwhile (its events lost
+    //     in the overflow) is watched again, not left on the old inode.
+    {
+        long max_events = 0;
+        if (std::FILE* f = std::fopen("/proc/sys/fs/inotify/max_queued_events", "r")) {
+            if (std::fscanf(f, "%ld", &max_events) != 1) max_events = 0;
+            std::fclose(f);
+        }
+        if (max_events > 0 && max_events <= 200000) {
+            FileWatcher fw;
+            assert(fw.init() == 0);
+            const std::string a = make_tmp();
+            const std::string b = make_tmp();
+            assert(fw.add(a) > 0);
+            assert(fw.add(b) > 0);
+            for (long i = 0; i <= max_events; ++i) {             // IN_ATTRIB, IN_MODIFY, ...
+                assert(::chmod(a.c_str(), (i & 1) != 0 ? 0600 : 0640) == 0);
+                touch(a, "x");
+            }
+            touch(b + ".new", "replaced");
+            assert(::rename((b + ".new").c_str(), b.c_str()) == 0);   // lost in the overflow
+            std::vector<FileChangeEvent> events;
+            fw.poll(1000, &events);
+            assert(has(events, a, FileChangeKind::Modified));
+            assert(has(events, b, FileChangeKind::Deleted) || has(events, b, FileChangeKind::Modified));
+            assert(fw.count() == 2);
+            events.clear();
+            fw.poll(0, &events);                                  // drain
+            events.clear();
+            touch(b, "changed after");
+            assert(wait_for(fw, b, FileChangeKind::Modified, &events));
+            fw.shutdown();
+            ::unlink(a.c_str());
+            ::unlink(b.c_str());
+        }
+    }
+#endif
 
     std::printf("test_file_watcher: PASS\n");
     return 0;

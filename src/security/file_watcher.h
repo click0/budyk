@@ -9,11 +9,19 @@
 ///
 /// Quirks worth knowing:
 ///
-///   * On both platforms, "editor save by rename" (vim's default,
-///     :w in JOE) shows up as Deleted on the original path. The
-///     caller can re-add the path after a Deleted event to keep
-///     tracking — we don't auto-renew on FreeBSD because kqueue's
-///     EVFILT_VNODE is bound to a specific inode, not a path.
+///   * A watch is on an inode, not a path (inotify's wd and kqueue's
+///     EVFILT_VNODE alike). A save by rename (vim, visudo, sed -i,
+///     a package manager) or an rm shows up as Deleted; the path then
+///     waits, unwatched, and as soon as it exists again (often in the
+///     same poll) it is watched anew and reported as Created. Before,
+///     the first such save left the path unwatched for good.
+///
+///   * Two paths to one inode (hard links) share an inotify wd; each
+///     path gets the events.
+///
+///   * If inotify's queue overflows, every watched path is reported as
+///     Modified and each watch is checked against what its path names
+///     now (logged once).
 ///
 ///   * Linux IN_MODIFY can fire many times per logical write
 ///     (write(2)-per-line editors). We coalesce: at most one
@@ -23,6 +31,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <set>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -76,7 +85,8 @@ public:
     /// Stop watching `path`. No-op if unknown.
     void remove(const std::string& path);
 
-    /// Number of currently watched paths. Useful for tests.
+    /// Number of paths watched right now: a path deleted or replaced is
+    /// not counted until it is watched again.
     std::size_t count() const;
 
     /// Block up to `timeout_ms` for at least one event, drain pending
@@ -86,9 +96,24 @@ public:
     int  poll(int timeout_ms, std::vector<FileChangeEvent>* out);
 
 private:
-    int                                       fd_ = -1;
-    std::unordered_map<int, std::string>      id_to_path_;
-    std::unordered_map<std::string, int>      path_to_id_;
+    struct Batch;   ///< the events of one poll(), one per (path, kind)
+
+    /// The kernel side: watch `path` (an id >= 0, or -errno), let an id go.
+    int  sys_watch(const std::string& path);
+    void sys_unwatch(int id);
+    /// path <-> id, and the id let go with its last path.
+    void bind(const std::string& path, int id);
+    void unbind(const std::string& path);
+    /// The path's watch is gone or on another file: unbind, then pending.
+    void lost(const std::string& path);
+    /// Watch every pending path that exists again; each is Created.
+    void retry_pending(Batch* b);
+
+    int                                                fd_ = -1;
+    std::unordered_map<int, std::vector<std::string>>  id_to_paths_;
+    std::unordered_map<std::string, int>               path_to_id_;
+    std::set<std::string>                              pending_;
+    bool                                               overflowed_ = false;
 };
 
 } // namespace budyk
