@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -44,10 +45,20 @@ public:
     WebSocketHub();
     ~WebSocketHub();
 
+    /// At most this many clients: the upgrade is refused past it (503),
+    /// so WebSocket connections alone cannot use up the daemon's
+    /// descriptors.
+    static constexpr size_t kMaxClients = 64;
+
     /// After a successful handshake, register the fd. The hub now owns
     /// the fd — it is switched to non-blocking, and close() / close_all()
-    /// release it.
-    void  add(int fd);
+    /// release it. `session`: the session token the upgrade was
+    /// authenticated with ("" with auth off), for drop_sessions().
+    void  add(int fd, std::string session = std::string());
+    /// Drop every client whose session token `valid` no longer accepts
+    /// (logged out, expired). Clients without a token stay. `valid` runs
+    /// without the hub's lock. Returns the number dropped.
+    size_t drop_sessions(const std::function<bool(const std::string&)>& valid);
 
     /// Send a text frame to every registered client. Clients whose
     /// write fails or would block are removed and their fd closed.
@@ -71,6 +82,7 @@ private:
         int         fd;
         std::string inbuf;      ///< bytes received, not yet parsed as a frame
         uint64_t    skip;       ///< payload bytes of a data frame still to discard
+        std::string session;    ///< the token it was let in with ("" with auth off)
     };
 
     /// Parse and act on the frames in c->inbuf. Returns false when the

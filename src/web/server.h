@@ -87,6 +87,11 @@ public:
     /// at most this long, not forever. Set before start().
     void set_io_timeout_ms(int ms);
     int  io_timeout_ms() const;
+    /// A response may take io_timeout_ms() plus its body's size at this
+    /// many bytes per second (default 256 KiB/s, so a few MB of
+    /// /api/range gets a few more seconds); a client reading slower is
+    /// cut off, so it cannot hold the thread.
+    void set_min_send_rate(size_t bytes_per_sec);
 
 private:
     /// Written by start() and stop() on the caller's thread, read by the
@@ -94,7 +99,9 @@ private:
     std::atomic<int>       listen_fd_{-1};
     int                    bound_port_  = 0;
     int                    io_timeout_ms_ = 5000;
+    size_t                 min_send_rate_ = 256 * 1024;
     int                    last_errno_    = 0;
+    int                    last_accept_errno_ = 0;   ///< logged once, until an accept succeeds
     std::thread            loop_;
     std::atomic<bool>      running_{false};
     HttpHandler            handler_;

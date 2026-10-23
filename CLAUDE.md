@@ -60,11 +60,17 @@ There is no event-loop library (no libuv, kqueue or epoll). The daemon is:
   mode a tick whose level is L1 or L2 only sleeps, and nothing is stored.
 - **HTTP thread:** one blocking accept-handle-close loop. Every connection
   is bounded by `HttpServer::set_io_timeout_ms` (5 s) so a stalled client
-  cannot hold it. A WebSocket upgrade hands the fd to the hub.
+  cannot hold it: the request by that, the response by that plus its size
+  at `set_min_send_rate` (256 KiB/s), so a slow reader is cut off. An
+  accept() that fails (EMFILE, ECONNABORTED) is retried, logged once,
+  never the end of the loop. A WebSocket upgrade hands the fd to the hub:
+  same origin only (Origin against Host / X-Forwarded-Host), at most
+  `WebSocketHub::kMaxClients` (64).
 - **WebSocket hub:** client fds are non-blocking. `broadcast()` drops a
   client whose send would block or writes a partial frame; `service()`,
   called by the main thread once per tick, answers pings, honours close
-  frames and drops clients that hung up.
+  frames and drops clients that hung up; with auth on, `drop_sessions()`
+  then closes (1008) every client whose session ended (logout, expiry).
 - **Worker threads** (`src/rules/worker.*`): one for alerts, one for
   `exec()`. Bounded FIFO of 256 jobs, started on first use, cancelled on
   shutdown after a grace period. Both survive a SIGHUP rules reload.
@@ -116,6 +122,8 @@ tests/smoke/       — serve.sh (HTTP, WS, SIGHUP, fd check), crash.sh (SIGKILL 
                      modes.sh (per-level metric sets, always / on-demand),
                      resources.sh (spec §5 items 2-6: RSS, CPU, disk, L1 -> L3,
                      catch-up, binary size; release builds only),
+                     auth.sh (login, the WebSocket ends with its session, a
+                     cross-origin WebSocket refused),
                      crosscheck.sh (the readings against free, swapinfo, uptime,
                      ps, ss / netstat, df, /sys or ifconfig and kern.disks, a
                      busy loop and a 64 MB write)
@@ -142,6 +150,7 @@ tests/smoke/escalate.sh build/src/budyk  # daemon: a sustained anomaly escalates
 tests/smoke/fsck.sh build/src/budyk      # fsck, start-up recovery, the data_dir lock
 tests/smoke/upgrade.sh build/src/budyk OLD/budyk  # rings of an older release converted
 tests/smoke/modes.sh build/src/budyk     # metric sets per level, always / on-demand
+tests/smoke/auth.sh build/src/budyk      # login, sessions, the WebSocket's origin and end
 tests/smoke/resources.sh build/src/budyk # spec §5 figures (a release build; ~2 min)
 tests/smoke/crosscheck.sh build/src/budyk  # the readings against the system's own tools
 tests/check_whitespace.sh                # trailing blanks, tabs, CR, final newline

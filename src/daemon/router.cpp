@@ -20,6 +20,17 @@ namespace budyk {
 
 namespace {
 
+// The first entry of a header a chain of proxies may have appended to,
+// without the blanks around it.
+std::string first_entry(std::string v) {
+    const size_t comma = v.find(',');
+    if (comma != std::string::npos) v.resize(comma);
+    while (!v.empty() && (v.back() == ' ' || v.back() == '\t')) v.pop_back();
+    size_t b = 0;
+    while (b < v.size() && (v[b] == ' ' || v[b] == '\t')) ++b;
+    return v.substr(b);
+}
+
 // True when the browser reached us over HTTPS through a reverse proxy:
 // the proxy says so in X-Forwarded-Proto (the first entry, when proxies
 // are chained). budyk itself speaks plain HTTP, and the start-up warning
@@ -27,13 +38,30 @@ namespace {
 // A client that sends the header itself only makes its own cookie
 // stricter.
 bool via_https(const HttpRequest& req) {
-    std::string proto = req.header("X-Forwarded-Proto");
-    const size_t comma = proto.find(',');
-    if (comma != std::string::npos) proto.resize(comma);
-    while (!proto.empty() && (proto.back() == ' ' || proto.back() == '\t')) proto.pop_back();
-    size_t b = 0;
-    while (b < proto.size() && (proto[b] == ' ' || proto[b] == '\t')) ++b;
-    return ascii_ieq(proto.substr(b), "https");
+    return ascii_ieq(first_entry(req.header("X-Forwarded-Proto")), "https");
+}
+
+// Whether a WebSocket upgrade comes from the dashboard's own page. A
+// browser always sends Origin on one, and a page on another site can open
+// a WebSocket to 127.0.0.1 as easily as the dashboard can: without this
+// it read the live stream (host name, processes, mounts, alerts) and held
+// the daemon at L3. The Origin's host[:port] must be the Host the request
+// was sent to, or the X-Forwarded-Host of a proxy that rewrote Host. No
+// Origin: not a browser (a script, a test), let in as before.
+bool same_origin(const HttpRequest& req) {
+    const std::string origin = req.header("Origin");
+    if (origin.empty()) return true;
+    const size_t sep = origin.find("://");
+    if (sep == std::string::npos) return false;          // "null", or not a URL
+    std::string authority = origin.substr(sep + 3);
+    const size_t slash = authority.find('/');
+    if (slash != std::string::npos) authority.resize(slash);
+    if (authority.empty()) return false;
+    for (const char* h : { "Host", "X-Forwarded-Host" }) {
+        const std::string v = first_entry(req.header(h));
+        if (!v.empty() && ascii_ieq(v, authority.c_str())) return true;
+    }
+    return false;
 }
 
 // Attributes of the session cookie: HttpOnly and SameSite=Strict always,
@@ -305,10 +333,22 @@ HttpHandler make_router(const RouterDeps& d) {
                 return budyk::HttpResponse{
                     400, "text/plain", "expected websocket upgrade\n"};
             }
+            if (!same_origin(req)) {
+                return budyk::HttpResponse{
+                    403, "text/plain", "cross-origin websocket refused\n"};
+            }
             if (!authed(req)) {
                 return budyk::HttpResponse{
                     401, "text/plain", "unauthenticated\n"};
             }
+            if (ws.size() >= budyk::WebSocketHub::kMaxClients) {
+                return budyk::HttpResponse{
+                    503, "text/plain", "too many websocket clients\n"};
+            }
+            // The session it was let in with: the hub drops the client
+            // when that session ends (logout, expiry).
+            const std::string session =
+                cfg.auth_enabled ? cookie_value(req.header("Cookie"), "budyk_session") : std::string();
             const std::string key = req.header("Sec-WebSocket-Key");
             const std::string handshake = budyk::ws_handshake_response(key);
 
@@ -324,7 +364,7 @@ HttpHandler make_router(const RouterDeps& d) {
                 budyk::samples_to_json(snap.data(), snap.size()));
 
             budyk::HttpResponse r;
-            r.hijack = [handshake, catchup, &ws, wake = d.wake](int fd) {
+            r.hijack = [handshake, catchup, session, &ws, wake = d.wake](int fd) {
                 ssize_t n1 = ::send(fd, handshake.data(), handshake.size(), MSG_NOSIGNAL);
                 if (n1 != static_cast<ssize_t>(handshake.size())) {
                     ::close(fd);
@@ -335,7 +375,7 @@ HttpHandler make_router(const RouterDeps& d) {
                     ::close(fd);
                     return;
                 }
-                ws.add(fd);
+                ws.add(fd, session);
                 if (wake) wake();         // step up to L3 now, not after the sleep
             };
             return r;

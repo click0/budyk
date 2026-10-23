@@ -681,7 +681,22 @@ function openWs() {
       renderDetail(doc.detail);
     } catch (_) { /* ignore parse errors */ }
   };
-  ws.onclose   = () => { setStatus("disconnected, retrying in 2s…"); setTimeout(openWs, 2000); };
+  // 1008: the session ended (logout, expiry) and the daemon dropped the
+  // stream. A refused upgrade (401) closes with no code a page can see,
+  // so a close asks /api/levels (small, and behind the login too) before
+  // retrying: on 401 the page goes back to the login form instead of
+  // "retrying" forever.
+  ws.onclose   = async (e) => {
+    if (e.code !== 1008) {
+      setStatus("disconnected, retrying in 2s…");
+      try {
+        const r = await fetch("/api/levels", { credentials: "same-origin" });
+        if (r.status !== 401) { setTimeout(openWs, 2000); return; }
+      } catch (_) { setTimeout(openWs, 2000); return; }
+    }
+    setStatus("session ended");
+    showLogin();
+  };
   ws.onerror   = () => { try { ws.close(); } catch (_) {} };
 }
 

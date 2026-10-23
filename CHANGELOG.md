@@ -83,6 +83,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   any ntfy header. A name can carry anyone's bytes, such as a process
   name or a mount point. Control characters in header values are now
   spaces.
+- **One failed accept() stopped HTTP for good.** The HTTP thread ended
+  on any accept error but EINTR: enough WebSocket clients to reach the
+  descriptor limit (EMFILE, about 4 090 under the packaged unit, no
+  login needed with auth off), or on FreeBSD a client that reset before
+  the accept (ECONNABORTED). The loop now retries, logged once, and
+  WebSocket clients are capped at 64 (503 past that).
+- **A WebSocket outlived its session.** The upgrade checked the session
+  once: after a logout, or once the session expired, the stream went on.
+  The hub now closes (1008) a client whose session ended, on the next
+  tick, and the dashboard goes back to the login form.
+- **Any website could read the stream.** A WebSocket upgrade with an
+  `Origin` that is not the `Host` it was sent to (or a proxy's
+  `X-Forwarded-Host`) is refused with 403. A page on another site, open
+  in the browser, used to get the host name, the processes, the mounts
+  and the alerts, and held the daemon at L3.
+- **A slow reader held the HTTP thread.** The send timeout restarts with
+  each send, so a client reading a little within each one kept the
+  thread as long as it liked. A response now gets the I/O timeout plus
+  its size at 256 KiB/s.
 
 ## [0.8.1] — 2026-10-22
 

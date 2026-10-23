@@ -193,19 +193,22 @@ const char* status_phrase(int status) {
         case 429: return "Too Many Requests";
         case 500: return "Internal Server Error";
         case 501: return "Not Implemented";
+        case 503: return "Service Unavailable";
         default:  return "OK";
     }
 }
 
-// send(2) until everything is written or the peer is gone. A large
-// body (/api/range at its 5000-sample cap is a few MB) rarely goes out
-// in one call, and a signal (SIGHUP is routine) returns short too.
+// send(2) until everything is written, the peer is gone or the deadline
+// passes. A large body (/api/range at its 5000-sample cap is a few MB)
+// rarely goes out in one call, and a signal (SIGHUP is routine) returns
+// short too. SO_SNDTIMEO bounds each call, the deadline the whole.
 // MSG_NOSIGNAL: a client that hung up mid-response is a failed send,
 // not SIGPIPE to the daemon.
-ssize_t send_all(int fd, const void* data, size_t len) {
+ssize_t send_all(int fd, const void* data, size_t len, Deadline deadline) {
     const char* p = static_cast<const char*>(data);
     size_t total = 0;
     while (total < len) {
+        if (Clock::now() >= deadline) return -1;
         const ssize_t n = ::send(fd, p + total, len - total, MSG_NOSIGNAL);
         if (n < 0) {
             if (errno == EINTR) continue;
@@ -217,8 +220,13 @@ ssize_t send_all(int fd, const void* data, size_t len) {
     return static_cast<ssize_t>(total);
 }
 
-// Serialise the response head into a single string, then send body.
-ssize_t send_response(int fd, const HttpResponse& r) {
+// Serialise the response head into a single string, then send body,
+// all within io_timeout_ms plus the body's size at min_rate bytes/s: a
+// client that reads slower (a little per send timeout, each time in
+// time) held the one HTTP thread for as long as it liked.
+ssize_t send_response(int fd, const HttpResponse& r, int io_timeout_ms, size_t min_rate) {
+    const Deadline deadline = Clock::now() + std::chrono::milliseconds(io_timeout_ms) +
+        std::chrono::milliseconds(r.body.size() * 1000 / min_rate);
     std::string head;
     head.reserve(256 + r.extra_headers.size() * 64);
     char line[256];
@@ -238,8 +246,8 @@ ssize_t send_response(int fd, const HttpResponse& r) {
     }
     head.append("\r\n");
 
-    if (send_all(fd, head.data(), head.size()) < 0) return -1;
-    if (!r.body.empty() && send_all(fd, r.body.data(), r.body.size()) < 0) return -1;
+    if (send_all(fd, head.data(), head.size(), deadline) < 0) return -1;
+    if (!r.body.empty() && send_all(fd, r.body.data(), r.body.size(), deadline) < 0) return -1;
     return static_cast<ssize_t>(head.size() + r.body.size());
 }
 
@@ -334,6 +342,9 @@ const char* HttpServer::describe(int rc) {
 }
 
 void HttpServer::set_io_timeout_ms(int ms) { io_timeout_ms_ = ms > 0 ? ms : 1; }
+void HttpServer::set_min_send_rate(size_t bytes_per_sec) {
+    min_send_rate_ = bytes_per_sec > 0 ? bytes_per_sec : 1;
+}
 int  HttpServer::io_timeout_ms() const     { return io_timeout_ms_; }
 
 void HttpServer::run_loop() {
@@ -348,9 +359,27 @@ void HttpServer::run_loop() {
         int cfd = ::accept4(lfd, reinterpret_cast<sockaddr*>(&cli), &clen,
                             SOCK_CLOEXEC);
         if (cfd < 0) {
-            if (errno == EINTR) continue;
-            break;
+            const int e = errno;
+            // stop() closed the socket: the end of the loop.
+            if (!running_.load() || e == EBADF || e == EINVAL || e == ENOTSOCK) break;
+            // Anything else is about one connection or a passing
+            // shortage, not the socket: a client that reset before the
+            // accept (ECONNABORTED, which FreeBSD returns), no descriptor
+            // or memory to spare (EMFILE, ENFILE, ENOBUFS, ENOMEM). The
+            // loop used to end on them, and HTTP with it until a restart.
+            // A shortage waits a little rather than spin; each kind of
+            // error is logged once.
+            if (e != EINTR && e != ECONNABORTED) {
+                if (e != last_accept_errno_) {
+                    std::fprintf(stderr, "budyk: http: accept failed, retrying: %s\n",
+                                 std::strerror(e));
+                    last_accept_errno_ = e;
+                }
+                ::usleep(100 * 1000);
+            }
+            continue;
         }
+        last_accept_errno_ = 0;
         char peer[INET_ADDRSTRLEN] = "";
         ::inet_ntop(AF_INET, &cli.sin_addr, peer, sizeof(peer));
         const bool hijacked = handle_client(cfd, peer);
@@ -369,11 +398,14 @@ bool HttpServer::handle_client(int client_fd, const char* peer) {
     ::setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     ::setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
     const Deadline deadline = Clock::now() + std::chrono::milliseconds(io_timeout_ms_);
+    auto reply = [this, client_fd](const HttpResponse& r) {
+        send_response(client_fd, r, io_timeout_ms_, min_send_rate_);
+    };
 
     std::vector<char> buf;
     ssize_t hdr_end = read_until_headers(client_fd, &buf, deadline);
     if (hdr_end == kHeadersTooLarge) {
-        send_response(client_fd, HttpResponse{431, "text/plain", "request headers too large\n"});
+        reply(HttpResponse{431, "text/plain", "request headers too large\n"});
         return false;
     }
     if (hdr_end <= 0) return false;
@@ -381,7 +413,7 @@ bool HttpServer::handle_client(int client_fd, const char* peer) {
     HttpRequest req;
     req.peer = peer != nullptr ? peer : "";
     if (!parse_headers(buf.data(), static_cast<size_t>(hdr_end), &req)) {
-        send_response(client_fd, HttpResponse{400, "text/plain", "bad request\n"});
+        reply(HttpResponse{400, "text/plain", "bad request\n"});
         return false;
     }
 
@@ -393,18 +425,17 @@ bool HttpServer::handle_client(int client_fd, const char* peer) {
     // No chunked (or any other) transfer coding: say so rather than read
     // a body of unknown length (RFC 7230 §3.3.1).
     if (!req.header("Transfer-Encoding").empty()) {
-        send_response(client_fd, HttpResponse{501, "text/plain",
-                                              "transfer-encoding not supported\n"});
+        reply(HttpResponse{501, "text/plain", "transfer-encoding not supported\n"});
         return false;
     }
     bool has_length = false;
     const long long want = declared_length(req, &has_length);
     if (want < 0) {
-        send_response(client_fd, HttpResponse{400, "text/plain", "bad content-length\n"});
+        reply(HttpResponse{400, "text/plain", "bad content-length\n"});
         return false;
     }
     if (static_cast<unsigned long long>(want) > kMaxBodyBytes) {
-        send_response(client_fd, HttpResponse{413, "text/plain", "body too large\n"});
+        reply(HttpResponse{413, "text/plain", "body too large\n"});
         return false;
     }
     // Pull the rest of the body off the wire; drop anything past it.
@@ -425,7 +456,7 @@ bool HttpServer::handle_client(int client_fd, const char* peer) {
         resp.hijack(client_fd);
         return true;
     }
-    send_response(client_fd, resp);
+    reply(resp);
     return false;
 }
 

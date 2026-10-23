@@ -8,9 +8,11 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
+#include <utility>
 
 namespace budyk {
 
@@ -114,13 +116,44 @@ bool is_websocket_upgrade(const HttpRequest& req) {
 WebSocketHub::WebSocketHub() = default;
 WebSocketHub::~WebSocketHub() { close_all(); }
 
-void WebSocketHub::add(int fd) {
+void WebSocketHub::add(int fd, std::string session) {
     // Non-blocking from here on: broadcast() and service() must never
     // wait on a client. (The handshake was sent before add().)
     const int flags = ::fcntl(fd, F_GETFL, 0);
     if (flags >= 0) ::fcntl(fd, F_SETFL, flags | O_NONBLOCK);
     std::lock_guard<std::mutex> g(mtx_);
-    clients_.push_back(Client{fd, std::string(), 0});
+    clients_.push_back(Client{fd, std::string(), 0, std::move(session)});
+}
+
+size_t WebSocketHub::drop_sessions(const std::function<bool(const std::string&)>& valid) {
+    std::vector<std::pair<int, std::string>> tokens;
+    {
+        std::lock_guard<std::mutex> g(mtx_);
+        for (const auto& c : clients_) {
+            if (!c.session.empty()) tokens.emplace_back(c.fd, c.session);
+        }
+    }
+    std::vector<int> gone;
+    for (const auto& t : tokens) {
+        if (!valid(t.second)) gone.push_back(t.first);
+    }
+    if (gone.empty()) return 0;
+    size_t dropped = 0;
+    std::lock_guard<std::mutex> g(mtx_);
+    for (auto it = clients_.begin(); it != clients_.end(); ) {
+        if (std::find(gone.begin(), gone.end(), it->fd) != gone.end()) {
+            // A close frame first (1008, policy violation): the page can
+            // tell a session that ended from a dropped connection.
+            const std::string frame = ws_control_frame(kOpClose, std::string("\x03\xf0", 2));
+            send_frame(it->fd, frame.data(), frame.size());
+            ::close(it->fd);
+            it = clients_.erase(it);
+            ++dropped;
+        } else {
+            ++it;
+        }
+    }
+    return dropped;
 }
 
 void WebSocketHub::broadcast(const std::string& payload) {

@@ -203,6 +203,7 @@ jobs:
             tests/smoke/escalate.sh arm/budyk
             tests/smoke/fsck.sh arm/budyk
             tests/smoke/modes.sh arm/budyk
+            tests/smoke/auth.sh arm/budyk
             tests/smoke/crosscheck.sh arm/budyk
 
       # The static-analysis job leaves out the FreeBSD collectors and sees
@@ -294,6 +295,12 @@ jobs:
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
         run: tests/smoke/modes.sh build/src/budyk
 
+      - name: Login, sessions and the WebSocket
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: tests/smoke/auth.sh build/src/budyk
+
       - name: The readings against the system's own tools
         env:
           ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
@@ -367,7 +374,9 @@ jobs:
       - name: Smoke-test the daemon
         env:
           TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1
-        run: tests/smoke/serve.sh build/src/budyk
+        run: |
+          tests/smoke/serve.sh build/src/budyk
+          tests/smoke/auth.sh build/src/budyk
 
   # cppcheck + clang-tidy (checks in .clang-tidy). Any finding fails the
   # job; suppress a false positive inline with a comment saying why.
@@ -465,6 +474,7 @@ jobs:
           tests/smoke/escalate.sh build/src/budyk
           tests/smoke/fsck.sh build/src/budyk
           tests/smoke/modes.sh build/src/budyk
+          tests/smoke/auth.sh build/src/budyk
           tests/smoke/crosscheck.sh build/src/budyk
 
       - name: Coverage report (core/ and storage/ >= 85%)
