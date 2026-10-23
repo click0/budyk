@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <vector>
 
@@ -863,15 +864,19 @@ int main() {
     }
 
     // 36. The exec() allowlist is compared by realpath, resolved when the
-    //     list is set: a symlink to an allowed binary and a path with
-    //     "//" are allowed; an allowed path that is later re-pointed at
-    //     another binary is not.
+    //     list is set, and by the name as written: a symlink to an allowed
+    //     binary under its own name and a path with "//" are allowed; an
+    //     allowed path that is later re-pointed at another binary is not,
+    //     nor a link to the allowed binary under another name (a
+    //     multi-call binary runs the program its name says).
     if (access("/bin/true", X_OK) == 0 && access("/bin/false", X_OK) == 0) {
         char tmpl[] = "/tmp/budyk_allow_XXXXXX";
         const char* dir = ::mkdtemp(tmpl);
         assert(dir != nullptr);
-        const std::string link = std::string(dir) + "/cmd";
+        const std::string link  = std::string(dir) + "/cmd";
+        const std::string same  = std::string(dir) + "/true";
         assert(::symlink("/bin/true", link.c_str()) == 0);
+        assert(::symlink("/bin/true", same.c_str()) == 0);
 
         auto run = [](LuaEngine& e, const std::string& cmd) {
             // One rule whose when() runs the command inline; a rejected
@@ -886,13 +891,21 @@ int main() {
             return std::make_pair(fired, err);
         };
 
-        // Allowed by resolved identity, not by spelling.
+        // Allowed by resolved identity and name, not by spelling.
         {
             LuaEngine e;
             assert(e.init(true) == 0);
             e.set_exec_allowlist({"/bin/true"});
-            auto [fired, err] = run(e, link);                 // symlink -> /bin/true
+            auto [fired, err] = run(e, same);                 // <dir>/true -> /bin/true
             assert(fired == 1 && err.empty());
+        }
+        {
+            LuaEngine e;
+            assert(e.init(true) == 0);
+            e.set_exec_allowlist({"/bin/true"});
+            auto [fired, err] = run(e, link);                 // <dir>/cmd -> /bin/true
+            assert(fired == 0);
+            assert(err.find("not in allowlist") != std::string::npos);
         }
         {
             LuaEngine e;
@@ -916,6 +929,56 @@ int main() {
             assert(err.find("not in allowlist") != std::string::npos);
         }
         ::unlink(link.c_str());
+        ::unlink(same.c_str());
+        ::rmdir(dir);
+    }
+
+    // 36b. A multi-call binary (BusyBox: /bin/sh, /usr/bin/logger, ... all
+    //      links to one file) dispatches on argv[0]. With one applet
+    //      allowed, another link to the same file used to pass the
+    //      realpath check and run as itself. A stand-in records the name
+    //      it was run under.
+    if (access("/bin/sh", X_OK) == 0) {
+        char tmpl[] = "/tmp/budyk_multi_XXXXXX";
+        const char* dir = ::mkdtemp(tmpl);
+        assert(dir != nullptr);
+        const std::string multi   = std::string(dir) + "/multi";
+        const std::string allowed = std::string(dir) + "/logger";
+        const std::string other   = std::string(dir) + "/sh";
+        const std::string record  = std::string(dir) + "/ran";
+        {
+            FILE* f = std::fopen(multi.c_str(), "w");
+            assert(f != nullptr);
+            std::fprintf(f, "#!/bin/sh\necho \"${0##*/}\" >> '%s'\n", record.c_str());
+            std::fclose(f);
+            ::chmod(multi.c_str(), 0755);
+        }
+        assert(::symlink(multi.c_str(), allowed.c_str()) == 0);
+        assert(::symlink(multi.c_str(), other.c_str()) == 0);
+
+        LuaEngine e;
+        assert(e.init(true) == 0);
+        e.set_exec_allowlist({allowed});
+        const std::string src =
+            "watch('a', { cooldown = 0, when = function() return exec('" + allowed +
+            "', { timeout = 5, wait = true }).ok end })\n"
+            "watch('b', { cooldown = 0, when = function() return exec('" + other +
+            "', { timeout = 5, wait = true }).ok end })\n";
+        assert(e.load_string(src.c_str()) == 0);
+        assert(e.eval_tick(mk(0, 0, 0, 0)) == 1);                 // 'a' only
+        assert(e.rules()[1].last_error.find("not in allowlist") != std::string::npos);
+        char ran[64] = "";
+        FILE* f = std::fopen(record.c_str(), "r");
+        assert(f != nullptr);
+        assert(std::fgets(ran, sizeof(ran), f) != nullptr);
+        assert(std::fgets(ran + std::strlen(ran), static_cast<int>(sizeof(ran) - std::strlen(ran)), f) == nullptr);
+        std::fclose(f);
+        assert(std::strcmp(ran, "logger\n") == 0);              // never as "sh"
+        e.shutdown();
+        ::unlink(allowed.c_str());
+        ::unlink(other.c_str());
+        ::unlink(multi.c_str());
+        ::unlink(record.c_str());
         ::rmdir(dir);
     }
 

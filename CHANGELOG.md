@@ -61,6 +61,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `rep("")` returns at once and `table.move` is charged;
   - `table.concat`, `insert`, `remove` and `sort` refuse a table with
     `__len`, `__index` or `__newindex`.
+- **The `exec()` allowlist on a multi-call binary.** It compared the
+  command's realpath, and on BusyBox (the Alpine image) `/bin/sh`,
+  `/usr/bin/logger` and every other applet are the same file: allowing
+  one allowed them all, each run as itself. The name as written must
+  now match the allowed entry's too. A link to an allowed binary under
+  another name is no longer allowed.
+- **A line break in a rule or alert name went into a header** (ntfy's
+  `Title:`, the mail's `Subject:`), adding headers of its own: a `Bcc:`,
+  any ntfy header. A name can carry anyone's bytes, such as a process
+  name or a mount point. Control characters in header values are now
+  spaces.
 
 ## [0.8.1] — 2026-10-22
 

@@ -177,10 +177,14 @@ public:
     void set_exec_allowlist(std::vector<std::string> paths);
     /// The allowlist with every entry passed through realpath(3) when it
     /// was set (an entry that does not resolve is kept as given). exec()
-    /// compares the command's realpath against this, so "/usr/bin//x",
-    /// "/usr/bin/./x" and a symlink to the allowed binary match, while
-    /// an allowed path that is later replaced by a symlink to something
-    /// else does not: it resolved to the original when it was allowed.
+    /// compares the command's realpath against this, and its last
+    /// component against the entry's as written: "/usr/bin//x",
+    /// "/usr/bin/./x" and /bin/x on a merged /usr match, while an allowed
+    /// path later replaced by a symlink to something else does not (it
+    /// resolved to the original when it was allowed), and neither does a
+    /// link to the allowed binary under another name. A multi-call binary
+    /// (BusyBox) runs the program argv[0] names: /bin/sh and an allowed
+    /// /usr/bin/logger resolve to the same file.
     const std::vector<std::string>& exec_allowlist_resolved() const;
     const std::vector<std::string>& exec_allowlist() const;
 

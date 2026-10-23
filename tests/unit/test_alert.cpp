@@ -114,6 +114,23 @@ int main() {
         assert(contains(m, "\r\n\r\nload_1m=12.0\r\n"));   // blank line + body
     }
 
+    // 9b. A line break in the rule name (anyone's bytes: a process name,
+    //     a mount point) stays inside its header: it used to start a
+    //     header of its own, a Bcc: in the mail or any ntfy header.
+    {
+        const std::string evil = "disk /mnt/x\r\nBcc: everyone@example.com\nX-Evil: 1";
+        const std::string m = smtp_message(AlertSeverity::Warning, "a@example.com",
+                                           "b@example.com", evil, "body");
+        assert(contains(m, "Subject: [budyk:warning] disk /mnt/x  Bcc: everyone@example.com X-Evil: 1\r\n"));
+        assert(!contains(m, "\r\nBcc:") && !contains(m, "\nX-Evil"));
+        const auto h = ntfy_headers(AlertSeverity::Critical, evil);
+        assert(h.size() == 3);
+        assert(h[0] == "Title: budyk: disk /mnt/x  Bcc: everyone@example.com X-Evil: 1");
+        for (const auto& line : h) assert(line.find_first_of("\r\n") == std::string::npos);
+        assert(header_value(std::string("a\x01" "b\x7f" "c\t")) == "a b c ");
+        assert(header_value("caf\xc3\xa9") == "caf\xc3\xa9");   // UTF-8 kept
+    }
+
     // 10. twilio_form — URL-encoded From/To/Body. '+' in E.164 phone
     //     numbers must be encoded as %2B, '%' in the body as %25,
     //     spaces in the body as '+', ':' as %3A.
