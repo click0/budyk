@@ -1520,6 +1520,113 @@ int main() {
         ::rmdir(dir);
     }
 
+    // N+13. The instruction limit holds against what used to dodge it.
+    //       Each case once never returned (the tick waited forever); the
+    //       alarm turns a regression into a failure instead of a hang.
+    ::alarm(120);
+    {
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        e.set_limits(200000, LuaEngine::kDefaultMemoryLimit);
+        const char* runaway[] = {
+            // pcall() / xpcall() catching the limit's error and going on
+            "while true do pcall(function() while true do end end) end",
+            "while true do xpcall(function() while true do end end, function() while true do end end) end",
+            // a message handler looping on its own: Lua ran it with the
+            // hooks off, the limit's error having come from the hook
+            "xpcall(function() while true do end end, function() while true do end end)",
+            "local ok = pcall(function() while true do end end) error({})",
+            // backtracking patterns: one VM instruction, unbounded C
+            "return string.find(string.rep('a', 4000), string.rep('a*', 12) .. 'b')",
+            "return (string.rep('a', 4000)):match(string.rep('a-', 12) .. 'b')",
+            "for _ in string.gmatch(string.rep('a', 4000), string.rep('a*', 12) .. 'b') do end",
+            "return string.gsub(string.rep('a', 4000), string.rep('a*', 12) .. 'b', '')",
+            "return string.find(string.rep('(', 4000), '%b()')",
+            // a plain search with a long needle
+            "return string.find(string.rep('a', 1000000), string.rep('a', 400000) .. 'b', 1, true)",
+            // nil moved onto nil, a quintillion times
+            "table.move({}, 1, math.maxinteger - 1, 2)",
+        };
+        std::string src;
+        int i = 0;
+        for (const char* body : runaway) {
+            src += "watch('r" + std::to_string(i++) + "', { cooldown = 0, when = function() " +
+                   body + " end })\n";
+        }
+        src += "watch('ok', { cooldown = 0, when = function() return true end })\n";
+        assert(e.load_string(src.c_str()) == 0);
+        const int n = static_cast<int>(sizeof(runaway) / sizeof(runaway[0]));
+        assert(e.eval_tick(mk(0, 0, 0, 0)) == 1);                  // only 'ok'
+        for (int r = 0; r < n; ++r) {
+            const std::string& err = e.rules()[static_cast<size_t>(r)].last_error;
+            if (err.find("instruction limit of 200000 exceeded") == std::string::npos) {
+                std::fprintf(stderr, "rule r%d: '%s'\n", r, err.c_str());
+                assert(false);
+            }
+        }
+        // The next tick starts with the hook back at its interval.
+        assert(e.eval_tick(mk(0, 0, 0, 0)) == 1);
+
+        // A level condition is held to it the same way.
+        assert(e.add_level_condition(4, "string.find(string.rep('a', 4000), "
+                                        "string.rep('a*', 12) .. 'b') ~= nil") == 0);
+        std::vector<uint8_t> active;
+        e.eval_level_conditions(mk(0, 0, 0, 0), &active);
+        assert(active.empty());
+        assert(e.level_conditions()[0].last_error.find("instruction limit") != std::string::npos);
+        e.shutdown();
+    }
+
+    // N+14. What the limit does not need to stop still works as Lua's:
+    //       patterns, rep, move, xpcall and the table functions on plain
+    //       tables. rep("") is "" at once; a table with __len, __index or
+    //       __newindex is refused by concat / insert / remove / sort, and
+    //       a metatable with __gc by setmetatable.
+    {
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        assert(e.load_string(
+            "watch('lua', { cooldown = 0, when = function()\n"
+            "  local k, v = ('key=value'):match('^(%w+)=(%w+)$')\n"
+            "  local s, n = string.gsub('a,b,,c', ',', ';')\n"
+            "  local up = ('hello world'):gsub('%w+', function(w) return w:upper() end)\n"
+            "  local words = 0 for _ in ('one two  three'):gmatch('%S+') do words = words + 1 end\n"
+            "  local i, j = string.find('x(a(b)c)y', '%b()')\n"
+            "  local f = string.find('THE (quick) fox', '%f[%a]%a+', 5)\n"
+            "  local p = string.find('a.b', '.', 1, true)\n"
+            "  local t = { 3, 1, 2 } table.sort(t) table.insert(t, 4) table.remove(t, 1)\n"
+            "  local m = table.move({ 1, 2, 3 }, 1, 3, 2, {})\n"
+            "  return k == 'key' and v == 'value' and s == 'a;b;;c' and n == 3\n"
+            "    and up == 'HELLO WORLD' and words == 3 and i == 2 and j == 8 and f == 6\n"
+            "    and p == 2 and table.concat(t, ',') == '2,3,4' and m[2] == 1 and m[4] == 3\n"
+            "    and string.rep('ab', 3, '-') == 'ab-ab-ab' and string.rep('', math.maxinteger) == ''\n"
+            "    and string.rep('', 5, '') == '' and string.rep('x', 0) == ''\n"
+            "    and select(2, xpcall(function(a, b) return a + b end, print, 2, 3)) == 5\n"
+            "    and select(2, xpcall(function() error('x', 0) end, function(m) return m .. '!' end)) == 'x!'\n"
+            "    and not xpcall(error, function() error('again') end)\n"
+            "    and getmetatable(setmetatable({}, { __index = {} })) ~= nil\n"
+            "end })\n"
+            "watch('len', { cooldown = 0, when = function()\n"
+            "  table.insert(setmetatable({}, { __len = function() return 1e15 end }), 1, 'x')\n"
+            "end })\n"
+            "watch('index', { cooldown = 0, when = function()\n"
+            "  return table.concat(setmetatable({}, { __index = table.concat }), '', 1, 1e15)\n"
+            "end })\n"
+            // Lua runs finalizers with hooks off: no __gc in rules
+            "watch('gc', { cooldown = 0, when = function()\n"
+            "  setmetatable({}, { __gc = function() while true do end end })\n"
+            "end })\n") == 0);
+        assert(e.eval_tick(mk(0, 0, 0, 0)) == 1);
+        assert(e.rules()[0].last_error.empty());
+        assert(e.rules()[1].last_error.find("table.insert: a table with __len is not supported") !=
+               std::string::npos);
+        assert(e.rules()[2].last_error.find("table.concat: a table with __index is not supported") !=
+               std::string::npos);
+        assert(e.rules()[3].last_error.find("setmetatable: __gc is not supported") != std::string::npos);
+        e.shutdown();
+    }
+    ::alarm(0);
+
     std::printf("test_lua_engine: PASS\n");
     return 0;
 }

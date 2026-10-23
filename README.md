@@ -515,6 +515,13 @@ at most `rules.limits.instructions` VM instructions (default 1 000 000,
 about 10 ms), and the engine may hold at most `rules.limits.memory_mb`
 (default 16). A rule that overruns gets an error logged once and is
 skipped on that tick; the other rules and collection carry on.
+Library work done in C counts too: the pattern functions (`find`,
+`match`, `gmatch`, `gsub`) charge their steps, and `table.move` its
+moves. A `pcall` cannot catch the limit and go on. Because Lua runs
+finalizers with its hooks off, `setmetatable` refuses `__gc`. For the
+same reason `table.concat`, `insert`, `remove` and `sort` refuse a table
+with `__len`, `__index` or `__newindex`, since in C those loops are not
+counted.
 
 ### YAML
 

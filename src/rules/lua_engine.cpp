@@ -4,6 +4,7 @@
 #include "core/clock.h"
 
 #include "rules/lua_bindings.h"
+#include "rules/lua_pattern.h"
 #include "rules/lua_stdlib.h"
 
 extern "C" {
@@ -78,12 +79,147 @@ int on_panic(lua_State* L) {
     return 0;
 }
 
+// Calls the library function in upvalue 1 with this call's arguments.
+int call_upvalue(lua_State* L) {
+    const int n = lua_gettop(L);
+    lua_pushvalue(L, lua_upvalueindex(1));
+    lua_insert(L, 1);
+    lua_call(L, n, LUA_MULTRET);
+    return lua_gettop(L);
+}
+
+// string.rep(s, n [, sep]). With s and sep empty, Lua's loops n times
+// copying nothing, in C, where no instruction is counted:
+// rep("", math.maxinteger) never returned. Otherwise it copies into a
+// buffer the memory limit has already allowed.
+int limited_rep(lua_State* L) {
+    size_t l = 0, lsep = 0;
+    luaL_checklstring(L, 1, &l);
+    const lua_Integer n = luaL_checkinteger(L, 2);
+    luaL_optlstring(L, 3, "", &lsep);
+    if (n <= 0 || l + lsep == 0) {
+        lua_pushliteral(L, "");
+        return 1;
+    }
+    return call_upvalue(L);
+}
+
+// table.move(a1, f, e, t [, a2]): its e - f + 1 moves are charged before
+// they run; nil moved onto nil costs Lua nothing, so nothing else
+// bounds them.
+int limited_move(lua_State* L) {
+    const lua_Integer f = luaL_checkinteger(L, 2);
+    const lua_Integer e = luaL_checkinteger(L, 3);
+    if (e >= f) {
+        const uint64_t n = static_cast<uint64_t>(e) - static_cast<uint64_t>(f);
+        budyk_lua_charge(L, n == UINT64_MAX ? n : n + 1);
+    }
+    return call_upvalue(L);
+}
+
+// table.concat, insert, remove and sort loop in C over #t or t[i]. A
+// __len (any length it likes) or a C function as __index or __newindex
+// keeps them there with no instruction counted, so a table with one of
+// those is refused. Upvalue 2: the function's name.
+int plain_table_only(lua_State* L) {
+    if (lua_type(L, 1) == LUA_TTABLE && lua_getmetatable(L, 1) != 0) {
+        for (const char* k : { "__len", "__index", "__newindex" }) {
+            lua_pushstring(L, k);
+            const bool has = lua_rawget(L, -2) != LUA_TNIL;
+            lua_pop(L, 1);
+            if (has) {
+                return luaL_error(L, "table.%s: a table with %s is not supported in rules "
+                                     "(the instruction limit cannot see into it)",
+                                  lua_tostring(L, lua_upvalueindex(2)), k);
+            }
+        }
+        lua_pop(L, 1);
+    }
+    return call_upvalue(L);
+}
+
+// xpcall(f, msgh, ...). Lua calls msgh where the error was raised, and
+// for an error the count hook raised that is with hooks still off: a
+// msgh that looped ran with no limit at all. Here f runs under a plain
+// pcall and msgh after it, as a protected call of its own; past the
+// limit msgh does not run, the limit's error goes on up. (No debug
+// library in the sandbox, so msgh never needed the erring frames.)
+int sandbox_xpcall(lua_State* L) {
+    const int n = lua_gettop(L);
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+    luaL_checkstack(L, n, "too many arguments");
+    lua_pushvalue(L, 1);                                  // f
+    for (int i = 3; i <= n; ++i) lua_pushvalue(L, i);     // its arguments
+    if (lua_pcall(L, n - 2 < 0 ? 0 : n - 2, LUA_MULTRET, 0) == LUA_OK) {
+        lua_pushboolean(L, 1);
+        lua_insert(L, n + 1);
+        return lua_gettop(L) - n;
+    }
+    budyk_lua_charge(L, 0);                               // raises past the limit
+    lua_pushvalue(L, 2);
+    lua_insert(L, -2);                                    // msgh, error
+    if (lua_pcall(L, 1, 1, 0) != LUA_OK) budyk_lua_charge(L, 0);
+    lua_pushboolean(L, 0);
+    lua_insert(L, -2);
+    return 2;
+}
+
+// setmetatable(t, mt) without __gc: Lua runs finalizers with hooks off,
+// so a __gc that looped held the tick with no limit (and lua_close() at
+// a reload runs every one left). Upvalue 1: the base library's.
+int sandbox_setmetatable(lua_State* L) {
+    if (lua_type(L, 2) == LUA_TTABLE) {
+        lua_pushliteral(L, "__gc");
+        const bool gc = lua_rawget(L, 2) != LUA_TNIL;
+        lua_pop(L, 1);
+        if (gc) return luaL_error(L, "setmetatable: __gc is not supported in rules");
+    }
+    return call_upvalue(L);
+}
+
 void open_sandbox_libs(lua_State* L) {
     // Only the safe subset: base + math + string + table.
     luaL_requiref(L, "_G",     luaopen_base,   1); lua_pop(L, 1);
     luaL_requiref(L, "math",   luaopen_math,   1); lua_pop(L, 1);
     luaL_requiref(L, "string", luaopen_string, 1); lua_pop(L, 1);
     luaL_requiref(L, "table",  luaopen_table,  1); lua_pop(L, 1);
+
+    // The library functions that loop in C, where the count hook never
+    // fires, replaced by versions whose work counts against
+    // rules.limits.instructions: the pattern functions (lua_pattern.c),
+    // rep, move, and the table functions over plain tables only. The
+    // string metatable's __index is this same table, so s:find() is the
+    // counted one too.
+    lua_getglobal(L, "string");
+    const luaL_Reg patterns[] = {
+        { "find",   budyk_lua_str_find   },
+        { "match",  budyk_lua_str_match  },
+        { "gmatch", budyk_lua_str_gmatch },
+        { "gsub",   budyk_lua_str_gsub   },
+        { nullptr,  nullptr },
+    };
+    luaL_setfuncs(L, patterns, 0);
+    lua_getfield(L, -1, "rep");
+    lua_pushcclosure(L, limited_rep, 1);
+    lua_setfield(L, -2, "rep");
+    lua_pop(L, 1);
+    lua_getglobal(L, "table");
+    lua_getfield(L, -1, "move");
+    lua_pushcclosure(L, limited_move, 1);
+    lua_setfield(L, -2, "move");
+    for (const char* name : { "concat", "insert", "remove", "sort" }) {
+        lua_getfield(L, -1, name);
+        lua_pushstring(L, name);
+        lua_pushcclosure(L, plain_table_only, 2);
+        lua_setfield(L, -2, name);
+    }
+    lua_pop(L, 1);
+
+    lua_pushcfunction(L, sandbox_xpcall);
+    lua_setglobal(L, "xpcall");
+    lua_getglobal(L, "setmetatable");
+    lua_pushcclosure(L, sandbox_setmetatable, 1);
+    lua_setglobal(L, "setmetatable");
 
     // Remove unsafe globals that `luaopen_base` also registered.
     const char* banned[] = { "dofile", "loadfile", "load", "loadstring", "require" };
@@ -123,18 +259,43 @@ void* LuaEngine::alloc(void* ud, void* ptr, size_t osize, size_t nsize) {
     return p;
 }
 
-void LuaEngine::count_hook(lua_State* L, lua_Debug*) {
+LuaEngine* LuaEngine::engine_of(lua_State* L) {
     void* ud = nullptr;
     lua_getallocf(L, &ud);
-    auto* self = static_cast<LuaEngine*>(ud);
-    self->instructions_used_ += kHookInterval;
-    if (self->instructions_used_ > self->instruction_limit_) {
-        luaL_error(L, "instruction limit of %I exceeded (rules.limits.instructions)",
-                   static_cast<lua_Integer>(self->instruction_limit_));
-    }
+    return static_cast<LuaEngine*>(ud);
 }
 
-void LuaEngine::begin_call() { instructions_used_ = 0; }
+int LuaEngine::raise_limit(lua_State* L, const LuaEngine* self) {
+    // From here on the hook fires, and raises, on every instruction: a
+    // pcall() or xpcall() in the rule catches the error only until its
+    // next one, so the call ends however the rule nests them.
+    lua_sethook(L, &LuaEngine::count_hook, LUA_MASKCOUNT, 1);
+    return luaL_error(L, "instruction limit of %I exceeded (rules.limits.instructions)",
+                      static_cast<lua_Integer>(self->instruction_limit_));
+}
+
+void LuaEngine::count_hook(lua_State* L, lua_Debug*) {
+    auto* self = engine_of(L);
+    self->instructions_used_ += kHookInterval;
+    if (self->instructions_used_ > self->instruction_limit_) raise_limit(L, self);
+}
+
+void LuaEngine::charge(lua_State* L, uint64_t n) {
+    auto* self = engine_of(L);
+    const uint64_t room = self->instructions_used_ < self->instruction_limit_
+                        ? self->instruction_limit_ - self->instructions_used_ : 0;
+    if (n > room || self->instructions_used_ > self->instruction_limit_) {
+        self->instructions_used_ = self->instruction_limit_ + 1;
+        raise_limit(L, self);
+    }
+    self->instructions_used_ += n;
+}
+
+void LuaEngine::begin_call() {
+    instructions_used_ = 0;
+    if (L_ != nullptr) lua_sethook(L_, &LuaEngine::count_hook, LUA_MASKCOUNT, kHookInterval);
+}
+
 
 int LuaEngine::init(bool enable_exec) {
     if (L_ != nullptr) return -1;
@@ -576,3 +737,7 @@ void LuaEngine::add_rule(const std::string& name, int when_ref, int actions_ref,
 }
 
 } // namespace budyk
+
+extern "C" void budyk_lua_charge(lua_State* L, size_t n) {
+    budyk::LuaEngine::charge(L, n);
+}

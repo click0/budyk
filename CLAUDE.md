@@ -93,7 +93,8 @@ src/hot_buffer/    — in-memory ring for WS catch-up (RAM-only)
 src/storage/       — ring files (mmap header, pwrite, CRC32C), TierManager,
                      TierAggregator (the L2/L1 folds), ring_check (fsck and
                      the start-up recovery of unindexed records)
-src/rules/         — Lua 5.4 engine, sandbox, bindings, alerts, exec, freeze, Worker
+src/rules/         — Lua 5.4 engine, sandbox, bindings, alerts, exec, freeze, Worker;
+                     lua_pattern.c: Lua's own string patterns, step-counted (MIT)
 src/security/      — file watcher (inotify / kqueue) feeding the `files` Lua global
 src/ai/            — rule suggestions (Tier A: local stats; Tier B: LLM via curl)
 src/web/           — HTTP + WebSocket server, auth (Argon2id), sessions, login
@@ -227,6 +228,13 @@ in CI.
    place (`src/rules/lua_bindings.cpp`), bound in a protected call with
    raw sets (a failed bind skips the tick's rules; nothing after a
    failed call may allocate on the Lua heap outside one);
+   library work in C is charged to the instruction limit too
+   (`LuaEngine::charge()`): `src/rules/lua_pattern.c` is Lua 5.4.7's
+   own pattern matcher (MIT, kept as Lua writes it, the changes marked
+   "budyk") with a step count, `table.move` is charged, past the limit
+   the hook raises on every instruction (no `pcall` carries on),
+   `xpcall` runs its handler after the call and `setmetatable` refuses
+   `__gc` (Lua runs both with hooks off);
    `exec()` is gated by `--enable-exec` or `rules.exec.enabled` plus an
    allowlist; every call into Lua is limited to `rules.limits.instructions`
    (default 1 000 000) and the engine to `rules.limits.memory_mb`
