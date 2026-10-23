@@ -36,7 +36,11 @@ dependencies at runtime, no database. BSD-3-Clause license.
   by the filesystem's own options (systemd's ProtectSystem=strict makes
   every mount look read-only).
 - **Storage:** one ring file per level (mmap'd header, `pwrite` records,
-  CRC32C, level markers). While L3 or a custom level collects,
+  CRC32C, level markers). A new ring's header goes in with `pwrite`
+  before it is mapped (a store through the mapping into the sparse
+  file's hole is SIGBUS on a full disk); a ring of the right size with an
+  all-zero header is made anew; a store that fails is logged once with
+  its reason (`TierManager::store_error()`). While L3 or a custom level collects,
   `TierManager::store()` also folds its samples (`TierAggregator`) into one
   L2 record per L2 interval and one L1 record per L1 interval, flagged
   `folded` in the record header; `query_all()` (`/api/range?level=all`)

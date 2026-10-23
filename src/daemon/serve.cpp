@@ -582,6 +582,7 @@ int cmd_serve(int argc, char* argv[], const char* version) {
     // metric set (or that of a level selected since, if higher).
     budyk::Level slept_at = budyk::Level::L1;
     const bool on_demand = sched.mode() == budyk::CollectionMode::OnDemand;
+    std::string store_error;   // the last failed store's, until one succeeds
 
     while (!g_stop) {
         // SIGHUP latched in the handler — process it at a clean tick
@@ -689,7 +690,21 @@ int cmd_serve(int argc, char* argv[], const char* version) {
                     cfg.scheduler.grace_period_sec);
             }
         }
-        if (!on_demand) tm.store(s);    // on-demand: the hot buffer only
+        // on-demand: the hot buffer only. A store that fails (a full
+        // disk) is logged when it starts and when it stops: the history
+        // used to stop without a word.
+        if (!on_demand) {
+            if (tm.store(s) != 0) {
+                if (store_error != tm.store_error()) {
+                    store_error = tm.store_error();
+                    std::fprintf(stderr, "budyk serve: storing a sample failed: %s\n",
+                                 store_error.c_str());
+                }
+            } else if (!store_error.empty()) {
+                std::fprintf(stderr, "budyk serve: storing samples again\n");
+                store_error.clear();
+            }
+        }
         {
             std::string detail = budyk::detail_to_json(*collect_ctx.detail);
             std::lock_guard<std::mutex> g(hot_mtx);

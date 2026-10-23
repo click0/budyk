@@ -83,6 +83,9 @@ public:
     /// encode/write failure (of the sample or a folded record) or if the
     /// manager is not initialised. Unknown levels are rejected.
     int  store(const Sample& s);
+    /// After a store() that failed to write: which ring and why, e.g.
+    /// "tier1.ring: writing a record failed: No space left on device".
+    const std::string& store_error() const;
 
     /// Writes the open fold windows (a partial window is still a summary
     /// of what was collected) and closes the rings.
@@ -135,11 +138,13 @@ private:
     struct CustomRing {
         uint8_t                   level_id;
         std::unique_ptr<RingFile> ring;
+        std::string               leaf;     ///< "level-burst.ring"
     };
 
     RingFile tier1_, tier2_, tier3_;
     std::vector<CustomRing> custom_;
     bool     ready_ = false;
+    std::string store_error_;
 
     uint64_t       fold_l2_ns_ = 0;
     uint64_t       fold_l1_ns_ = 0;

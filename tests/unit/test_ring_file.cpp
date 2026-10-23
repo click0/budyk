@@ -6,11 +6,14 @@
 
 #include <cassert>
 #include <string>
+#include <vector>
 #include <cerrno>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <signal.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -302,6 +305,61 @@ int main() {
         assert(::truncate(path, 64 + (off_t)rsize * 4 + 7) == 0); // 7 bytes over
         assert(RingFile::read_header(path, &h, &err) == -6);
         assert(RingFile::read_header("/nonexistent/x.ring", &h, &err) == -3 && err == ENOENT);
+        ::unlink(path);
+    }
+
+    // 11. A ring file of the right size whose header is all zero bytes: a
+    //     start that died between the ftruncate and the header (a full
+    //     disk: the header was stored through the mapping into a hole of
+    //     the sparse file, and that is SIGBUS). It used to stop every later
+    //     start with "bad magic"; it holds nothing, and is made anew.
+    //     Read-only, it is still refused.
+    {
+        char path[] = "/tmp/budyk_blank_XXXXXX";
+        const int fd = ::mkstemp(path);
+        assert(fd >= 0);
+        assert(::ftruncate(fd, 64 + (off_t)rsize * 4) == 0);
+        ::close(fd);
+        RingFile ro;
+        assert(ro.open_read_only(path, 1, (uint32_t)rsize, 4) == -8);
+        RingFile rw;
+        assert(rw.open(path, 1, (uint32_t)rsize, 4) == 0);
+        assert(rw.write_index() == 0);
+        std::vector<uint8_t> rec(rsize, 0x5a);
+        assert(rw.append(rec.data(), rec.size()) == 0);
+        rw.close();
+        RingFile::Header h;
+        int err = 0;
+        assert(RingFile::read_header(path, &h, &err) == 0 && h.tier == 1 && h.write_idx == 1);
+        ::unlink(path);
+    }
+
+    // 12. A write that fails says why (last_errno): a full disk stopped
+    //     the history and nothing said what. RLIMIT_FSIZE below the first
+    //     slot stands in for the full disk (EFBIG; SIGXFSZ ignored).
+    {
+        char path[] = "/tmp/budyk_full_XXXXXX";
+        const int fd = ::mkstemp(path);
+        assert(fd >= 0);
+        ::close(fd);
+        ::unlink(path);
+        RingFile rw;
+        assert(rw.open(path, 1, (uint32_t)rsize, 4) == 0);
+        struct sigaction ign{}, old{};
+        ign.sa_handler = SIG_IGN;
+        sigemptyset(&ign.sa_mask);
+        assert(::sigaction(SIGXFSZ, &ign, &old) == 0);
+        struct rlimit lim{}, old_lim{};
+        assert(::getrlimit(RLIMIT_FSIZE, &old_lim) == 0);
+        lim = old_lim;
+        lim.rlim_cur = 64;
+        assert(::setrlimit(RLIMIT_FSIZE, &lim) == 0);
+        std::vector<uint8_t> rec(rsize, 0x5a);
+        const int rc = rw.append(rec.data(), rec.size());
+        assert(::setrlimit(RLIMIT_FSIZE, &old_lim) == 0);
+        ::sigaction(SIGXFSZ, &old, nullptr);
+        assert(rc == -3 && rw.last_errno() == EFBIG && rw.write_index() == 0);
+        rw.close();
         ::unlink(path);
     }
 

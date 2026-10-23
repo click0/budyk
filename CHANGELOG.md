@@ -127,6 +127,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and network rates averaged over the whole gap (70 % CPU on an idle
   box, from the minutes before). A tick that reads nothing now makes the
   next read a baseline.
+- **A full disk crashed the daemon and blocked every later start.** A new
+  ring's header was written through the mapping of the sparse file, which
+  is SIGBUS once the page cannot be allocated. That left a full-size ring
+  with a blank header, and every start after it failed with "bad magic".
+  The header now goes in with `pwrite` (an error, and an empty file left,
+  if it fails), and a ring with a blank header is made anew.
+- **On a full disk the history stopped without a word.** A store that
+  fails is now logged when it starts and when it stops, with the ring
+  and the reason: "tier1.ring: writing a record failed: No space left on
+  device".
+- **After the clock stepped back further than a ring spans,** each start
+  counted the records from before the step as written past the index:
+  they were stamped later than the newest. The writes after them then
+  overwrote the real records. Records stamped after now are no longer
+  counted.
 
 ## [0.8.1] — 2026-10-22
 

@@ -28,6 +28,16 @@ constexpr uint32_t kFormatVersion   = 1;
 constexpr char     kMagicBytes[8]   = {'B', 'D', 'Y', 'K', 'R', 'B', '\0', '\x01'};
 constexpr size_t   kWriteIdxOffset  = 28;
 
+// Whether the header of the ring file open at `fd` is all zero bytes.
+bool header_is_blank(int fd) {
+    uint8_t h[kHeaderSize];
+    if (::pread(fd, h, sizeof(h), 0) != static_cast<ssize_t>(sizeof(h))) return false;
+    for (const uint8_t b : h) {
+        if (b != 0) return false;
+    }
+    return true;
+}
+
 } // namespace
 
 int RingFile::open(const char* path, uint8_t tier, uint32_t record_size, uint64_t capacity) {
@@ -59,7 +69,7 @@ int RingFile::open_impl(const char* path, uint8_t tier, uint32_t record_size,
 
     struct stat st{};
     if (::fstat(fd, &st) != 0)       { last_errno_ = errno; ::close(fd); return -4; }
-    const bool fresh = (st.st_size == 0);
+    bool fresh = (st.st_size == 0);
     if (fresh && read_only)          { ::close(fd); return -6; }
 
     if (fresh) {
@@ -68,6 +78,33 @@ int RingFile::open_impl(const char* path, uint8_t tier, uint32_t record_size,
         }
     } else if (static_cast<size_t>(st.st_size) != file_bytes) {
         ::close(fd); return -6;
+    } else if (!read_only && header_is_blank(fd)) {
+        // Sized but never given its header: a start that died between
+        // the ftruncate and the header (a full disk, before the header
+        // went through pwrite; a SIGKILL). It holds nothing: made anew,
+        // where it used to stop every start with "bad magic".
+        fresh = true;
+    }
+
+    if (fresh) {
+        // The header goes in with pwrite before the page is mapped: the
+        // file is sparse, and a store through the mapping into a hole on
+        // a full filesystem is SIGBUS, not an error. Undone if it fails,
+        // so the next start finds an empty file, not a blank header.
+        uint8_t h[kHeaderSize] = {};
+        std::memcpy(h, kMagicBytes, 8);
+        le_put_u32(h + 8,  kFormatVersion);
+        h[12] = tier;
+        le_put_u32(h + 16, record_size);
+        le_put_u64(h + 20, capacity);
+        le_put_u64(h + kWriteIdxOffset, 0);
+        const ssize_t w = ::pwrite(fd, h, kHeaderSize, 0);
+        if (w != static_cast<ssize_t>(kHeaderSize)) {
+            last_errno_ = w < 0 ? errno : ENOSPC;
+            if (::ftruncate(fd, 0) != 0) { /* the blank header is made anew next time */ }
+            ::close(fd);
+            return -14;
+        }
     }
 
     void* m = ::mmap(nullptr, kHeaderSize, read_only ? PROT_READ : PROT_READ | PROT_WRITE,
@@ -75,15 +112,7 @@ int RingFile::open_impl(const char* path, uint8_t tier, uint32_t record_size,
     if (m == MAP_FAILED)             { last_errno_ = errno; ::close(fd); return -7; }
 
     auto* h = static_cast<uint8_t*>(m);
-    if (fresh) {
-        std::memset(h, 0, kHeaderSize);
-        std::memcpy(h, kMagicBytes, 8);
-        le_put_u32(h + 8,  kFormatVersion);
-        h[12] = tier;
-        le_put_u32(h + 16, record_size);
-        le_put_u64(h + 20, capacity);
-        le_put_u64(h + kWriteIdxOffset, 0);
-    } else {
+    if (!fresh) {
         if (std::memcmp(h, kMagicBytes, 8) != 0) { ::munmap(m, kHeaderSize); ::close(fd); return -8; }
         if (le_get_u32(h + 8)   != kFormatVersion)  { ::munmap(m, kHeaderSize); ::close(fd); return -9; }
         if (h[12]            != tier)            { ::munmap(m, kHeaderSize); ::close(fd); return -10; }
@@ -99,6 +128,7 @@ int RingFile::open_impl(const char* path, uint8_t tier, uint32_t record_size,
     record_size_ = record_size;
     capacity_    = capacity;
     widx_.store(le_get_u64(h + kWriteIdxOffset), std::memory_order_release);
+    begun_.store(widx_.load(std::memory_order_relaxed), std::memory_order_release);
     return 0;
 }
 
@@ -148,6 +178,7 @@ void RingFile::close() {
     read_only_   = false;
     tier_        = 0;
     widx_.store(0, std::memory_order_release);
+    begun_.store(0, std::memory_order_release);
 }
 
 int RingFile::append(const void* record, size_t len) {
@@ -158,8 +189,15 @@ int RingFile::append(const void* record, size_t len) {
     const uint64_t slot = idx % capacity_;
     const off_t    off  = static_cast<off_t>(kHeaderSize + slot * record_size_);
 
+    // Said before the slot is touched: a reader that finds the record it
+    // read may be this one (write_begun()) drops it.
+    begun_.store(idx + 1, std::memory_order_release);
     ssize_t w = ::pwrite(fd_, record, record_size_, off);
-    if (w != static_cast<ssize_t>(record_size_)) return -3;
+    if (w != static_cast<ssize_t>(record_size_)) {
+        last_errno_ = w < 0 ? errno : ENOSPC;   // a short write: out of room
+        begun_.store(idx, std::memory_order_release);
+        return -3;
+    }
 
     // Advance write_idx only after the record is durably placed. A crash
     // between pwrite and this increment loses at most the last record.
@@ -183,6 +221,7 @@ int RingFile::advance_write_index(uint64_t n) {
     if (fd_ < 0 || read_only_) return -1;
     const uint64_t idx = widx_.load(std::memory_order_acquire) + n;
     le_put_u64(static_cast<uint8_t*>(mmap_base_) + kWriteIdxOffset, idx);
+    begun_.store(idx, std::memory_order_release);
     widx_.store(idx, std::memory_order_release);
     return 0;
 }
@@ -195,6 +234,12 @@ uint64_t RingFile::write_index() const {
         return le_get_u64(static_cast<const uint8_t*>(mmap_base_) + kWriteIdxOffset);
     }
     return widx_.load(std::memory_order_acquire);
+}
+
+uint64_t RingFile::write_begun() const {
+    if (fd_ < 0) return 0;
+    if (read_only_) return write_index();   // another process's writes: not seen
+    return begun_.load(std::memory_order_acquire);
 }
 
 uint64_t RingFile::count() const {
@@ -224,6 +269,7 @@ const char* RingFile::describe(int rc) {
         case -11: return "record size in the header differs";
         case -12: return "capacity in the header differs";
         case -13: return "file is shorter than a ring header";
+        case -14: return "writing the header failed";
         default:  return "unknown error";
     }
 }

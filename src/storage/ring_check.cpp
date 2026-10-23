@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #include "storage/ring_check.h"
 
+#include "core/clock.h"
 #include "storage/codec.h"
 
 #include <cerrno>
@@ -27,10 +28,11 @@ bool level_fits_ring(uint8_t tier, uint8_t level) {
     }
 }
 
-uint64_t count_unindexed(const RingFile& ring) {
+uint64_t count_unindexed(const RingFile& ring, uint64_t now_ns) {
     const uint64_t cap  = ring.capacity();
     const uint64_t widx = ring.write_index();
     if (cap == 0) return 0;
+    if (now_ns == 0) now_ns = now_realtime_ns();
     std::vector<uint8_t> buf(record_size_for_sample());
     auto read = [&](uint64_t logical, Sample* s) {
         return ring.read_at(logical % cap, buf.data(), buf.size()) == 0 &&
@@ -48,7 +50,10 @@ uint64_t count_unindexed(const RingFile& ring) {
     uint64_t n = 0;
     while (n < cap) {
         Sample s{};
-        if (!read(widx + n, &s) || s.timestamp_nanos <= prev_ts) break;
+        // Stamped after now: not written before this start. After the
+        // clock stepped back further than the ring spans, the oldest
+        // records are "newer" than the newest, and were counted in.
+        if (!read(widx + n, &s) || s.timestamp_nanos <= prev_ts || s.timestamp_nanos > now_ns) break;
         prev_ts = s.timestamp_nanos;
         ++n;
     }

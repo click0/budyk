@@ -3,12 +3,16 @@
 #include "storage/codec.h"
 #include "storage/tier_manager.h"
 
+#include <atomic>
 #include <cassert>
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <signal.h>
+#include <sys/resource.h>
+#include <thread>
 #include <unistd.h>
 #include <vector>
 
@@ -87,6 +91,63 @@ int main() {
         assert(tm.tier2_count() == 2);
         assert(tm.tier3_count() == 1);
 
+        tm.close();
+        rmrf(d);
+    }
+
+    // 4b. A store that cannot write names the ring and the reason, for
+    //     the daemon's log (a full disk stopped the history without a
+    //     word). RLIMIT_FSIZE at the header stands in for the full disk.
+    {
+        const std::string d = mkdtmp();
+        TierManager tm;
+        assert(tm.init(d.c_str(), 1, 1, 1) == 0);
+        assert(tm.store_error().empty());
+        struct sigaction ign{}, old{};
+        ign.sa_handler = SIG_IGN;
+        sigemptyset(&ign.sa_mask);
+        assert(::sigaction(SIGXFSZ, &ign, &old) == 0);
+        struct rlimit lim{}, old_lim{};
+        assert(::getrlimit(RLIMIT_FSIZE, &old_lim) == 0);
+        lim = old_lim;
+        lim.rlim_cur = 64;
+        assert(::setrlimit(RLIMIT_FSIZE, &lim) == 0);
+        const int rc = tm.store(mk(Level::L3, 1000ULL));
+        assert(::setrlimit(RLIMIT_FSIZE, &old_lim) == 0);
+        ::sigaction(SIGXFSZ, &old, nullptr);
+        assert(rc == -4);
+        assert(tm.store_error() == std::string("tier1.ring: writing a record failed: ") +
+                                   std::strerror(EFBIG));
+        assert(tm.store(mk(Level::L3, 1001ULL)) == 0);
+        tm.close();
+        rmrf(d);
+    }
+
+    // 4c. query() while the writer laps the reader in a full ring (the
+    //     collector thread stores, the HTTP thread reads): the result is
+    //     oldest-first. Overwritten slots walked late used to land at its
+    //     front (thousands of inversions in 200 queries).
+    {
+        const std::string d = mkdtmp();
+        TierManager tm;
+        assert(tm.init(d.c_str(), 1, 1, 1) == 0);           // tier1: ~1900 records
+        std::atomic<uint64_t> ts{1000};
+        for (int i = 0; i < 4000; ++i) assert(tm.store(mk(Level::L3, ts++)) == 0);
+        std::atomic<bool> stop{false};
+        std::thread writer([&] {
+            while (!stop.load()) tm.store(mk(Level::L3, ts++));
+        });
+        long inversions = 0;
+        for (int it = 0; it < 500; ++it) {
+            std::vector<Sample> out;
+            tm.query(1, 0, 0, 100000, &out);
+            for (size_t i = 1; i < out.size(); ++i) {
+                if (out[i].timestamp_nanos < out[i - 1].timestamp_nanos) ++inversions;
+            }
+        }
+        stop = true;
+        writer.join();
+        assert(inversions == 0);
         tm.close();
         rmrf(d);
     }
