@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.2] — 2026-10-25
+
+Fixes from a review of every module. Three of them matter most to a
+packaged install. Under the systemd unit every filesystem but the data
+directory's was skipped, so a full `/` never raised an alert. A ring
+created on a full disk crashed the daemon (SIGBUS) and left a file that
+stopped every later start. And any web page open in the browser could
+read the WebSocket stream: the host name, the processes, the mounts and
+the alerts. Also fixed: a rule can no longer abort the daemon or run
+past its instruction limit; a client can no longer stop or hold the
+HTTP thread; a WebSocket now ends with its session; and the config reads
+`5m` as five minutes, not five seconds. The record format does not
+change: the rings of 0.8.1 are used as they are. Behind a reverse proxy
+that rewrites `Host`, the proxy must now pass `X-Forwarded-Host` (or
+the original `Host`) on. Otherwise the dashboard's WebSocket is refused
+with 403.
+
 ### Changed
 
 - **A release can be published from Actions** (`release.yml`): Run
@@ -97,7 +114,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Origin` that is not the `Host` it was sent to (or a proxy's
   `X-Forwarded-Host`) is refused with 403. A page on another site, open
   in the browser, used to get the host name, the processes, the mounts
-  and the alerts, and held the daemon at L3.
+  and the alerts, and held the daemon at L3. A reverse proxy that
+  rewrites `Host` must pass `X-Forwarded-Host` on (see the README).
 - **A slow reader held the HTTP thread.** The send timeout restarts with
   each send, so a client reading a little within each one kept the
   thread as long as it liked. A response now gets the I/O timeout plus
@@ -142,6 +160,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   they were stamped later than the newest. The writes after them then
   overwrote the real records. Records stamped after now are no longer
   counted.
+- **A query during a store could return a record out of order.** A
+  query walks a full ring from the newest record to the oldest. A store
+  during the walk overwrote the oldest slot before the walk read it, and
+  that new record came first in the oldest-first result. The walk now
+  stops where the writer has been.
 - **A SIGHUP with a broken rules file dropped the working rules.** The
   engine was shut down before the new file was loaded, so a typo at rule
   200 of 300 left 199 rules running. The file is now loaded into a
@@ -1028,6 +1051,7 @@ it turned up two untested storage paths, which are now covered.
   opened, and init with the original size works again. tier_manager.cpp
   coverage went from 84.3% to 94.4%.
 
+[0.8.2]: https://github.com/click0/budyk/releases/tag/v0.8.2
 [0.8.1]: https://github.com/click0/budyk/releases/tag/v0.8.1
 [0.8.0]: https://github.com/click0/budyk/releases/tag/v0.8.0
 [0.7.0]: https://github.com/click0/budyk/releases/tag/v0.7.0
