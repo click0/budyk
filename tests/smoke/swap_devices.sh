@@ -80,9 +80,10 @@ if s and "swap" in s[-1]["groups"]:
     [ -n "$got" ] || sleep 0.2
 done
 
-# Both read the same counters: only a device added or removed in between
-# could move them apart. A MB of slack, a device is 16.
-if [ "$devices" -gt 16 ] && python3 -c 'import sys; sys.exit(abs(int(sys.argv[1]) - int(sys.argv[2])) > (1 << 20))' "$got" "$want"; then
+# libkvm leaves out the first dmmax pages of each device, which swapinfo
+# counts (128 KB each on a CI VM): 256 KB a device and a MB of slack,
+# far below the 16 MB of one device left out.
+if [ "$devices" -gt 16 ] && python3 -c 'import sys; sys.exit(abs(int(sys.argv[1]) - int(sys.argv[2])) > int(sys.argv[3]) * (256 << 10) + (1 << 20))' "$got" "$want" "$devices"; then
     echo "ok   swap total over $devices devices: budyk $got, swapinfo $want"
     echo "swap_devices smoke test: PASS"
 else
