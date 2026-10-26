@@ -16,6 +16,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cannot complete such a release was wrong; what to do when GitHub
   refuses the update (v0.6.5) is described.
 
+### Fixed
+
+- **FreeBSD: swap past the 15th device was not counted.** The swap
+  total and use summed the per-device entries of `kvm_getswapinfo()`,
+  which fills at most one fewer than its array holds (16): a host with
+  more swap devices showed only the first 15. The total of all devices,
+  which libkvm adds after them, is used now.
+
 ## [0.8.2] — 2026-10-25
 
 Fixes from a review of every module. Three of them matter most to a

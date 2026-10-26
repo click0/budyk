@@ -140,7 +140,9 @@ tests/smoke/       — serve.sh (HTTP, WS, SIGHUP, fd check), crash.sh (SIGKILL 
                      cross-origin WebSocket refused),
                      crosscheck.sh (the readings against free, swapinfo, uptime,
                      ps, ss / netstat, df, /sys or ifconfig and kern.disks, a
-                     busy loop and a 64 MB write)
+                     busy loop and a 64 MB write),
+                     swap_devices.sh (FreeBSD, root or sudo: 17 swap devices,
+                     the swap total against swapinfo)
 addons/            — FreeBSD port + rc.d, systemd unit, Docker; the .deb and
                      .rpm (addons/linux/mkpkg.sh, test-packages.sh)
 cmake/toolchains/  — cross-compiling for FreeBSD on Linux: freebsd-sysroot.sh
@@ -167,6 +169,7 @@ tests/smoke/modes.sh build/src/budyk     # metric sets per level, always / on-de
 tests/smoke/auth.sh build/src/budyk      # login, sessions, the WebSocket's origin and end
 tests/smoke/resources.sh build/src/budyk # spec §5 figures (a release build; ~2 min)
 tests/smoke/crosscheck.sh build/src/budyk  # the readings against the system's own tools
+tests/smoke/swap_devices.sh build/src/budyk  # FreeBSD: swap over more than 15 devices
 tests/check_whitespace.sh                # trailing blanks, tabs, CR, final newline
 cmake --build build --target docs        # API reference (Doxygen), any warning fails it
 cmake/toolchains/freebsd-sysroot.sh 14.4 amd64 SYSROOT   # then, on Linux:
