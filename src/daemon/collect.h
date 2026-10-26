@@ -8,6 +8,11 @@
 
 namespace budyk {
 
+/// CollectContext::cut bits besides the MetricDetail ones: the disk and
+/// the network totals followed BUDYK_MAX_COUNTED devices and there were more.
+constexpr uint32_t kCutDiskTotals = 1u << 16;
+constexpr uint32_t kCutNetTotals  = 1u << 17;
+
 /// What the stateful collectors (rates from counter deltas) keep across
 /// ticks. Zero-initialise it before the first tick.
 struct CollectContext {
@@ -16,7 +21,7 @@ struct CollectContext {
     budyk_net_ctx_c     net{};
     budyk_netstat_ctx_c netstat{};
     /// Each core, disk, interface and filesystem, and their previous
-    /// counters (~120 KB, hence the heap).
+    /// counters (~710 KB, hence the heap).
     std::unique_ptr<budyk_detail_c> detail{new budyk_detail_c()};
     /// The groups and lists read on the previous tick (MetricGroup /
     /// MetricDetail bits). A rate is the change between two reads in a
@@ -26,6 +31,11 @@ struct CollectContext {
     /// The groups whose collector failed on the last call: not in
     /// s->groups, and a baseline when they read again.
     uint32_t failed = 0;
+    /// What was cut short on the last call, logged when it starts: a
+    /// list holds BUDYK_MAX_ENTITIES, the totals follow BUDYK_MAX_COUNTED
+    /// devices of each kind (bits: kCutDiskTotals, kCutNetTotals, and the
+    /// MetricDetail bit of the list).
+    uint32_t cut = 0;
 };
 
 /// One collection tick: runs the platform collectors (plain C, chosen by

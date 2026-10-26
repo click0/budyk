@@ -150,6 +150,52 @@ int main() {
         ::rmdir(net.c_str());
         ::rmdir(dir);
     }
+
+    // 7b. More devices than a list holds or the totals follow: 300 disks
+    //     (a list holds 256, the totals follow 1024) and 1100 interfaces.
+    //     ctx.cut says what was cut short, so it is logged once, not on
+    //     every tick, and again only after it fits.
+    {
+        char tmpl[] = "/tmp/budyk_cutfx_XXXXXX";
+        const char* dir = mkdtemp(tmpl);
+        assert(dir != nullptr);
+        const std::string net = std::string(dir) + "/net";
+        assert(::mkdir(net.c_str(), 0700) == 0);
+        auto disks = [&](unsigned n) {
+            FILE* f = std::fopen((std::string(dir) + "/diskstats").c_str(), "w");
+            assert(f != nullptr);
+            for (unsigned i = 0; i < n; ++i) {
+                std::fprintf(f, " 259 %u nvme%un1 1 0 2 0 1 0 4 0 0 1 0\n", i, i);
+            }
+            std::fclose(f);
+        };
+        auto ifaces = [&](unsigned n) {
+            FILE* f = std::fopen((net + "/dev").c_str(), "w");
+            assert(f != nullptr);
+            std::fprintf(f, "Inter-|\n face |\n");
+            for (unsigned i = 0; i < n; ++i) {
+                std::fprintf(f, "  veth%u: 1000 1 0 0 0 0 0 0 10 1 0 0 0 0 0 0\n", i);
+            }
+            std::fclose(f);
+        };
+        disks(300);
+        ifaces(1100);
+        budyk_linux_set_proc_root(dir);
+        CollectContext cx;
+        tick(&cx, metric_set_full());
+        assert(cx.cut == (kCutNetTotals | kDetailDisks | kDetailInterfaces));
+        assert(cx.net.ndev == BUDYK_MAX_COUNTED && cx.disk.ndev == 300);
+        tick(&cx, metric_set_full());
+        assert(cx.cut == (kCutNetTotals | kDetailDisks | kDetailInterfaces));
+        ifaces(2);
+        tick(&cx, metric_set_full());
+        assert(cx.cut == kDetailDisks);
+        budyk_linux_set_proc_root(nullptr);
+        ::unlink((std::string(dir) + "/diskstats").c_str());
+        ::unlink((net + "/dev").c_str());
+        ::rmdir(net.c_str());
+        ::rmdir(dir);
+    }
 #endif
 
     // 8. The byte rates in double: 60 GB in a 5-minute L1 interval is

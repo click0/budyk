@@ -492,6 +492,9 @@ and `proc.top`, an array of the top 10 processes by CPU and the top 10
 by memory, each once, busiest first (`pid`, `name`, `state`, `threads`,
 `cpu_percent` of one CPU over the last interval, `rss_bytes`; kernel
 threads are left out).
+`disk.devices`, `net.interfaces` and `fs.mounts` hold the first 256 of
+each, in the kernel's order, and the disk and network totals follow
+1024 devices of each kind; past that the log says so once.
 A device that is gone is `nil`; iterate with `ipairs` / `pairs`:
 
 ```lua

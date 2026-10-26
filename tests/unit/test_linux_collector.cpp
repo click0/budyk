@@ -791,6 +791,78 @@ int main() {
         budyk_linux_set_proc_root(nullptr);
     }
 
+    // 8c3. A storage server and a container host: 300 disks and 1000
+    //      interfaces. The totals sum every one (they followed 256: the
+    //      rest moved nothing), the lists hold 256 of each (64 before),
+    //      and a device that joins in the middle of the list is a
+    //      baseline while those after it are still found.
+    {
+        Fixture fx;
+        std::unique_ptr<budyk_detail_c> d(new budyk_detail_c());
+        budyk_linux_set_proc_root(fx.root.c_str());
+        auto files = [&](unsigned long long step, bool joined) {
+            std::string ds, nd =
+                "Inter-|   Receive  |  Transmit\n face |bytes packets errs drop fifo frame compressed multicast|bytes packets errs drop fifo colls carrier compressed\n";
+            char buf[256];
+            for (unsigned i = 0; i < 300; ++i) {
+                std::snprintf(buf, sizeof(buf), " 259 %u nvme%un1 1 0 %llu 0 1 0 %llu 0 0 1 0\n",
+                              i, i, 2 * step, 4 * step);
+                ds += buf;
+            }
+            for (unsigned i = 0; i < 1000; ++i) {
+                if (joined && i == 500) {
+                    nd += "  vethnew: 90000000000 1 0 0 0 0 0 0 90000000000 1 0 0 0 0 0 0\n";
+                }
+                std::snprintf(buf, sizeof(buf), "  veth%u: %llu 1 0 0 0 0 0 0 %llu 1 0 0 0 0 0 0\n",
+                              i, 1000 * step, 10 * step);
+                nd += buf;
+            }
+            fx.file("diskstats", ds);
+            fx.file("net/dev", nd);
+        };
+        budyk_disk_ctx_c dctx;
+        budyk_net_ctx_c nctx;
+        std::memset(&dctx, 0, sizeof(dctx));
+        std::memset(&nctx, 0, sizeof(nctx));
+        budyk_sample_c s;
+        std::memset(&s, 0, sizeof(s));
+        for (unsigned long long t = 1; t <= 3; ++t) {
+            s.timestamp_nanos = t * 1'000'000'000ULL;
+            files(t, t == 3);                     // vethnew joins on the third read
+            assert(budyk_collect_disk_linux_ex(&dctx, &s, d.get()) == 0);
+            assert(budyk_collect_network_linux_ex(&nctx, &s, d.get()) == 0);
+        }
+        assert(s.disk.device_count == 300 && dctx.ndev == 300);
+        assert(s.disk.read_bytes_per_sec == 300ULL * 2 * 512);         // every disk, a second
+        assert(s.disk.write_bytes_per_sec == 300ULL * 4 * 512);
+        assert(s.net.interface_count == 1001 && nctx.ndev == 1001);
+        assert(s.net.rx_bytes_per_sec == 1000ULL * 1000);              // vethnew: a baseline
+        assert(s.net.tx_bytes_per_sec == 1000ULL * 10);
+        assert(d->ndisks == BUDYK_MAX_ENTITIES && d->ndisks == 256);
+        assert(d->nifaces == 256);
+        assert(d->disks[255].read_bytes_per_sec == 2 * 512);
+        budyk_linux_set_proc_root(nullptr);
+    }
+
+    // 8c4. budyk_counted_add() finds each device where the last one was
+    //      found: in the same order, a device is the first one it looks
+    //      at; after one that joined or left, the next is found again.
+    {
+        budyk_counted_c prev[3] = {{"a", 1, 1}, {"b", 1, 1}, {"c", 1, 1}};
+        budyk_counted_c next[4];
+        uint32_t nnext = 0, pos = 0;
+        uint64_t ma = 0, mb = 0;
+        budyk_counted_add(prev, 3, &pos, next, &nnext, "a", 2, 2, &ma, &mb);
+        assert(pos == 1 && ma == 1);
+        budyk_counted_add(prev, 3, &pos, next, &nnext, "x", 9, 9, &ma, &mb);   // joined
+        assert(pos == 1 && ma == 1 && nnext == 2);
+        budyk_counted_add(prev, 3, &pos, next, &nnext, "c", 5, 5, &ma, &mb);   // b left
+        assert(pos == 3 && ma == 5 && mb == 5);
+        budyk_counted_add(prev, 3, &pos, next, &nnext, "b", 3, 3, &ma, &mb);   // round the list
+        assert(pos == 2 && ma == 7 && nnext == 4);
+        assert(std::strcmp(next[1].name, "x") == 0 && next[1].a == 9);
+    }
+
     // 8d. Filesystems with detail on this host: one entry per counted
     //     filesystem, with sizes that add up.
     {

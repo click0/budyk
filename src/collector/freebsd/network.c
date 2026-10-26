@@ -40,6 +40,7 @@ int budyk_collect_network_freebsd_ex(budyk_net_ctx_c* ctx, budyk_sample_c* s, bu
 
     budyk_counted_c counted[BUDYK_MAX_COUNTED] = {{"", 0, 0}};
     uint32_t ncounted    = 0;
+    uint32_t counted_pos = 0;
     uint64_t rx_moved    = 0;
     uint64_t tx_moved    = 0;
     uint32_t iface_count = 0;
@@ -51,7 +52,7 @@ int budyk_collect_network_freebsd_ex(budyk_net_ctx_c* ctx, budyk_sample_c* s, bu
         if (ifa->ifa_data == NULL)                continue;
 
         const struct if_data* id = (const struct if_data*)ifa->ifa_data;
-        budyk_counted_add(ctx->dev, ctx->ndev, counted, &ncounted, ifa->ifa_name,
+        budyk_counted_add(ctx->dev, ctx->ndev, &counted_pos, counted, &ncounted, ifa->ifa_name,
                           (uint64_t)id->ifi_ibytes, (uint64_t)id->ifi_obytes,
                           &rx_moved, &tx_moved);
         ++iface_count;
