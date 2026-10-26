@@ -9,10 +9,12 @@
 #include "web/spa.h"
 
 #include <cstdio>
+#include <cstring>
 #include <ctime>
 #include <string>
 #include <vector>
 
+#include <arpa/inet.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -64,6 +66,50 @@ bool same_origin(const HttpRequest& req) {
     return false;
 }
 
+// The name in a Host header: without the port, the brackets of an IPv6
+// address or a trailing dot.
+std::string host_name(std::string h) {
+    if (!h.empty() && h[0] == '[') {
+        const size_t close = h.find(']');
+        return close == std::string::npos ? std::string() : h.substr(1, close - 1);
+    }
+    const size_t colon = h.find(':');
+    if (colon != std::string::npos) h.resize(colon);
+    if (!h.empty() && h.back() == '.') h.pop_back();
+    return h;
+}
+
+// Whether a request was sent to one of budyk's own names. Listening on
+// loopback without a password, budyk is open to the local user only; but
+// a page on another site can point a name of its own at 127.0.0.1 once
+// it has loaded (DNS rebinding), and the browser then takes budyk for
+// that site: the page reads the API and the WebSocket as its own origin,
+// so the Origin check passes too. Such a request carries that name in
+// Host. budyk's names are an IP address, localhost and *.localhost
+// (which browsers keep to loopback), this host's name and the names in
+// web.allowed_hosts (a reverse proxy's). X-Forwarded-Host does not count:
+// the page sets it as it likes. No Host (not a browser) is let in. With
+// a password on (a page under another name has no session), or on a
+// network address (open to the network anyway), any name is.
+bool own_host(const HttpRequest& req, const Config& cfg, const std::string& hostname) {
+    if (cfg.auth_enabled || std::strncmp(cfg.listen_addr, "127.", 4) != 0) return true;
+    const std::string raw = req.header("Host");
+    if (raw.empty()) return true;
+    const std::string h = host_name(raw);
+    if (h.empty()) return false;
+    unsigned char addr[16];
+    if (::inet_pton(AF_INET, h.c_str(), addr) == 1 || ::inet_pton(AF_INET6, h.c_str(), addr) == 1) {
+        return true;
+    }
+    if (ascii_ieq(h, "localhost")) return true;
+    if (h.size() > 10 && ascii_ieq(h.substr(h.size() - 10), ".localhost")) return true;
+    if (!hostname.empty() && ascii_ieq(h, hostname.c_str())) return true;
+    for (const std::string& allowed : cfg.web_allowed_hosts) {
+        if (ascii_ieq(h, allowed.c_str())) return true;
+    }
+    return false;
+}
+
 // Attributes of the session cookie: HttpOnly and SameSite=Strict always,
 // Secure when the request came over HTTPS, so the browser never sends
 // the bearer token over plain HTTP.
@@ -85,6 +131,12 @@ HttpHandler make_router(const RouterDeps& d) {
         LoginLimiter&   login_limiter = *d.limiter;
         WebSocketHub&   ws            = *d.ws;
         const Scheduler& sched        = *d.sched;
+
+        if (!own_host(req, cfg, d.hostname)) {
+            return budyk::HttpResponse{
+                403, "text/plain",
+                "budyk: this Host is not one of budyk's names; add it to web.allowed_hosts\n"};
+        }
 
         auto authed = [&cfg, &sessions](const HttpRequest& r) -> bool {
             if (!cfg.auth_enabled) return true;

@@ -50,7 +50,7 @@ def session(secs):
     the first is the catch-up."""
     s = socket.create_connection(("127.0.0.1", port))
     key = base64.b64encode(os.urandom(16)).decode()
-    s.send(("GET /api/ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\n"
+    s.send(("GET /api/ws HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\n"
             "Connection: Upgrade\r\nSec-WebSocket-Key: %s\r\n"
             "Sec-WebSocket-Version: 13\r\n\r\n" % key).encode())
     buf = b""

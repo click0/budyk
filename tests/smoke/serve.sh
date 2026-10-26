@@ -106,6 +106,18 @@ expect 200 "/api/range?level=burst"
 expect 404 "/api/range?level=nope"
 expect 200 "/api/range?tier=2&since=1&until=99999999999999999999999&limit=0"
 expect 404 /nope
+# DNS rebinding: listening on loopback without a password, a request sent
+# to a name budyk does not answer to (a page that pointed its own name at
+# 127.0.0.1) is refused; localhost and the address are its own.
+for h in "evil.example:$PORT" "localhost:$PORT" "127.0.0.1:$PORT"; do
+    got=$(curl -s -o /dev/null -w '%{http_code}' -H "Host: $h" "http://127.0.0.1:$PORT/api/samples")
+    want=200; [ "$h" = "evil.example:$PORT" ] && want=403
+    if [ "$got" = "$want" ]; then
+        echo "ok   /api/samples with Host $h -> $got"
+    else
+        echo "FAIL /api/samples with Host $h: expected $want, got $got"; fail=1
+    fi
+done
 if curl -s "http://127.0.0.1:$PORT/api/health" |
    python3 -c 'import json, socket, sys; sys.exit(json.load(sys.stdin)["hostname"] != socket.gethostname())'; then
     echo "ok   /api/health names the host"
@@ -122,7 +134,7 @@ port = int(sys.argv[1])
 def connect():
     s = socket.create_connection(("127.0.0.1", port))
     key = base64.b64encode(os.urandom(16)).decode()
-    s.send(("GET /api/ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\n"
+    s.send(("GET /api/ws HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\n"
             "Connection: Upgrade\r\nSec-WebSocket-Key: %s\r\n"
             "Sec-WebSocket-Version: 13\r\n\r\n" % key).encode())
     return s

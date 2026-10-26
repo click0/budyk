@@ -318,6 +318,55 @@ int main() {
         for (const int p : peers) ::close(p);
     }
 
+    // 7c. DNS rebinding: on loopback without a password, a page whose own
+    //     name now points at 127.0.0.1 reads the API (and the WebSocket,
+    //     Origin and Host agreeing) as its own origin. Its name is in
+    //     Host: only an address, localhost, this host's name or
+    //     web.allowed_hosts are let in. X-Forwarded-Host, which the page
+    //     sets itself, does not count. With a password on, or on a
+    //     network address, any name is.
+    {
+        World w;
+        w.cfg.web_allowed_hosts = {"budyk.example.com"};
+        w.init();
+        auto at = [](const char* path, const char* host) {
+            HttpRequest r = get(path);
+            if (host != nullptr) r.headers.push_back({"Host", host});
+            return r;
+        };
+        for (const char* host : {"127.0.0.1:8080", "127.0.0.1", "[::1]:8080", "localhost:8080",
+                                 "LOCALHOST", "localhost.", "dash.localhost:8080",
+                                 "db\"1", "budyk.example.com", "Budyk.Example.Com:443"}) {
+            assert(w.handler(at("/api/samples", host)).status == 200);
+        }
+        assert(w.handler(at("/api/samples", nullptr)).status == 200);       // not a browser
+        for (const char* host : {"evil.example:8080", "evil.example", "localhost.evil.example",
+                                 "127.0.0.1.evil.example", "[::1", "budyk.example.com.evil",
+                                 ":8080"}) {
+            HttpResponse r = w.handler(at("/api/samples", host));
+            assert(r.status == 403 && has(r.body, "web.allowed_hosts"));
+        }
+        HttpRequest forged = at("/api/samples", "evil.example:8080");
+        forged.headers.push_back({"X-Forwarded-Host", "127.0.0.1:8080"});
+        assert(w.handler(forged).status == 403);
+        HttpRequest ws = at("/api/ws", "evil.example:8080");
+        ws.headers.push_back({"Upgrade", "websocket"});
+        ws.headers.push_back({"Connection", "Upgrade"});
+        ws.headers.push_back({"Sec-WebSocket-Version", "13"});
+        ws.headers.push_back({"Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ=="});
+        ws.headers.push_back({"Origin", "http://evil.example:8080"});      // same origin
+        HttpResponse r = w.handler(ws);
+        assert(r.status == 403 && !r.hijack);
+        assert(w.handler(at("/", "evil.example:8080")).status == 403);
+
+        World open; std::snprintf(open.cfg.listen_addr, sizeof(open.cfg.listen_addr), "0.0.0.0");
+        open.init();
+        assert(open.handler(at("/api/samples", "evil.example:8080")).status == 200);
+        World authed; authed.cfg.auth_enabled = true;
+        authed.init();
+        assert(authed.handler(at("/api/samples", "evil.example:8080")).status == 401);
+    }
+
     // 8. /api/levels: each level's metric set and whether it collects
     //    (L1 and L2 do not in on-demand mode).
     {

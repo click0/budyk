@@ -448,6 +448,7 @@ int parse_document(yaml_parser_t* parser, Config* out) {
             apply_seconds(&doc, auth, "login_window",       &out->auth_login_window_sec,
                           "web.auth.login_window");
         }
+        apply_str_list(&doc, web, "allowed_hosts", &out->web_allowed_hosts);
     }
 
     yaml_document_delete(&doc);

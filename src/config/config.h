@@ -31,6 +31,11 @@ struct Config {
     /// 429 until the window ends.
     int   auth_max_login_failures = 5;
     int   auth_login_window_sec   = 60;
+    /// web.allowed_hosts: names, besides an IP address, localhost and
+    /// this host's name, that a request's Host may carry while budyk
+    /// listens on loopback without a password (DNS rebinding,
+    /// src/daemon/router.cpp). Case does not matter; no port.
+    std::vector<std::string> web_allowed_hosts;
 
     int   tier1_max_mb           = 250;
     int   tier2_max_mb           = 150;
