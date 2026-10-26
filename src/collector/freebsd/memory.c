@@ -67,15 +67,14 @@ int budyk_collect_memory_freebsd(budyk_sample_c* s) {
     errbuf[0] = '\0';
     kvm_t* kd = kvm_openfiles(NULL, "/dev/null", NULL, O_RDONLY, errbuf);
     if (kd != NULL) {
-        struct kvm_swap kswap[16];
-        int n = kvm_getswapinfo(kd, kswap, 16, 0);
-        if (n > 0) {
-            uint64_t total_pages = 0;
-            uint64_t used_pages  = 0;
-            for (int i = 0; i < n; ++i) {
-                total_pages += (uint64_t)kswap[i].ksw_total;
-                used_pages  += (uint64_t)kswap[i].ksw_used;
-            }
+        /* An array of one: no device entries, only the entry kvm adds after
+         * them with the total of every device. Summing per-device entries
+         * missed those past the array (16 held 15). */
+        struct kvm_swap all;
+        memset(&all, 0, sizeof(all));
+        if (kvm_getswapinfo(kd, &all, 1, 0) >= 0) {
+            const uint64_t total_pages = (uint64_t)all.ksw_total;
+            const uint64_t used_pages  = (uint64_t)all.ksw_used;
             s->swap.total = total_pages * (uint64_t)page_size;
             s->swap.used  = used_pages  * (uint64_t)page_size;
             s->swap.used_percent = total_pages > 0
