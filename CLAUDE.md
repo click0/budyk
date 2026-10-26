@@ -300,17 +300,26 @@ in CI.
 3. Open the PR; start a `release.yml` dry run (`workflow_dispatch` from the
    branch — it builds everything and skips publish); merge when all checks
    and the dry run are green.
-4. The maintainer publishes: **Actions → Release binaries → Run workflow**
-   on `main` with `tag` = `vx.y.z` (the workflow checks CMakeLists.txt and
-   CHANGELOG.md, builds, and creates the tag and the release itself), or a
-   push of tag `vx.y.z` on `main`. Never a release made by hand on GitHub
-   first: the workflow's token may not update it, so its files are never
-   attached (v0.6.5). Either way the run builds static tarballs, release and debug, for
+4. The maintainer publishes, on GitHub: **Releases → Draft a new release**,
+   tag `vx.y.z` created on publish, target `main` (the merged release
+   commit: nothing merged after it), any title, the body left empty, then
+   **Publish release** (a saved draft makes no tag and starts nothing).
+   The tag starts `release.yml`, which checks CMakeLists.txt and
+   CHANGELOG.md against the tag, builds, and completes that release: its
+   name, the CHANGELOG section as the body, the files (0.8.1 and 0.8.2
+   were published so). If its publish job fails with 403 "Resource not
+   accessible by integration" (v0.6.5, after the tag had been made on the
+   wrong commit and made again), delete the release, keep the tag, and
+   re-run the failed jobs: the workflow then creates the release itself.
+   The other ways in: **Actions → Release binaries → Run workflow** on
+   `main` with `tag` = `vx.y.z` (the workflow creates the tag and the
+   release), or a push of tag `vx.y.z` on `main`. Any way, the run builds
+   static tarballs, release and debug, for
    linux-amd64, freebsd14.4-amd64 and freebsd15.1-amd64 (built in VMs) and
    freebsd14.4-aarch64 (cross-compiled, smoke-tested in an emulated arm64
    VM), and the Linux .deb and .rpm (installed, run and removed first),
    checks every `.sha256` in one `sha256sum -c` run, and publishes the
-   release.
+   release. For about 7 minutes the release shows no files.
 5. Verify the published release: tag → commit, the body, 20 assets, checksums,
    `file` on every binary, `budyk version`, and the smoke scripts against the
    published Linux binary.

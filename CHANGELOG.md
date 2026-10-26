@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The release procedure** (`CLAUDE.md`, the comment in `release.yml`):
+  the usual way is a release published by hand on GitHub with a new tag
+  on `main`, which the workflow completes with the files and the notes,
+  as it did for 0.8.1 and 0.8.2. The note in 0.8.2 that the workflow
+  cannot complete such a release was wrong; what to do when GitHub
+  refuses the update (v0.6.5) is described.
+
 ## [0.8.2] — 2026-10-25
 
 Fixes from a review of every module. Three of them matter most to a

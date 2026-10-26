@@ -3,15 +3,20 @@ name: Release binaries
 # Builds release tarballs for Linux (x86_64), FreeBSD amd64 (14.4, 15.1) and
 # FreeBSD aarch64 (14.4, cross-compiled), and publishes them as a release:
 #
-#   * a vX.Y.Z tag pushed: the release of that tag;
+#   * a vX.Y.Z tag pushed, which a release published by hand on GitHub
+#     with a new tag on main does (the usual way, 0.8.1 and 0.8.2): the
+#     release of that tag, completed here with its name, the CHANGELOG
+#     section as the body, and the files;
 #   * Run workflow on main with `tag` vX.Y.Z: the workflow checks that
 #     CMakeLists.txt and CHANGELOG.md are at that version, builds, and
 #     publishes the release, creating the tag on the commit it built;
 #   * Run workflow without `tag` (any branch, or `ref`): a dry run that
 #     builds and checks everything and publishes nothing.
 #
-# A release made by hand on GitHub first cannot be completed by the
-# workflow (its token may not update it), hence the `tag` input.
+# If the publish job is refused the update of a release made by hand
+# (403 "Resource not accessible by integration", as in v0.6.5 after its
+# tag was made twice), delete the release, keep the tag, and re-run the
+# failed jobs: the release is then created here.
 #
 # Two variants per platform:
 #   budyk-<version>-<platform>.tar.gz          Release, stripped (distribution).
