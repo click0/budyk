@@ -229,7 +229,10 @@ smoke-скрипти з крос-зібраним бінарником amd64 н�
   бінарного файлу, встановленого вручну, він лежить у
   [`addons/linux/budyk.service`](addons/linux/budyk.service).
 - **Docker:** `Dockerfile` і `docker-compose.yml` лежать у
-  [`addons/docker/`](addons/docker/).
+  [`addons/docker/`](addons/docker/). Compose запускає budyk із мережею
+  і таблицею процесів хоста та читає `config.yaml` поруч із собою:
+  `cp config.example.yaml addons/docker/config.yaml`, відредагуйте, потім
+  `docker compose -f addons/docker/docker-compose.yml up -d`.
 
 ## Швидкий старт
 

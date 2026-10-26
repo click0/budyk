@@ -225,7 +225,10 @@ FreeBSD 15.1.
   binary installed by hand it is in
   [`addons/linux/budyk.service`](addons/linux/budyk.service).
 - **Docker:** a `Dockerfile` and `docker-compose.yml` are in
-  [`addons/docker/`](addons/docker/).
+  [`addons/docker/`](addons/docker/). The compose file runs budyk with
+  the host's network and process table and reads `config.yaml` next to
+  it: `cp config.example.yaml addons/docker/config.yaml`, edit it, then
+  `docker compose -f addons/docker/docker-compose.yml up -d`.
 
 ## Quick start
 

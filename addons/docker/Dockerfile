@@ -6,15 +6,20 @@ RUN apk add --no-cache \
         lua5.4-dev yaml-dev argon2-dev ncurses-dev
 WORKDIR /src
 COPY . .
+# Alpine keeps liblua in /usr/lib/lua5.4, where CMake's FindLua does not
+# look (it finds the headers, then stops on "missing: LUA_LIBRARIES").
 RUN cmake -B build \
         -DBUDYK_PLATFORM=linux \
         -DSTATIC_LINK=OFF \
-        -DENABLE_LLM=OFF && \
+        -DENABLE_LLM=OFF \
+        -DLUA_LIBRARY=/usr/lib/lua5.4/liblua.so && \
     cmake --build build -j"$(nproc)" --target budyk && \
     strip build/src/budyk
 
 FROM alpine:3.20
-RUN apk add --no-cache lua5.4-libs yaml argon2-libs ncurses-libs \
+# libstdc++: budyk is C++ (without it: "Error loading shared library
+# libstdc++.so.6" and nothing runs).
+RUN apk add --no-cache libstdc++ lua5.4-libs yaml argon2-libs ncurses-libs \
  && addgroup -S -g 871 budyk \
  && adduser  -S -D -H -G budyk -u 871 -s /sbin/nologin budyk \
  && mkdir -p /var/db/budyk /etc/budyk \

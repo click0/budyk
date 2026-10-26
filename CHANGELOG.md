@@ -47,6 +47,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   comparisons a tick at a thousand devices).
 - Past either limit the log says so once, with the count:
   "budyk: 300 disks: disk.devices lists the first 256".
+- **The Docker files did not work.** `docker-compose.yml` failed its
+  own schema check (`dockerfile:` outside `build:`), so `docker compose
+  up` started nothing; the image's build stopped on CMake not finding
+  Alpine's `liblua` (in `/usr/lib/lua5.4`), or, in a tree with a local
+  `build/`, on that tree's `CMakeCache.txt`; the image lacked
+  `libstdc++`, so `budyk` did not start; and the compose file mounted
+  `config.yaml` while the image read its example config. All four are
+  fixed (`.dockerignore` keeps local build trees out), and CI now builds
+  the image and runs it with `docker compose` on a config of its own.
 
 ## [0.8.2] — 2026-10-25
 
