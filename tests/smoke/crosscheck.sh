@@ -189,6 +189,22 @@ if ifs == sys_ifs:
     ok("interfaces: %s" % " ".join(sorted(ifs)))
 else:
     bad("interfaces: budyk %s, the system %s" % (sorted(ifs), sorted(sys_ifs)))
+if not FREEBSD:
+    # The network totals are the devices' (/sys/class/net/<if>/device),
+    # less one enslaved to another device (a VF under hv_netvsc's eth0):
+    # a veth's or a bridge's traffic crossed a device too. With none,
+    # every interface's. Same tick, so the per-interface rates add up
+    # to the total, give or take a byte each for the rounding.
+    def device(n):
+        return os.path.exists("/sys/class/net/%s/device" % n)
+    def counts(n):
+        m = "/sys/class/net/%s/master" % n
+        return device(n) and not (os.path.islink(m) and device(os.path.basename(os.readlink(m))))
+    devs = [i for i in d["interfaces"] if counts(i["name"])]
+    counted = devs if devs else d["interfaces"]
+    for k in ("rx_bytes_per_sec", "tx_bytes_per_sec"):
+        check("net %s = the devices' (%s)" % (k, " ".join(sorted(i["name"] for i in counted))),
+              s["net"][k], sum(i[k] for i in counted), len(d["interfaces"]))
 disks = {x["name"] for x in d["disks"]}
 if FREEBSD:
     sys_disks = {n for n in sysctl("kern.disks").split() if not n.startswith("cd")}

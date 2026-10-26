@@ -307,6 +307,12 @@ jobs:
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
         run: tests/smoke/crosscheck.sh build/src/budyk
 
+      - name: The network totals leave out a veth's traffic
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: tests/smoke/net_totals.sh build/src/budyk
+
       # Rings written by the v0.6.4 release (270-byte records) must be
       # converted when this build starts on them. The release binary is
       # pinned by its SHA-256.
@@ -513,6 +519,7 @@ jobs:
           tests/smoke/modes.sh build/src/budyk
           tests/smoke/auth.sh build/src/budyk
           tests/smoke/crosscheck.sh build/src/budyk
+          tests/smoke/net_totals.sh build/src/budyk
 
       - name: Coverage report (core/ and storage/ >= 85%)
         run: |

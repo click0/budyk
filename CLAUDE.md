@@ -30,6 +30,12 @@ dependencies at runtime, no database. BSD-3-Clause license.
   (`json_escape`): process names and mount points are anyone's bytes.
   The disk and network totals are each device's own delta summed
   (`budyk_counted_add()`): a device that comes or goes moves nothing.
+  The network totals count only the devices' interfaces (Linux: one
+  with `/sys/class/net/<if>/device`, not enslaved to another device as
+  an SR-IOV VF is; FreeBSD: Ethernet or 802.11 and
+  not a cloner's, `budyk_freebsd_iface_physical()`), or every one when
+  there is none (budyk in a container): a veth's, bridge's or epair's
+  traffic crosses a device too.
   The lists hold `BUDYK_MAX_ENTITIES` (256) of each, the totals follow
   `BUDYK_MAX_COUNTED` (1024) devices of each kind; past either,
   `collect_one()` logs it once (`CollectContext::cut`).
@@ -148,7 +154,9 @@ tests/smoke/       — serve.sh (HTTP, WS, SIGHUP, fd check), crash.sh (SIGKILL 
                      ps, ss / netstat, df, /sys or ifconfig and kern.disks, a
                      busy loop and a 64 MB write),
                      swap_devices.sh (FreeBSD, root or sudo: 17 swap devices,
-                     the swap total against swapinfo)
+                     the swap total against swapinfo),
+                     net_totals.sh (Linux, root or sudo: a ping flood over a
+                     veth into a netns, left out of the network totals)
 addons/            — FreeBSD port + rc.d, systemd unit, Docker; the .deb and
                      .rpm (addons/linux/mkpkg.sh, test-packages.sh)
 cmake/toolchains/  — cross-compiling for FreeBSD on Linux: freebsd-sysroot.sh
@@ -176,6 +184,7 @@ tests/smoke/auth.sh build/src/budyk      # login, sessions, the WebSocket's orig
 tests/smoke/resources.sh build/src/budyk # spec §5 figures (a release build; ~2 min)
 tests/smoke/crosscheck.sh build/src/budyk  # the readings against the system's own tools
 tests/smoke/swap_devices.sh build/src/budyk  # FreeBSD: swap over more than 15 devices
+tests/smoke/net_totals.sh build/src/budyk    # Linux: a veth's traffic not in the network totals
 tests/check_whitespace.sh                # trailing blanks, tabs, CR, final newline
 cmake --build build --target docs        # API reference (Doxygen), any warning fails it
 cmake/toolchains/freebsd-sysroot.sh 14.4 amd64 SYSROOT   # then, on Linux:

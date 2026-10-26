@@ -19,8 +19,11 @@
 #include <vector>
 
 #include <sys/types.h>
+#include <sys/socket.h>
 #include <sys/sysctl.h>
 #include <sys/user.h>
+#include <net/if.h>
+#include <net/if_types.h>
 #include <unistd.h>
 
 namespace {
@@ -124,6 +127,40 @@ int main() {
         // assert the field was populated, not strictly > 0.
         (void)s2.net.rx_bytes_per_sec;
         (void)s2.net.tx_bytes_per_sec;
+    }
+
+    // 5b. Which interfaces the network totals count: a device's (em0,
+    //     vtnet0, mlx5en0, a renamed lan0, the radio's wlan0), not a
+    //     cloner's (a jail's epair, a VM's tap, vxlan) nor a bridge,
+    //     lagg, vlan, tun or gif: those carry traffic a device carries
+    //     too. The cloners as SIOCIFGCLONERS gives them, IFNAMSIZ each.
+    {
+        char cl[8 * IFNAMSIZ] = {};
+        const char* names[] = {"epair", "tap", "vxlan", "bridge", "lagg", "vlan", "wlan", "lo"};
+        for (size_t i = 0; i < 8; ++i) std::snprintf(cl + i * IFNAMSIZ, IFNAMSIZ, "%s", names[i]);
+        auto phys = [&](const char* name, unsigned type) {
+            return budyk_freebsd_iface_physical(name, type, cl, 8) != 0;
+        };
+        assert(phys("em0", IFT_ETHER) && phys("vtnet0", IFT_ETHER) && phys("mlx5en0", IFT_ETHER));
+        assert(phys("lan0", IFT_ETHER) && phys("wlan0", IFT_ETHER) && phys("wlan1", IFT_IEEE80211));
+        assert(!phys("epair0a", IFT_ETHER) && !phys("tap3", IFT_ETHER) && !phys("vxlan0", IFT_ETHER));
+        assert(!phys("bridge0", IFT_BRIDGE) && !phys("lagg0", IFT_IEEE8023ADLAG));
+        assert(!phys("em0.100", IFT_L2VLAN) && !phys("tun0", IFT_PROPVIRTUAL) && !phys("gif0", IFT_GIF));
+        assert(phys("epairx0", IFT_ETHER));                   // not "epair": another driver
+        assert(budyk_freebsd_iface_physical("epair0a", IFT_ETHER, cl, 0) == 1);   // no cloners read
+    }
+
+    // 5c. On this host, the cloners read from the kernel: the collector
+    //     runs, and lo0 is in no list.
+    {
+        budyk_net_ctx_c ctx;
+        std::memset(&ctx, 0, sizeof(ctx));
+        std::unique_ptr<budyk_detail_c> d(new budyk_detail_c());
+        budyk_sample_c s;
+        std::memset(&s, 0, sizeof(s));
+        s.timestamp_nanos = now_ns();
+        assert(budyk_collect_network_freebsd_ex(&ctx, &s, d.get()) == 0);
+        for (uint32_t i = 0; i < d->nifaces; ++i) assert(std::strcmp(d->ifaces[i].name, "lo0") != 0);
     }
 
     // 6. Network — same timestamp on consecutive calls must not divide

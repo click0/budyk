@@ -404,6 +404,10 @@ int budyk_collect_netstat_linux(budyk_netstat_ctx_c* ctx, budyk_sample_c* s);
 /// from: tests point them at a fixture tree; NULL restores "/proc".
 void        budyk_linux_set_proc_root(const char* root);
 const char* budyk_linux_proc_root(void);
+/// The same for /sys, where the network collector reads each
+/// interface's flags and whether it is a device; NULL restores "/sys".
+void        budyk_linux_set_sys_root(const char* root);
+const char* budyk_linux_sys_root(void);
 int budyk_collect_fs_linux     (budyk_sample_c* s);
 int budyk_collect_fs_linux_ex  (budyk_sample_c* s, budyk_detail_c* d);
 int budyk_collect_clock_linux  (budyk_sample_c* s);
@@ -419,6 +423,12 @@ int budyk_collect_network_freebsd(budyk_net_ctx_c*  ctx, budyk_sample_c* s);
 int budyk_collect_cpu_freebsd_ex    (budyk_cpu_ctx_c*  ctx, budyk_sample_c* s, budyk_detail_c* d);
 int budyk_collect_disk_freebsd_ex   (budyk_disk_ctx_c* ctx, budyk_sample_c* s, budyk_detail_c* d);
 int budyk_collect_network_freebsd_ex(budyk_net_ctx_c*  ctx, budyk_sample_c* s, budyk_detail_c* d);
+/** Whether interface `name` of if_data type `type` is a device's, whose
+ *  traffic the network totals count: Ethernet or 802.11, and its driver
+ *  (the letters before the unit) none of `cloners` (`ncloners` names of
+ *  IFNAMSIZ bytes each, as SIOCIFGCLONERS gives them) but wlan. */
+int budyk_freebsd_iface_physical(const char* name, unsigned int type,
+                                 const char* cloners, uint32_t ncloners);
 int budyk_collect_proc_freebsd   (budyk_sample_c* s);
 int budyk_collect_proc_freebsd_ex(budyk_sample_c* s, budyk_detail_c* d);
 int budyk_collect_entropy_freebsd(budyk_sample_c* s);
