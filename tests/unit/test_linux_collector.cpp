@@ -851,17 +851,28 @@ int main() {
     // 8c5. The network totals are the devices' traffic: a container's
     //      packet goes through its veth, docker0 and eth0, and each
     //      counted it. Only an interface with /sys/class/net/<if>/device
-    //      counts; with none (budyk in a container: its eth0 is a veth),
-    //      every one does. The list has them all.
+    //      counts, and not one enslaved to another device, whose
+    //      counters have its traffic (Azure's VF enP7s1 under eth0); a
+    //      bond's ports eth1 and eth2 do count. With no device (budyk in
+    //      a container: its eth0 is a veth), every one does. The list
+    //      has them all.
     {
         Fixture fx;
         budyk_linux_set_proc_root(fx.root.c_str());
-        fx.file("sys/class/net/eth0/device/vendor", "0x8086\n");
+        const std::string net = fx.root + "/sys/class/net/";
+        for (const char* dev : {"eth0", "enP7s1", "eth1", "eth2"}) {
+            fx.file(std::string("sys/class/net/") + dev + "/device/vendor", "0x8086\n");
+        }
+        assert(::symlink("../eth0", (net + "enP7s1/master").c_str()) == 0);
+        assert(::symlink("../../../virtual/net/bond0", (net + "eth1/master").c_str()) == 0);
+        assert(::symlink("../bond0", (net + "eth2/master").c_str()) == 0);
+        const char* const names[] = {"eth0", "enP7s1", "eth1", "eth2", "bond0",
+                                     "docker0", "veth1a2b", "br0"};
         auto netdev = [&](unsigned long long n) {
             std::string nd =
                 "Inter-|   Receive  |  Transmit\n face |bytes packets errs drop fifo frame compressed multicast|bytes packets errs drop fifo colls carrier compressed\n";
             char buf[160];
-            for (const char* name : {"eth0", "docker0", "veth1a2b", "br0"}) {
+            for (const char* name : names) {
                 std::snprintf(buf, sizeof(buf), "  %s: %llu 1 0 0 0 0 0 0 %llu 1 0 0 0 0 0 0\n",
                               name, 1000 * n, 100 * n);
                 nd += buf;
@@ -878,15 +889,17 @@ int main() {
             netdev(t);
             assert(budyk_collect_network_linux_ex(&nctx, &s, d.get()) == 0);
         }
-        assert(s.net.rx_bytes_per_sec == 1000 && s.net.tx_bytes_per_sec == 100);   // eth0's
-        assert(s.net.interface_count == 4 && d->nifaces == 4);
-        assert(d->ifaces[1].rx_bytes_per_sec == 1000);                           // docker0, listed
-        const std::string rm = "rm -rf " + fx.root + "/sys/class/net/eth0/device";
+        // eth0, eth1 and eth2
+        assert(s.net.rx_bytes_per_sec == 3 * 1000 && s.net.tx_bytes_per_sec == 3 * 100);
+        assert(s.net.interface_count == 8 && d->nifaces == 8);
+        assert(std::strcmp(d->ifaces[5].name, "docker0") == 0);
+        assert(d->ifaces[5].rx_bytes_per_sec == 1000);                           // listed
+        const std::string rm = "rm -rf " + net + "*/device";
         assert(std::system(rm.c_str()) == 0);
         s.timestamp_nanos = 3'000'000'000ULL;
         netdev(3);
         assert(budyk_collect_network_linux_ex(&nctx, &s, d.get()) == 0);
-        assert(s.net.rx_bytes_per_sec == 4 * 1000 && s.net.tx_bytes_per_sec == 4 * 100);
+        assert(s.net.rx_bytes_per_sec == 8 * 1000 && s.net.tx_bytes_per_sec == 8 * 100);
         budyk_linux_set_proc_root(nullptr);
     }
 

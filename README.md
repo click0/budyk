@@ -484,7 +484,7 @@ Metrics are refreshed every tick as globals:
 | `swap` | `total`, `used`, `used_percent` |
 | `load` | `avg_1m`, `avg_5m`, `avg_15m` |
 | `disk` | `read_bytes_per_sec`, `write_bytes_per_sec`, `device_count` |
-| `net` | `rx_bytes_per_sec`, `tx_bytes_per_sec` (the devices' interfaces: a NIC, Wi-Fi, a VM's virtio; not a veth, bridge, bond, VLAN, tun/tap, epair or WireGuard interface, whose traffic a device carries too; every interface's when there is no device, as in a container), `interface_count` (every one but loopback) |
+| `net` | `rx_bytes_per_sec`, `tx_bytes_per_sec` (the devices' interfaces: a NIC, Wi-Fi, a VM's virtio, but not an SR-IOV VF under another device, which has its traffic; not a veth, bridge, bond, VLAN, tun/tap, epair or WireGuard interface, whose traffic a device carries too; every interface's when there is no device, as in a container), `interface_count` (every one but loopback) |
 | `proc` | `total`, `running`, `sleeping`, `blocked`, `stopped`, `zombie`, `threads` |
 | `entropy` | `available_bits`, `present` |
 | `thermal` | `max_celsius`, `sensor_count`, `present` |

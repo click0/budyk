@@ -31,7 +31,8 @@ dependencies at runtime, no database. BSD-3-Clause license.
   The disk and network totals are each device's own delta summed
   (`budyk_counted_add()`): a device that comes or goes moves nothing.
   The network totals count only the devices' interfaces (Linux: one
-  with `/sys/class/net/<if>/device`; FreeBSD: Ethernet or 802.11 and
+  with `/sys/class/net/<if>/device`, not enslaved to another device as
+  an SR-IOV VF is; FreeBSD: Ethernet or 802.11 and
   not a cloner's, `budyk_freebsd_iface_physical()`), or every one when
   there is none (budyk in a container): a veth's, bridge's or epair's
   traffic crosses a device too.

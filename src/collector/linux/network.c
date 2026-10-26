@@ -30,15 +30,29 @@ static uint8_t iface_up(const char* name) {
     return (uint8_t)((flags & 0x1u) != 0);
 }
 
-/* Whether the interface is a device (a NIC, Wi-Fi, a VM's virtio): it
- * has /sys/class/net/<if>/device. A veth, bridge, bond, VLAN, tun/tap or
- * WireGuard interface has none, and the traffic it carries crosses a
- * device as well: a container's packet went through its veth, docker0
- * and eth0, three times in the total. */
-static int iface_physical(const char* name) {
+static int iface_is_device(const char* name) {
     char path[512];
     snprintf(path, sizeof(path), "%s/class/net/%.64s/device", budyk_linux_sys_root(), name);
     return access(path, F_OK) == 0;
+}
+
+/* Whether the interface's traffic counts in the totals: it is a device
+ * (a NIC, Wi-Fi, a VM's virtio: /sys/class/net/<if>/device) and not one
+ * enslaved to another device, whose counters have its traffic already
+ * (Azure's SR-IOV VF under hv_netvsc's eth0). A veth, bridge, bond,
+ * VLAN, tun/tap or WireGuard interface has no device, and the traffic it
+ * carries crosses one as well: a container's packet went through its
+ * veth, docker0 and eth0, three times in the total. A bond's or a
+ * bridge's ports are devices under a master that is not: they count. */
+static int iface_physical(const char* name) {
+    if (!iface_is_device(name)) return 0;
+    char path[512], target[512];
+    snprintf(path, sizeof(path), "%s/class/net/%.64s/master", budyk_linux_sys_root(), name);
+    const ssize_t n = readlink(path, target, sizeof(target) - 1);
+    if (n <= 0) return 1;
+    target[n] = '\0';
+    const char* master = strrchr(target, '/');
+    return !iface_is_device(master != NULL ? master + 1 : target);
 }
 
 int budyk_collect_network_linux(budyk_net_ctx_c* ctx, budyk_sample_c* s) {

@@ -6,7 +6,8 @@
 # the totals must leave it out (on a container host that traffic also
 # crosses the bridge and the uplink, each of which counted it again).
 # The newest sample's totals must equal the sum of its interfaces that
-# have /sys/class/net/<if>/device, while the veth moves tens of KB/s.
+# have /sys/class/net/<if>/device (less one enslaved to another device),
+# while the veth moves hundreds of KB/s.
 # Needs root or sudo without a password, ip(8) and ping(8); anywhere
 # else it says so and passes.
 #
@@ -79,7 +80,12 @@ while time.time() < deadline:
     ifaces = det.get("interfaces", [])
     v = [i for i in ifaces if i["name"] == veth]
     if "net" in s["groups"] and v and v[0]["rx_bytes_per_sec"] > 20000:
-        devs = [i for i in ifaces if os.path.exists("/sys/class/net/%s/device" % i["name"])]
+        def device(n):
+            return os.path.exists("/sys/class/net/%s/device" % n)
+        def counts(n):           # a device, not enslaved to another (a VF under eth0)
+            m = "/sys/class/net/%s/master" % n
+            return device(n) and not (os.path.islink(m) and device(os.path.basename(os.readlink(m))))
+        devs = [i for i in ifaces if counts(i["name"])]
         counted = devs if devs else ifaces
         fail = False
         for k in ("rx_bytes_per_sec", "tx_bytes_per_sec"):

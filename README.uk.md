@@ -489,7 +489,7 @@ watch("swap_under_load", {
 | `swap` | `total`, `used`, `used_percent` |
 | `load` | `avg_1m`, `avg_5m`, `avg_15m` |
 | `disk` | `read_bytes_per_sec`, `write_bytes_per_sec`, `device_count` |
-| `net` | `rx_bytes_per_sec`, `tx_bytes_per_sec` (інтерфейси пристроїв: мережева карта, Wi-Fi, virtio у віртуалці; не veth, bridge, bond, VLAN, tun/tap, epair чи WireGuard, чий трафік несе й пристрій; усі інтерфейси, якщо пристрою немає, як у контейнері), `interface_count` (усі, крім loopback) |
+| `net` | `rx_bytes_per_sec`, `tx_bytes_per_sec` (інтерфейси пристроїв: мережева карта, Wi-Fi, virtio у віртуалці, але не SR-IOV VF під іншим пристроєм, який уже має її трафік; не veth, bridge, bond, VLAN, tun/tap, epair чи WireGuard, чий трафік несе й пристрій; усі інтерфейси, якщо пристрою немає, як у контейнері), `interface_count` (усі, крім loopback) |
 | `proc` | `total`, `running`, `sleeping`, `blocked`, `stopped`, `zombie`, `threads` |
 | `entropy` | `available_bits`, `present` |
 | `thermal` | `max_celsius`, `sensor_count`, `present` |

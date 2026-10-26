@@ -20,8 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its epair, the bridge and em0: each counted it, so on a container or
   VM host `net.rx_bytes_per_sec` / `tx_bytes_per_sec` read up to three
   times the traffic. Now only a device's interface counts (a NIC, Wi-Fi,
-  a VM's virtio; on Linux one with `/sys/class/net/<if>/device`, on
-  FreeBSD Ethernet or 802.11 and not made by a cloner, wlan aside); a
+  a VM's virtio; on Linux one with `/sys/class/net/<if>/device` and not
+  enslaved to another device, as Azure's SR-IOV VF is to eth0, whose
+  counters have its traffic; on FreeBSD Ethernet or 802.11 and not made by a cloner, wlan aside); a
   veth, bridge, bond, VLAN, tun/tap, epair or WireGuard interface does
   not. With no device at all, as inside a container, every interface
   counts, as before. `net.interfaces` still lists them all. On such
