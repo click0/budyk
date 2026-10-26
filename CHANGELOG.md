@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.3] — 2026-10-26
+
+Two fixes matter to anyone who runs budyk without a password. The
+default configuration (listen on 127.0.0.1, no password: also what the
+Docker image runs) could be read by any website open in the browser,
+through DNS rebinding; it now answers only to its own names. And the
+Docker files work again: they did not start at all. The network totals
+now count only the devices' interfaces, so on a container or VM host
+they read the traffic once rather than up to three times; there the
+numbers, and rules on them, read lower. Also fixed: FreeBSD's swap past
+the 15th device, and the lists and totals on a host with many disks or
+interfaces. The record format does not change: the rings of 0.8.2 are
+used as they are. A reverse proxy that passes its public name in `Host`
+to a budyk without a password needs that name in `web.allowed_hosts`.
+
 ### Changed
 
 - **The release procedure** (`CLAUDE.md`, the comment in `release.yml`):
@@ -22,11 +37,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   times the traffic. Now only a device's interface counts (a NIC, Wi-Fi,
   a VM's virtio; on Linux one with `/sys/class/net/<if>/device` and not
   enslaved to another device, as Azure's SR-IOV VF is to eth0, whose
-  counters have its traffic; on FreeBSD Ethernet or 802.11 and not made by a cloner, wlan aside); a
-  veth, bridge, bond, VLAN, tun/tap, epair or WireGuard interface does
-  not. With no device at all, as inside a container, every interface
-  counts, as before. `net.interfaces` still lists them all. On such
-  hosts the totals, and rules on them, now read lower.
+  counters have its traffic; on FreeBSD Ethernet or 802.11 and not made
+  by a cloner, wlan aside); a veth, bridge, bond, VLAN, tun/tap, epair
+  or WireGuard interface does not. With no device at all, as inside a
+  container, every interface counts, as before. `net.interfaces` still
+  lists them all. On such hosts the totals, and rules on them, now read
+  lower.
 
 ### Fixed
 
@@ -1113,6 +1129,7 @@ it turned up two untested storage paths, which are now covered.
   opened, and init with the original size works again. tier_manager.cpp
   coverage went from 84.3% to 94.4%.
 
+[0.8.3]: https://github.com/click0/budyk/releases/tag/v0.8.3
 [0.8.2]: https://github.com/click0/budyk/releases/tag/v0.8.2
 [0.8.1]: https://github.com/click0/budyk/releases/tag/v0.8.1
 [0.8.0]: https://github.com/click0/budyk/releases/tag/v0.8.0
