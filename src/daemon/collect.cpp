@@ -72,6 +72,36 @@ void collect_one(Sample* s, CollectContext* ctx, const MetricSet& set) {
     (void)run;
 #endif
 
+    // More devices than a list holds, or than the totals follow: the
+    // rest are left out. Logged when it starts, not on every tick.
+    uint32_t cut = 0;
+    auto cut_short = [&cut, ctx](uint32_t bit, bool over, uint32_t have, uint32_t kept,
+                                 const char* what, const char* where) {
+        if (!over) return;
+        if ((ctx->cut & bit) == 0) {
+            std::fprintf(stderr, "budyk: %u %s: %s the first %u\n", have, what, where, kept);
+        }
+        cut |= bit;
+    };
+    if ((failed & kGroupDisk) == 0 && wants(kGroupDisk)) {
+        cut_short(kCutDiskTotals, c.disk.device_count > ctx->disk.ndev, c.disk.device_count,
+                  ctx->disk.ndev, "disks", "the disk totals follow");
+        cut_short(kDetailDisks, list(kDetailDisks) != nullptr && c.disk.device_count > d->ndisks,
+                  c.disk.device_count, d->ndisks, "disks", "disk.devices lists");
+    }
+    if ((failed & kGroupNet) == 0 && wants(kGroupNet)) {
+        cut_short(kCutNetTotals, c.net.interface_count > ctx->net.ndev, c.net.interface_count,
+                  ctx->net.ndev, "network interfaces", "the network totals follow");
+        cut_short(kDetailInterfaces,
+                  list(kDetailInterfaces) != nullptr && c.net.interface_count > d->nifaces,
+                  c.net.interface_count, d->nifaces, "network interfaces", "net.interfaces lists");
+    }
+    if ((failed & kGroupFs) == 0 && wants(kGroupFs)) {
+        cut_short(kDetailMounts, list(kDetailMounts) != nullptr && c.fs.count > d->nmounts,
+                  c.fs.count, d->nmounts, "filesystems", "fs.mounts lists");
+    }
+    ctx->cut = cut;
+
     // Copy the C-shim back into the C++ Sample (same field names, scalar
     // types match by construction in core/sample_c.h).
     s->cpu.total_percent      = c.cpu.total_percent;

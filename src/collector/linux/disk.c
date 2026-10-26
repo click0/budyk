@@ -95,6 +95,7 @@ int budyk_collect_disk_linux_ex(budyk_disk_ctx_c* ctx, budyk_sample_c* s, budyk_
 
     budyk_counted_c counted[BUDYK_MAX_COUNTED] = {{"", 0, 0}};
     uint32_t ncounted     = 0;
+    uint32_t counted_pos  = 0;
     uint64_t read_moved   = 0;
     uint64_t write_moved  = 0;
     uint32_t device_count = 0;
@@ -112,8 +113,8 @@ int budyk_collect_disk_linux_ex(budyk_disk_ctx_c* ctx, budyk_sample_c* s, budyk_
         if (is_partition_name(name)) continue;
 
         /* Sectors of 512 bytes. */
-        budyk_counted_add(ctx->dev, ctx->ndev, counted, &ncounted, name, rs * 512ULL,
-                          ws * 512ULL, &read_moved, &write_moved);
+        budyk_counted_add(ctx->dev, ctx->ndev, &counted_pos, counted, &ncounted, name,
+                          rs * 512ULL, ws * 512ULL, &read_moved, &write_moved);
         ++device_count;
 
         if (d != NULL && d->ndisks < BUDYK_MAX_ENTITIES) {

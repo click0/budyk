@@ -25,13 +25,18 @@ uint64_t budyk_rate_u64(uint64_t now, const uint64_t* prev, uint64_t dns) {
     return r >= 18446744073709551615.0 ? UINT64_MAX : (uint64_t)r;
 }
 
-void budyk_counted_add(const budyk_counted_c* prev, uint32_t nprev,
+void budyk_counted_add(const budyk_counted_c* prev, uint32_t nprev, uint32_t* pos,
                        budyk_counted_c* next, uint32_t* nnext, const char* name,
                        uint64_t a, uint64_t b, uint64_t* moved_a, uint64_t* moved_b) {
-    for (uint32_t i = 0; i < nprev; ++i) {
+    /* The kernel lists the devices in the same order every time: from
+     * where the last one was found, round the list. A thousand devices
+     * searched from the start each were half a million comparisons. */
+    for (uint32_t k = 0; k < nprev; ++k) {
+        const uint32_t i = (*pos + k) % nprev;
         if (strcmp(prev[i].name, name) != 0) continue;
         if (a >= prev[i].a) *moved_a += a - prev[i].a;
         if (b >= prev[i].b) *moved_b += b - prev[i].b;
+        *pos = i + 1;
         break;
     }
     if (*nnext < BUDYK_MAX_COUNTED) {

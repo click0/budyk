@@ -23,6 +23,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which fills at most one fewer than its array holds (16): a host with
   more swap devices showed only the first 15. The total of all devices,
   which libkvm adds after them, is used now.
+- **A storage server's disks past the 64th were in no list.**
+  `disk.devices`, `net.interfaces` and `fs.mounts` (the dashboard and
+  the rules) held 64 entries each: on a host with 90 drives, or a
+  container host with hundreds of interfaces, the rest were left out
+  without a word. They hold 256 now.
+- **The disk and network totals followed 256 devices.** Since each
+  device's own delta is summed (0.8.2), a device past the 256th moved
+  nothing: on a host with 300 container interfaces the network total
+  missed 44 of them. They follow 1024 now, each found where the last
+  one was rather than searched from the start (half a million string
+  comparisons a tick at a thousand devices).
+- Past either limit the log says so once, with the count:
+  "budyk: 300 disks: disk.devices lists the first 256".
 
 ## [0.8.2] — 2026-10-25
 

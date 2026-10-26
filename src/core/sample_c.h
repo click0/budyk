@@ -187,7 +187,7 @@ typedef struct {
 /// the lists it keeps each entity's previous counters for the rates, so
 /// zero it once and pass the same one every time.
 #define BUDYK_MAX_CORES    1024
-#define BUDYK_MAX_ENTITIES 64     /**< disks, interfaces, filesystems each */
+#define BUDYK_MAX_ENTITIES 256    /**< disks, interfaces, filesystems each listed */
 #define BUDYK_TOP_EACH     10     /**< the top processes by CPU, and by RSS */
 #define BUDYK_MAX_TRACKED_PROCS 8192   /**< processes whose CPU time is kept for a rate */
 
@@ -265,7 +265,7 @@ typedef struct {
     uint64_t c[8];
 } budyk_entity_prev_c;
 
-#define BUDYK_MAX_COUNTED 256   /**< disks or interfaces the total rates follow, each */
+#define BUDYK_MAX_COUNTED 1024  /**< disks or interfaces the total rates follow, each */
 
 /** A device's two byte counters at the previous call, by name: what the
  *  total disk and network rates sum the deltas of. */
@@ -344,8 +344,11 @@ uint64_t budyk_rate_u64(uint64_t now, const uint64_t* prev, uint64_t dns);
  * whose counter went back (re-created), moves nothing this time, so one
  * that comes or goes does not move the total by its whole counter. Its
  * counters go into next[*nnext] for the next call (BUDYK_MAX_COUNTED at
- * most; past that a device moves nothing). src/collector/detail.c. */
-void budyk_counted_add(const budyk_counted_c* prev, uint32_t nprev,
+ * most; past that a device moves nothing). *pos is where in prev to look
+ * first: 0 before the first device of a read, then left as this call
+ * sets it (after the entry it found), so a read in the same order as the
+ * last one finds each device at once. src/collector/detail.c. */
+void budyk_counted_add(const budyk_counted_c* prev, uint32_t nprev, uint32_t* pos,
                        budyk_counted_c* next, uint32_t* nnext, const char* name,
                        uint64_t a, uint64_t b, uint64_t* moved_a, uint64_t* moved_b);
 

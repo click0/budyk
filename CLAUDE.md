@@ -30,6 +30,9 @@ dependencies at runtime, no database. BSD-3-Clause license.
   (`json_escape`): process names and mount points are anyone's bytes.
   The disk and network totals are each device's own delta summed
   (`budyk_counted_add()`): a device that comes or goes moves nothing.
+  The lists hold `BUDYK_MAX_ENTITIES` (256) of each, the totals follow
+  `BUDYK_MAX_COUNTED` (1024) devices of each kind; past either,
+  `collect_one()` logs it once (`CollectContext::cut`).
   A collector that fails leaves its groups out of the sample (logged when
   it starts failing), and a tick that reads nothing makes the next read
   a baseline. Filesystems are read from `/proc/self/mountinfo`, read-only
