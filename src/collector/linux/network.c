@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 /* /proc/net/dev format (2 header lines, then one line per interface):
  *   ifname:  rx_bytes rx_packets rx_errs rx_drop rx_fifo rx_frame
@@ -19,14 +20,25 @@
 
 /* IFF_UP from /sys/class/net/<if>/flags (hex); 1 when it cannot be read. */
 static uint8_t iface_up(const char* name) {
-    char path[128];
-    snprintf(path, sizeof(path), "/sys/class/net/%.64s/flags", name);
+    char path[512];
+    snprintf(path, sizeof(path), "%s/class/net/%.64s/flags", budyk_linux_sys_root(), name);
     FILE* f = fopen(path, "re");
     if (f == NULL) return 1;
     unsigned int flags = 1;
     if (fscanf(f, "%x", &flags) != 1) flags = 1;
     fclose(f);
     return (uint8_t)((flags & 0x1u) != 0);
+}
+
+/* Whether the interface is a device (a NIC, Wi-Fi, a VM's virtio): it
+ * has /sys/class/net/<if>/device. A veth, bridge, bond, VLAN, tun/tap or
+ * WireGuard interface has none, and the traffic it carries crosses a
+ * device as well: a container's packet went through its veth, docker0
+ * and eth0, three times in the total. */
+static int iface_physical(const char* name) {
+    char path[512];
+    snprintf(path, sizeof(path), "%s/class/net/%.64s/device", budyk_linux_sys_root(), name);
+    return access(path, F_OK) == 0;
 }
 
 int budyk_collect_network_linux(budyk_net_ctx_c* ctx, budyk_sample_c* s) {
@@ -53,6 +65,9 @@ int budyk_collect_network_linux_ex(budyk_net_ctx_c* ctx, budyk_sample_c* s, budy
     uint32_t counted_pos = 0;
     uint64_t rx_moved    = 0;
     uint64_t tx_moved    = 0;
+    uint64_t rx_physical = 0;
+    uint64_t tx_physical = 0;
+    uint32_t physical    = 0;
     uint32_t iface_count = 0;
 
     char line[512];
@@ -80,8 +95,16 @@ int budyk_collect_network_linux_ex(budyk_net_ctx_c* ctx, budyk_sample_c* s, budy
                             &txb, &txp, &txe, &txd, &txfi, &txco, &txca, &txcm);
         if (parsed < 16) continue;
 
+        uint64_t rx = 0, tx = 0;
         budyk_counted_add(ctx->dev, ctx->ndev, &counted_pos, counted, &ncounted, name, rxb, txb,
-                          &rx_moved, &tx_moved);
+                          &rx, &tx);
+        rx_moved += rx;
+        tx_moved += tx;
+        if (iface_physical(name)) {
+            rx_physical += rx;
+            tx_physical += tx;
+            ++physical;
+        }
         ++iface_count;
 
         if (d != NULL && d->nifaces < BUDYK_MAX_ENTITIES) {
@@ -109,6 +132,12 @@ int budyk_collect_network_linux_ex(budyk_net_ctx_c* ctx, budyk_sample_c* s, budy
     fclose(f);
 
     s->net.interface_count = iface_count;
+    /* The totals are the devices' traffic; with none (budyk in a
+     * container, whose eth0 is a veth), every interface's. */
+    if (physical > 0) {
+        rx_moved = rx_physical;
+        tx_moved = tx_physical;
+    }
 
     if (!ctx->has_prev || s->timestamp_nanos <= ctx->prev_ns) {
         s->net.rx_bytes_per_sec = 0;

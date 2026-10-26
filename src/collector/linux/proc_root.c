@@ -15,3 +15,13 @@ void budyk_linux_set_proc_root(const char* root) {
 const char* budyk_linux_proc_root(void) {
     return g_root;
 }
+
+static char g_sys_root[256] = "/sys";
+
+void budyk_linux_set_sys_root(const char* root) {
+    snprintf(g_sys_root, sizeof(g_sys_root), "%s", root != NULL ? root : "/sys");
+}
+
+const char* budyk_linux_sys_root(void) {
+    return g_sys_root;
+}

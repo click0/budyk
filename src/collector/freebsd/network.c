@@ -4,10 +4,14 @@
 #include "core/sample_c.h"
 
 #include <sys/types.h>
+#include <sys/ioctl.h>
 #include <sys/socket.h>
+#include <sys/sockio.h>
 
 #include <ifaddrs.h>
 #include <net/if.h>
+#include <net/if_types.h>
+#include <unistd.h>
 
 #include <errno.h>
 #include <stdio.h>
@@ -23,6 +27,41 @@
  */
 int budyk_collect_network_freebsd(budyk_net_ctx_c* ctx, budyk_sample_c* s) {
     return budyk_collect_network_freebsd_ex(ctx, s, NULL);
+}
+
+/* A device's interface (em0, vtnet0, a renamed lan0) is Ethernet or
+ * 802.11 and not one a cloner made: the bridge, lagg, vlan, tun, gif
+ * and wg types are not, and an epair, tap or vxlan is Ethernet but its
+ * driver (the letters before the unit) is a cloner's. wlan is a cloner
+ * too, but its traffic is the radio's. */
+int budyk_freebsd_iface_physical(const char* name, unsigned int type,
+                                 const char* cloners, uint32_t ncloners) {
+    if (type != IFT_ETHER && type != IFT_IEEE80211) return 0;
+    size_t n = 0;
+    while (name[n] >= 'a' && name[n] <= 'z') ++n;
+    if (n == 4 && strncmp(name, "wlan", 4) == 0) return 1;
+    for (uint32_t i = 0; i < ncloners; ++i) {
+        const char* c = cloners + (size_t)i * IFNAMSIZ;
+        if (strnlen(c, IFNAMSIZ) == n && strncmp(c, name, n) == 0) return 0;
+    }
+    return 1;
+}
+
+/* The kernel's interface cloners (ifconfig -C), IFNAMSIZ bytes each; 0
+ * when they cannot be read. */
+static uint32_t read_cloners(char* buf, uint32_t cap) {
+    const int fd = socket(AF_LOCAL, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+    if (fd < 0) return 0;
+    struct if_clonereq req;
+    memset(&req, 0, sizeof(req));
+    req.ifcr_count  = (int)cap;
+    req.ifcr_buffer = buf;
+    uint32_t n = 0;
+    if (ioctl(fd, SIOCIFGCLONERS, &req) == 0 && req.ifcr_total > 0) {
+        n = (uint32_t)(req.ifcr_total < req.ifcr_count ? req.ifcr_total : req.ifcr_count);
+    }
+    close(fd);
+    return n;
 }
 
 /* Per interface: counters c[] = rx bytes, tx bytes, rx packets, tx
@@ -43,7 +82,12 @@ int budyk_collect_network_freebsd_ex(budyk_net_ctx_c* ctx, budyk_sample_c* s, bu
     uint32_t counted_pos = 0;
     uint64_t rx_moved    = 0;
     uint64_t tx_moved    = 0;
+    uint64_t rx_physical = 0;
+    uint64_t tx_physical = 0;
+    uint32_t physical    = 0;
     uint32_t iface_count = 0;
+    char     cloners[64 * IFNAMSIZ];
+    const uint32_t ncloners = read_cloners(cloners, 64);
 
     for (struct ifaddrs* ifa = ifap; ifa != NULL; ifa = ifa->ifa_next) {
         if (ifa->ifa_addr == NULL)                continue;
@@ -52,9 +96,16 @@ int budyk_collect_network_freebsd_ex(budyk_net_ctx_c* ctx, budyk_sample_c* s, bu
         if (ifa->ifa_data == NULL)                continue;
 
         const struct if_data* id = (const struct if_data*)ifa->ifa_data;
+        uint64_t rx = 0, tx = 0;
         budyk_counted_add(ctx->dev, ctx->ndev, &counted_pos, counted, &ncounted, ifa->ifa_name,
-                          (uint64_t)id->ifi_ibytes, (uint64_t)id->ifi_obytes,
-                          &rx_moved, &tx_moved);
+                          (uint64_t)id->ifi_ibytes, (uint64_t)id->ifi_obytes, &rx, &tx);
+        rx_moved += rx;
+        tx_moved += tx;
+        if (budyk_freebsd_iface_physical(ifa->ifa_name, id->ifi_type, cloners, ncloners)) {
+            rx_physical += rx;
+            tx_physical += tx;
+            ++physical;
+        }
         ++iface_count;
 
         if (d != NULL && d->nifaces < BUDYK_MAX_ENTITIES) {
@@ -93,6 +144,13 @@ int budyk_collect_network_freebsd_ex(budyk_net_ctx_c* ctx, budyk_sample_c* s, bu
     }
 
     s->net.interface_count = iface_count;
+    /* The totals are the devices' traffic (a jail's packet crossed its
+     * epair, the bridge and em0, each counting it); with none, every
+     * interface's. */
+    if (physical > 0) {
+        rx_moved = rx_physical;
+        tx_moved = tx_physical;
+    }
 
     if (!ctx->has_prev || s->timestamp_nanos <= ctx->prev_ns) {
         s->net.rx_bytes_per_sec = 0;
