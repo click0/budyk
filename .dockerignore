@@ -1,0 +1,7 @@
+# The image is built from the repository (addons/docker/Dockerfile,
+# COPY . .). A local build tree must stay out: its CMakeCache.txt names
+# another source directory and the image's cmake stops on it. The rest
+# is what the image does not need.
+.git
+build*/
+*.ring

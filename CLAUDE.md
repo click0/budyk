@@ -191,7 +191,9 @@ together with the smoke scripts, under ThreadSanitizer
 (`-DSTATIC_LINK=OFF -DENABLE_TSAN=ON`) with the serve smoke test, runs
 cppcheck, clang-tidy (checks in `.clang-tidy`), the Doxygen reference
 (`--target docs`) and `tests/check_whitespace.sh`, gates line coverage of `core/` and `storage/`
-at 85% (`tests/coverage_report.py`), cross-compiles for FreeBSD 14.4 amd64
+at 85% (`tests/coverage_report.py`), builds the Docker image and runs it
+with `addons/docker/docker-compose.yml` on a config of its own (next to a
+stale `build/`, which `.dockerignore` keeps out), cross-compiles for FreeBSD 14.4 amd64
 and aarch64, runs clang-tidy on the FreeBSD side of the code and the aarch64
 unit tests and smoke scripts in an emulated arm64 FreeBSD 14.4, and on
 FreeBSD 14.4 and 15.1 (clang; the oldest supported release of each branch)

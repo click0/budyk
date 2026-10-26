@@ -433,6 +433,43 @@ jobs:
           path: build/docs/html/
           retention-days: 14
 
+  # The Docker image, as addons/docker/docker-compose.yml builds and runs
+  # it, next to a stale local build tree (.dockerignore keeps it out of
+  # the image's cmake): the daemon must start on the mounted config.yaml
+  # (its port, not the example config's 8080) and collect.
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    name: Docker image (compose)
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and run with docker compose
+        run: |
+          set -ex
+          mkdir -p build
+          printf 'CMAKE_CACHEFILE_DIR:INTERNAL=/elsewhere/build\nCMAKE_HOME_DIRECTORY:INTERNAL=/elsewhere\n' > build/CMakeCache.txt
+          cd addons/docker
+          printf 'listen: 127.0.0.1\nport: 18799\ndata_dir: /var/db/budyk\n' > config.yaml
+          docker compose build
+          docker compose up -d
+          i=0
+          until curl -sf http://127.0.0.1:18799/api/health; do
+            i=$((i + 1))
+            if [ "$i" -ge 30 ]; then docker compose logs; exit 1; fi
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:18799/api/samples |
+            python3 -c 'import json, sys; s = json.load(sys.stdin)["samples"]; assert s and s[-1]["mem"]["total"] > 0 and s[-1]["proc"]["total"] > 1'
+          docker compose logs | grep -q "config=/etc/budyk/config.yaml"
+
+      - name: Logs and clean-up
+        if: always()
+        working-directory: addons/docker
+        run: |
+          docker compose logs || true
+          docker compose down -v || true
+
   # Line coverage (gcov/lcov) over the unit tests plus the serve smoke
   # test, which is what covers main.cpp. Spec §5 item 10: core/ and
   # storage/ must stay at >= 85%; the job fails below that. The per-module

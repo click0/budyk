@@ -1,10 +1,14 @@
 # SPDX-License-Identifier: BSD-3-Clause
 services:
   budyk:
-    build: ../..
-    dockerfile: addons/docker/Dockerfile
+    build:
+      context: ../..
+      dockerfile: addons/docker/Dockerfile
     pid: host
     network_mode: host
+    # The config mounted below: the image's own command reads the
+    # example config it ships with.
+    command: ["serve", "--config", "/etc/budyk/config.yaml"]
     volumes:
       - ./config.yaml:/etc/budyk/config.yaml:ro
       - budyk_data:/var/db/budyk
