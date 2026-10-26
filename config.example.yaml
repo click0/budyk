@@ -223,6 +223,12 @@ rules:
 
 # ---- Web server / SPA ----------------------------------------------------
 web:
+  # Without a password, on a loopback listen address, a request's Host
+  # must be one of budyk's names: an IP address, localhost, this host's
+  # name, or one listed here (a reverse proxy's public name). Anything
+  # else gets 403: a page that points its own name at 127.0.0.1 (DNS
+  # rebinding) could read the API otherwise.
+  # allowed_hosts: [budyk.example.com]
   auth:
     enabled: false
     # IMPORTANT — wrap the hash in quotes. The PHC string contains

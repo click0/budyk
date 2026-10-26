@@ -268,6 +268,20 @@ the dashboard's WebSocket is accepted only from a page of the same
 origin, so another site open in the browser cannot read the stream. A
 logout, or a session that expires, also ends the WebSocket it opened.
 
+Without a password, on `listen: 127.0.0.1`, budyk answers only to its
+own names in `Host`: an IP address, `localhost` (and `*.localhost`),
+the host's name, and those in `web.allowed_hosts`. Anything else gets
+403. Otherwise a site open in the browser could point a name of its own
+at 127.0.0.1 (DNS rebinding) and read the API as if budyk were that
+site; an SSH tunnel to the dashboard is open to it the same way. A
+proxy that passes its public name in `Host` to an unprotected budyk
+needs that name in the list:
+
+```yaml
+web:
+  allowed_hosts: [budyk.example.com]
+```
+
 If the dashboard is password-protected, `budyk tui` asks for the password
 once at startup (without echoing it) and logs in. If the session later
 expires, for example after a daemon restart, it logs in again by itself.

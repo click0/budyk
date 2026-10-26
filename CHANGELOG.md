@@ -18,6 +18,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Any website could read an unprotected budyk on 127.0.0.1** by DNS
+  rebinding: a page points a name of its own at 127.0.0.1 once it has
+  loaded, and the browser then takes budyk for that site, so the page
+  reads `/api/samples`, the alerts and the WebSocket as its own origin
+  (the `Origin` check of 0.8.2 passes too). The default configuration
+  (the one the Docker image runs) and an SSH tunnel to the dashboard
+  were open to it. Without a password, on a loopback `listen`, a request's
+  `Host` must now be an IP address, `localhost` (or `*.localhost`), the
+  host's name or one in the new `web.allowed_hosts`; anything else gets
+  403. A reverse proxy that passes its public name in `Host` to an
+  unprotected budyk needs that name in `web.allowed_hosts`.
 - **FreeBSD: swap past the 15th device was not counted.** The swap
   total and use summed the per-device entries of `kvm_getswapinfo()`,
   which fills at most one fewer than its array holds (16): a host with

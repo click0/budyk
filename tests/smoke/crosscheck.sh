@@ -86,7 +86,7 @@ def newest():
 # A client keeps L3: one sample a second, with the per-entity detail.
 ws = socket.create_connection(("127.0.0.1", port))
 key = base64.b64encode(os.urandom(16)).decode()
-ws.send(("GET /api/ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\n"
+ws.send(("GET /api/ws HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\n"
          "Connection: Upgrade\r\nSec-WebSocket-Key: %s\r\n"
          "Sec-WebSocket-Version: 13\r\n\r\n" % key).encode())
 deadline = time.time() + 10

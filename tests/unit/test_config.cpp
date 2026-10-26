@@ -164,6 +164,19 @@ int main() {
         assert(c.rules_exec_allow[1] == "/usr/bin/systemctl");
     }
 
+    // 7a-ter. web.allowed_hosts: the names a reverse proxy passes in Host;
+    //         none by default.
+    {
+        Config c;
+        assert(c.web_allowed_hosts.empty());
+        const char* y =
+            "web:\n"
+            "  allowed_hosts: [budyk.example.com, dash.lan]\n";
+        assert(config_load_string(y, &c) == 0);
+        assert(c.web_allowed_hosts.size() == 2);
+        assert(c.web_allowed_hosts[0] == "budyk.example.com" && c.web_allowed_hosts[1] == "dash.lan");
+    }
+
     // 7a-bis. rules.persist_state + state_path parse; defaults are
     //         persist=true, empty path (derived from data_dir later).
     {

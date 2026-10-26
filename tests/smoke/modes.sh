@@ -108,7 +108,7 @@ import base64, os, socket, sys, time, urllib.request
 port = int(sys.argv[1])
 urllib.request.urlopen("http://127.0.0.1:%d/api/samples" % port).read()
 s = socket.create_connection(("127.0.0.1", port))
-s.send(("GET /api/ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+s.send(("GET /api/ws HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
         "Sec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n\r\n"
         % base64.b64encode(os.urandom(16)).decode()).encode())
 time.sleep(2)

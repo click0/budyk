@@ -82,7 +82,10 @@ There is no event-loop library (no libuv, kqueue or epoll). The daemon is:
   accept() that fails (EMFILE, ECONNABORTED) is retried, logged once,
   never the end of the loop. A WebSocket upgrade hands the fd to the hub:
   same origin only (Origin against Host / X-Forwarded-Host), at most
-  `WebSocketHub::kMaxClients` (64).
+  `WebSocketHub::kMaxClients` (64). On loopback without a password,
+  every request's Host must be one of budyk's names (an address,
+  localhost, the hostname, `web.allowed_hosts`), or 403: DNS rebinding
+  (`own_host()` in `router.cpp`).
 - **WebSocket hub:** client fds are non-blocking. `broadcast()` drops a
   client whose send would block or writes a partial frame; `service()`,
   called by the main thread once per tick, answers pings, honours close
