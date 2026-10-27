@@ -35,7 +35,7 @@ collection:
   # warm_grace, a level's hold, web.auth.login_window) are seconds, with
   # a unit or without: 300, 300s, 5m, 1h, 1d (a custom level's interval
   # also 500ms). A value that does not read is reported and the default
-  # kept.
+  # kept, and so is a key budyk does not know (a typo) or one given twice.
   l1:
     interval: 300          # heartbeat — seconds
     metrics: standard

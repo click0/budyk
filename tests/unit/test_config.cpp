@@ -4,8 +4,11 @@
 #include <cassert>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
+
+#include <unistd.h>
 
 using namespace budyk;
 
@@ -13,7 +16,36 @@ static bool near(double a, double b, double eps = 1e-9) {
     return std::fabs(a - b) < eps;
 }
 
-int main() {
+// What config_load_string() writes to stderr on `yaml`; its return code
+// in *rc.
+static std::string stderr_of(const char* yaml, Config* c, int* rc = nullptr,
+                             std::string* error = nullptr) {
+    char path[] = "/tmp/budyk_cfg_err_XXXXXX";
+    const int fd = mkstemp(path);
+    assert(fd >= 0);
+    std::fflush(stderr);
+    const int saved = dup(2);
+    assert(saved >= 0 && dup2(fd, 2) == 2);
+    const int r = config_load_string(yaml, c, error);
+    std::fflush(stderr);
+    assert(dup2(saved, 2) == 2);
+    close(saved);
+    if (rc != nullptr) *rc = r;
+    std::string out;
+    char buf[4096];
+    ssize_t n = 0;
+    assert(lseek(fd, 0, SEEK_SET) == 0);
+    while ((n = read(fd, buf, sizeof(buf))) > 0) out.append(buf, static_cast<size_t>(n));
+    close(fd);
+    unlink(path);
+    return out;
+}
+
+static bool has(const std::string& s, const char* what) {
+    return s.find(what) != std::string::npos;
+}
+
+int main(int argc, char** argv) {
     // 1. Defaults applied when YAML is empty.
     {
         Config c;
@@ -312,8 +344,9 @@ int main() {
         assert(c.alert_channels[2].topic == "oncall@example.com");
     }
 
-    // 9. alerts: a channel with no `type` is silently dropped — the
-    //    dispatcher would have nothing to route it to anyway.
+    // 9. alerts: a channel with no `type`, or one that is not a mapping,
+    //    is left out — the dispatcher would have nothing to route it to —
+    //    and said so.
     {
         Config c;
         const char* y =
@@ -321,13 +354,16 @@ int main() {
             "  channels:\n"
             "    - name: typeless\n"
             "      url: https://example.com/\n"
+            "    - just-a-name\n"
             "    - name: good\n"
             "      type: ntfy\n"
             "      url: https://ntfy.sh\n"
             "      topic: t\n";
-        assert(config_load_string(y, &c) == 0);
+        const std::string err = stderr_of(y, &c);
         assert(c.alert_channels.size() == 1);
         assert(c.alert_channels[0].name == "good");
+        assert(has(err, "alerts.channels[0] (typeless): no type"));
+        assert(has(err, "alerts.channels[1]: not a mapping"));
     }
 
     // 10. File load path: write a small YAML and parse it.
@@ -500,6 +536,175 @@ int main() {
         assert(same(b.scheduler.l3_metrics, metric_set_full()));
         assert(b.scheduler.custom_levels.size() == 1);
         assert(same(b.scheduler.custom_levels[0].metrics, metric_set_full()));
+    }
+
+    // Booleans in any case, as YAML writes them (`True` from Python and
+    // Ansible): `web.auth.enabled: True` used to leave the dashboard open
+    // without a word. Anything else is reported and the default kept.
+    {
+        Config c;
+        const std::string err = stderr_of(
+            "collection: { l2: { always_on: Yes } }\n"
+            "rules: { exec: { enabled: ture }, freeze: { enabled: ON }, persist_state: FALSE }\n"
+            "security: { file_watch: { enabled: True } }\n"
+            "web: { auth: { enabled: True, persist_sessions: Off } }\n", &c);
+        assert(c.auth_enabled && !c.auth_persist_sessions);
+        assert(c.scheduler.l2_always_on && c.rules_enable_freeze && c.file_watch_enabled);
+        assert(!c.rules_persist_state);
+        assert(!c.rules_enable_exec);
+        assert(has(err, "rules.exec.enabled: 'ture' is not true or false; using false"));
+        assert(err.find("budyk config:") == err.rfind("budyk config:"));   // that one only
+    }
+
+    // Lists: one string is a list of one (`allow: /usr/bin/systemctl`
+    // left the exec allowlist empty, which lets exec() run any absolute
+    // path); an item that is not a string is left out, a mapping leaves
+    // the default, both said so; no value leaves the default quietly.
+    {
+        Config c;
+        std::string err = stderr_of(
+            "rules:\n"
+            "  exec: { allow: /usr/local/bin/budyk-alerter }\n"
+            "  freeze: { allow: [nginx, [redis], {a: b}] }\n"
+            "web: { allowed_hosts: dash.lan }\n", &c);
+        assert(c.rules_exec_allow.size() == 1 && c.rules_exec_allow[0] == "/usr/local/bin/budyk-alerter");
+        assert(c.rules_freeze_allow.size() == 1 && c.rules_freeze_allow[0] == "nginx");
+        assert(c.web_allowed_hosts.size() == 1 && c.web_allowed_hosts[0] == "dash.lan");
+        assert(has(err, "rules.freeze.allow[1]: not a string; left out"));
+        assert(has(err, "rules.freeze.allow[2]: not a string; left out"));
+
+        Config k;
+        k.rules_exec_allow = {"/keep"};
+        k.file_watch_paths = {"/etc/keep"};
+        err = stderr_of("rules: { exec: { allow: { a: b } } }\n"
+                        "security:\n  file_watch:\n    paths:\n", &k);
+        assert(k.rules_exec_allow.size() == 1 && k.rules_exec_allow[0] == "/keep");
+        assert(k.file_watch_paths.size() == 1 && k.file_watch_paths[0] == "/etc/keep");
+        assert(has(err, "rules.exec.allow: a mapping where a list belongs; ignored"));
+        assert(err.find("budyk config:") == err.rfind("budyk config:"));
+    }
+
+    // A key the loader does not read, one given twice, a section that is
+    // not one and a value that is a list or a mapping are reported under
+    // their full names (a typo such as `enable:` used to be ignored
+    // without a word); the rest loads.
+    {
+        Config c;
+        const std::string err = stderr_of(
+            "port: 7001\n"
+            "port: 7002\n"
+            "listen: [127.0.0.1]\n"
+            "storage: 5\n"
+            "colection: { mode: always }\n"
+            "collection:\n"
+            "  l3: { interval: 2, intervall: 5 }\n"
+            "  levels:\n"
+            "    - { name: burst, interval: 1, priority: 40, colour: red }\n"
+            "rules: { limits: { instructions: { n: 1 } } }\n"
+            "alerts: { channels: { name: x } }\n"
+            "web:\n"
+            "  auth: { enable: true }\n", &c);
+        assert(c.listen_port == 7001);
+        assert(std::strcmp(c.listen_addr, "127.0.0.1") == 0);           // the default
+        assert(c.scheduler.l3_interval_sec == 2);
+        assert(c.scheduler.custom_levels.size() == 1);
+        assert(!c.auth_enabled);
+        assert(has(err, "budyk config: port: given twice; the first is read"));
+        assert(has(err, "budyk config: listen: a list where a value belongs; ignored"));
+        assert(has(err, "budyk config: storage: not a mapping of settings; ignored"));
+        assert(has(err, "budyk config: colection: unknown key; ignored"));
+        assert(has(err, "budyk config: collection.l3.intervall: unknown key; ignored"));
+        assert(has(err, "budyk config: collection.levels[0].colour: unknown key; ignored"));
+        assert(has(err, "budyk config: rules.limits.instructions: a mapping where a value belongs"));
+        assert(has(err, "budyk config: alerts.channels: not a list; ignored"));
+        assert(has(err, "budyk config: web.auth.enable: unknown key; ignored"));
+    }
+
+    // Every key the loader reads, once: not a word on stderr. Sections
+    // left empty (their keys commented out) are fine too.
+    {
+        Config c;
+        const std::string err = stderr_of(
+            "listen: 127.0.0.1\nport: 8080\ndata_dir: /var/db/budyk\n"
+            "collection:\n"
+            "  mode: adaptive\n"
+            "  l1: { interval: 300, metrics: standard }\n"
+            "  l2: { interval: 30, always_on: false, hysteresis: 300, escalate_after: 300,\n"
+            "        escalation_thresholds: { load_1m: 4, cpu_percent: 85, swap_used_percent: 50 },\n"
+            "        metrics: full }\n"
+            "  l3: { interval: 1, grace_period: 60, metrics: full }\n"
+            "  levels:\n"
+            "    - { name: b, interval: 0.5, priority: 40, when: \"cpu.total_percent > 95\",\n"
+            "        hold: 120, storage_mb: 10, metrics: full }\n"
+            "  hot_buffer: { capacity: 300, warm_grace: 60 }\n"
+            "storage: { tier1_max_mb: 250, tier2_max_mb: 150, tier3_max_mb: 50 }\n"
+            "rules:\n"
+            "  path: /usr/local/etc/budyk/rules.lua\n"
+            "  enable_exec: false\n"
+            "  persist_state: true\n"
+            "  state_path: /var/db/budyk/rule_state.tsv\n"
+            "  exec: { enabled: false, allow: [/usr/bin/systemctl] }\n"
+            "  limits: { instructions: 1000000, memory_mb: 16 }\n"
+            "  freeze: { enabled: false, allow: [nginx] }\n"
+            "alerts:\n"
+            "  channels:\n"
+            "    - { name: n, type: ntfy, url: \"https://ntfy.sh\", topic: t, token: x, from: y }\n"
+            "security: { file_watch: { enabled: false, paths: [/etc/passwd] } }\n"
+            "web:\n"
+            "  allowed_hosts: [budyk.example.com]\n"
+            "  auth: { enabled: false, password_hash: \"x\", persist_sessions: true,\n"
+            "          max_login_failures: 5, login_window: 60 }\n", &c);
+        if (!err.empty()) std::fprintf(stderr, "%s", err.c_str());
+        assert(err.empty());
+        Config e;
+        assert(stderr_of("security:\nweb:\n  auth:\n", &e).empty());
+    }
+
+    // The example config in the tree (argv[1]) loads without a word.
+    if (argc > 1) {
+        std::FILE* f = std::fopen(argv[1], "re");
+        assert(f != nullptr);
+        std::string text;
+        char buf[4096];
+        size_t n = 0;
+        while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) text.append(buf, n);
+        std::fclose(f);
+        Config c;
+        int rc = -1;
+        const std::string err = stderr_of(text.c_str(), &c, &rc);
+        if (!err.empty()) std::fprintf(stderr, "%s", err.c_str());
+        assert(rc == 0 && err.empty());
+    }
+
+    // A parse error says what and where (it was "YAML parse error" alone);
+    // an empty file or one of comments only is the defaults (it was
+    // refused); a top level that is not a mapping is refused in words.
+    {
+        Config c;
+        std::string error;
+        assert(config_load_string("port: 1\nlisten: \"open\n", &c, &error) == -3);
+        assert(has(error, "line 2") || has(error, "line 3"));
+        assert(has(error, "quoted scalar"));
+        assert(config_load_string("a: b: c\n", &c, &error) == -3);
+        assert(has(error, "line 1, column"));
+
+        Config d;
+        const Config def;
+        assert(config_load_string("", &d, &error) == 0 && error.empty());
+        assert(config_load_string("# nothing here yet\n\n# port: 1\n", &d, &error) == 0);
+        assert(d.listen_port == def.listen_port);
+        assert(config_load_string("- port: 1\n", &d, &error) == -4);
+        assert(has(error, "not a mapping"));
+
+        char tmpl[] = "/tmp/budyk_cfg_XXXXXX";
+        const int fd = mkstemp(tmpl);
+        assert(fd >= 0);
+        const char* y = "web:\n  auth:\n    enabled: 'yes\n";
+        assert(write(fd, y, std::strlen(y)) == static_cast<ssize_t>(std::strlen(y)));
+        close(fd);
+        assert(config_load(tmpl, &c, &error) == -3);
+        assert(has(error, "line ") && has(error, "column "));
+        std::remove(tmpl);
     }
 
     std::printf("test_config: PASS\n");

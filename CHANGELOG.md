@@ -16,6 +16,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   overwritten in minutes, the hot buffer holding under a second), and a
   grace shorter than the level's interval added ticks. The countdown now
   starts at the first tick without a client.
+- **`True`, `TRUE`, `Yes` or `ON` in the config was not a boolean.**
+  Only lower case was read, and anything else was dropped without a
+  word: `web.auth.enabled: True` (as Python and Ansible write it) left
+  the dashboard without a password, and `persist_sessions: False` went
+  on writing sessions to disk. YAML's booleans read in any case now;
+  anything else is reported under its full name and the default kept.
+- **One path where a list belongs emptied the exec allowlist.**
+  `rules.exec.allow: /usr/local/bin/alerter` (a string, not a list) was
+  dropped, and an empty allowlist lets `exec()` run any absolute path.
+  One string is a list of one now; an item that is not a string, or a
+  mapping, is reported. The same goes for `rules.freeze.allow`,
+  `security.file_watch.paths` and `web.allowed_hosts`.
+- **A typo in a key was ignored without a word.** `web.auth.enable:
+  true` left the password off, and `colection:` its whole section
+  unread. A key budyk does not read, one given twice (the first is
+  read), a section that is not a mapping and a list where a value
+  belongs are reported now under their full names; the rest loads.
+- **A config that did not parse said only "YAML parse error".** The
+  error now has libyaml's reason, line and column ("found unexpected end
+  of stream at line 3, column 1 (while scanning a quoted scalar from
+  line 2)"). An empty file, or one of comments only, is the defaults; it
+  was refused.
+- An alert channel with no type, or one that is not a mapping, is
+  reported as it is left out.
 
 ## [0.8.3] — 2026-10-26
 
