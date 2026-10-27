@@ -12,6 +12,10 @@
 # catch-up frame must hold at most the sample taken at the reset, not
 # the first session's samples.
 #
+# Then warm_grace 0: a client connected for 3 s gets the samples of an
+# L3 interval of 1 s, not more (the reset's countdown used to cut every
+# sleep short while a client was connected: 400 samples a second).
+#
 #   tests/smoke/warm_grace.sh path/to/budyk [port]
 
 set -eu
@@ -21,29 +25,9 @@ DIR=$(mktemp -d)
 PID=
 trap 'kill "$PID" 2>/dev/null || true; rm -rf "$DIR"' EXIT
 
-cat > "$DIR/config.yaml" <<EOF
-data_dir: $DIR
-listen: 127.0.0.1
-port: $PORT
-collection:
-  l1: { interval: 30 }
-  l3: { interval: 1, grace_period: 1 }
-  hot_buffer: { warm_grace: 2 }
-EOF
-
-"$BIN" serve --config "$DIR/config.yaml" > "$DIR/log" 2>&1 &
-PID=$!
-i=0
-until curl -s -o /dev/null "http://127.0.0.1:$PORT/api/health"; do
-    i=$((i + 1))
-    [ "$i" -lt 50 ] || { echo "daemon did not start"; cat "$DIR/log"; exit 1; }
-    sleep 0.1
-done
-
-fail=0
-python3 - "$PORT" <<'EOF' || fail=1
+cat > "$DIR/ws.py" <<'EOF'
 import base64, json, os, socket, struct, sys, time
-port = int(sys.argv[1])
+port, mode = int(sys.argv[1]), sys.argv[2]
 
 def session(secs):
     """Connect, read frames for `secs`, close. Returns the decoded frames;
@@ -78,22 +62,58 @@ def session(secs):
     s.close()
     return frames
 
-first = session(4.0)
-seen = first[0]["count"] + len(first) - 1
-time.sleep(5.0)
-second = session(0.5)
-kept = second[0]["count"]
-print("first session: %d sample(s); catch-up 5 s after it left: %d" % (seen, kept))
-if seen < 3:
-    sys.exit("FAIL: the first session saw too few samples to tell")
-if kept > 2:
-    sys.exit("FAIL: the hot buffer was not emptied after warm_grace")
-print("ok   hot buffer emptied after warm_grace")
+if mode == "reset":
+    first = session(4.0)
+    seen = first[0]["count"] + len(first) - 1
+    time.sleep(5.0)
+    second = session(0.5)
+    kept = second[0]["count"]
+    print("first session: %d sample(s); catch-up 5 s after it left: %d" % (seen, kept))
+    if seen < 3:
+        sys.exit("FAIL: the first session saw too few samples to tell")
+    if kept > 2:
+        sys.exit("FAIL: the hot buffer was not emptied after warm_grace")
+    print("ok   hot buffer emptied after warm_grace")
+else:
+    frames = session(3.0)
+    live = len([f for f in frames[1:] if "samples" in f])
+    print("warm_grace 0: %d sample(s) in 3 s at an L3 interval of 1 s" % live)
+    if live < 2:
+        sys.exit("FAIL: too few samples to tell")
+    if live > 5:
+        sys.exit("FAIL: the tick ran faster than its interval while a client was connected")
+    print("ok   warm_grace 0 keeps the interval while a client is connected")
 EOF
 
-kill -TERM "$PID"
-wait "$PID" || { echo "FAIL: daemon exited non-zero after SIGTERM"; fail=1; }
-PID=
+fail=0
+# run <warm_grace> <mode>: a daemon of its own, the client, a clean stop.
+run() {
+    rm -rf "$DIR/data"
+    mkdir "$DIR/data"
+    cat > "$DIR/config.yaml" <<EOF
+data_dir: $DIR/data
+listen: 127.0.0.1
+port: $PORT
+collection:
+  l1: { interval: 30 }
+  l3: { interval: 1, grace_period: 1 }
+  hot_buffer: { warm_grace: $1 }
+EOF
+    "$BIN" serve --config "$DIR/config.yaml" >> "$DIR/log" 2>&1 &
+    PID=$!
+    i=0
+    until curl -s -o /dev/null "http://127.0.0.1:$PORT/api/health"; do
+        i=$((i + 1))
+        [ "$i" -lt 50 ] || { echo "daemon did not start"; cat "$DIR/log"; exit 1; }
+        sleep 0.1
+    done
+    python3 "$DIR/ws.py" "$PORT" "$2" || fail=1
+    kill -TERM "$PID"
+    wait "$PID" || { echo "FAIL: daemon exited non-zero after SIGTERM"; fail=1; }
+    PID=
+}
+run 2 reset
+run 0 rate
 
 if grep -E "ERROR: (Address|Leak)Sanitizer|ThreadSanitizer|runtime error:" "$DIR/log"; then
     echo "FAIL: sanitizer report in the daemon log"; fail=1

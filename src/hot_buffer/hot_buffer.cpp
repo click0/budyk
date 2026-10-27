@@ -30,7 +30,8 @@ size_t HotBuffer::dump(Sample* out, size_t out_cap) const {
 void HotBuffer::reset() { head_ = 0; count_ = 0; }
 
 bool WarmGrace::should_reset(int clients, uint64_t now_ns) {
-    if (clients > 0) {
+    connected_ = clients > 0;
+    if (connected_) {
         last_client_ns_ = now_ns;
         pending_        = true;
         return false;
@@ -45,8 +46,12 @@ bool WarmGrace::should_reset(int clients, uint64_t now_ns) {
     return true;
 }
 
+// Not while a client is connected: the spell starts at the first tick
+// without one. The grace counted from the last tick with a client capped
+// every sleep at it, so a warm_grace of 0 ran the tick in a loop (400
+// samples a second) and one shorter than the interval added ticks.
 uint64_t WarmGrace::ns_until_due(uint64_t now_ns) const {
-    if (!pending_) return UINT64_MAX;
+    if (!pending_ || connected_) return UINT64_MAX;
     if (now_ns < last_client_ns_) return grace_ns_;
     const uint64_t idle = now_ns - last_client_ns_;
     return idle >= grace_ns_ ? 0 : grace_ns_ - idle;

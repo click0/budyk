@@ -53,14 +53,16 @@ public:
     bool should_reset(int clients, uint64_t now_ns);
 
     /// Nanoseconds until should_reset() would return true, or UINT64_MAX
-    /// when no reset is pending. The serve loop caps its sleep with this,
-    /// so an L1 sleep of minutes does not delay the reset.
+    /// when no reset is pending or the last should_reset() saw a client.
+    /// The serve loop caps its sleep with this, so an L1 sleep of minutes
+    /// does not delay the reset.
     uint64_t ns_until_due(uint64_t now_ns) const;
 
 private:
     uint64_t grace_ns_;
     uint64_t last_client_ns_ = 0;
     bool     pending_        = false;
+    bool     connected_      = false;   ///< the last should_reset() saw a client
 };
 
 } // namespace budyk
