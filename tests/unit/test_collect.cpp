@@ -187,6 +187,14 @@ int main() {
         assert(cx.net.ndev == BUDYK_MAX_COUNTED && cx.disk.ndev == 300);
         tick(&cx, metric_set_full());
         assert(cx.cut == (kCutNetTotals | kDetailDisks | kDetailInterfaces));
+        // A tick at a level that reads no lists (standard) or no disks
+        // and interfaces at all (minimal) keeps what it did not check:
+        // the message came again each time the level rose (L1 reads
+        // standard, L2 and L3 full: each client, each escalation).
+        tick(&cx, metric_set_standard());
+        assert(cx.cut == (kCutNetTotals | kDetailDisks | kDetailInterfaces));
+        tick(&cx, metric_set_minimal());
+        assert(cx.cut == (kCutNetTotals | kDetailDisks | kDetailInterfaces));
         ifaces(2);
         tick(&cx, metric_set_full());
         assert(cx.cut == kDetailDisks);

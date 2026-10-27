@@ -423,11 +423,13 @@ int budyk_collect_network_freebsd(budyk_net_ctx_c*  ctx, budyk_sample_c* s);
 int budyk_collect_cpu_freebsd_ex    (budyk_cpu_ctx_c*  ctx, budyk_sample_c* s, budyk_detail_c* d);
 int budyk_collect_disk_freebsd_ex   (budyk_disk_ctx_c* ctx, budyk_sample_c* s, budyk_detail_c* d);
 int budyk_collect_network_freebsd_ex(budyk_net_ctx_c*  ctx, budyk_sample_c* s, budyk_detail_c* d);
-/** Whether interface `name` of if_data type `type` is a device's, whose
- *  traffic the network totals count: Ethernet or 802.11, and its driver
- *  (the letters before the unit) none of `cloners` (`ncloners` names of
- *  IFNAMSIZ bytes each, as SIOCIFGCLONERS gives them) but wlan. */
-int budyk_freebsd_iface_physical(const char* name, unsigned int type,
+/** Whether an interface of if_data type `type` whose driver and unit are
+ *  `driver` (IFDATA_DRIVERNAME, "epair3" for one renamed e0a_web) is a
+ *  device's, whose traffic the network totals count: Ethernet or 802.11,
+ *  and the driver (the letters before the unit) none of `cloners`
+ *  (`ncloners` names of IFNAMSIZ bytes each, as SIOCIFGCLONERS gives
+ *  them) but wlan, and not netgraph's ngeth. */
+int budyk_freebsd_iface_physical(const char* driver, unsigned int type,
                                  const char* cloners, uint32_t ncloners);
 int budyk_collect_proc_freebsd   (budyk_sample_c* s);
 int budyk_collect_proc_freebsd_ex(budyk_sample_c* s, budyk_detail_c* d);

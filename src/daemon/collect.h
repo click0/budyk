@@ -31,10 +31,11 @@ struct CollectContext {
     /// The groups whose collector failed on the last call: not in
     /// s->groups, and a baseline when they read again.
     uint32_t failed = 0;
-    /// What was cut short on the last call, logged when it starts: a
+    /// What was cut short when last checked, logged when it starts: a
     /// list holds BUDYK_MAX_ENTITIES, the totals follow BUDYK_MAX_COUNTED
     /// devices of each kind (bits: kCutDiskTotals, kCutNetTotals, and the
-    /// MetricDetail bit of the list).
+    /// MetricDetail bit of the list). A call that does not read a list or
+    /// a group leaves its bit as it was.
     uint32_t cut = 0;
 };
 
