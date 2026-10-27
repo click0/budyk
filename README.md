@@ -576,8 +576,9 @@ Each entry is converted to a `watch()` call when the file is loaded.
 budyk suggest-rules --config config.yaml --window 7d --output suggested.lua
 ```
 
-This reads the collected history and writes `watch()` rules with
-thresholds derived from it. Review them before use.
+This reads the collected history (the L2 and L1 rings: every L1
+interval is there, whether anyone was looking or not) and writes
+`watch()` rules with thresholds derived from it. Review them before use.
 
 ### Checking the ring files
 

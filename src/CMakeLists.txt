@@ -162,8 +162,31 @@ add_library(budyk_tui STATIC
     tui/tui.cpp
 )
 target_link_libraries(budyk_tui PRIVATE budyk_core)
-# ncurses from FreeBSD base
+# ncurses from FreeBSD base, the wide library: with the narrow one a
+# process name in UTF-8 came out as `~Aе~@ве~@`. FindCurses's own wide
+# search wants the header under ncursesw/, which FreeBSD does not have, so
+# the plain search finds the header (the same for both) and the library's
+# directory, and libncursesw from there takes the narrow one's place,
+# with its terminfo half for a static link: libtinfow on FreeBSD,
+# libtinfo on Debian and Ubuntu.
 find_package(Curses QUIET)
+if(CURSES_FOUND)
+    set(_budyk_curses_dirs "")
+    foreach(_l IN ITEMS ${CURSES_NCURSES_LIBRARY} ${CURSES_CURSES_LIBRARY})
+        get_filename_component(_d "${_l}" DIRECTORY)
+        list(APPEND _budyk_curses_dirs "${_d}")
+    endforeach()
+    find_library(BUDYK_NCURSESW_LIBRARY NAMES ncursesw HINTS ${_budyk_curses_dirs})
+    if(BUDYK_NCURSESW_LIBRARY)
+        set(CURSES_LIBRARIES ${BUDYK_NCURSESW_LIBRARY})
+        if(STATIC_LINK)
+            find_library(BUDYK_TINFO_LIBRARY NAMES tinfow tinfo HINTS ${_budyk_curses_dirs})
+            if(BUDYK_TINFO_LIBRARY)
+                list(APPEND CURSES_LIBRARIES ${BUDYK_TINFO_LIBRARY})
+            endif()
+        endif()
+    endif()
+endif()
 if(CURSES_FOUND)
     target_link_libraries(budyk_tui PRIVATE ${CURSES_LIBRARIES})
     target_include_directories(budyk_tui PRIVATE ${CURSES_INCLUDE_DIRS})

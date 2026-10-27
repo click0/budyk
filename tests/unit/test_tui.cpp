@@ -5,6 +5,7 @@
 #include "tui/tui.h"
 
 #include <cassert>
+#include <clocale>
 #include <cmath>
 #include <cstdio>
 #include <string>
@@ -168,6 +169,35 @@ int main() {
         assert(health_hostname("{\"hostname\":\"a\\\"b\"}") == "a\"b");
         assert(health_hostname("{\"status\":\"ok\"}").empty());
         assert(health_hostname("{\"hostname\":\"cut").empty());
+    }
+
+    // 9. fit_columns: a process name in so many columns of the terminal,
+    //    cut and padded by the characters' widths, not by bytes ("%-24.24s"
+    //    cut a UTF-8 name inside a character and shifted the columns); a
+    //    byte that is no character, or a control character, is '?'.
+    {
+        assert(fit_columns("init", 6) == "init  ");
+        assert(fit_columns("abcdefgh", 4) == "abcd");
+        assert(fit_columns("a\nb\x1b", 6) == "a?b?  ");
+        assert(fit_columns("", 2) == "  ");
+        if (std::setlocale(LC_CTYPE, "C.UTF-8") != nullptr ||
+            std::setlocale(LC_CTYPE, "en_US.UTF-8") != nullptr) {
+            const std::string name = "сервер-будик";            // 12 characters, 23 bytes
+            assert(fit_columns(name, 24) == name + std::string(12, ' '));
+            assert(fit_columns(name, 8) == "сервер-б");
+            assert(fit_columns("日本語", 5) == "日本 ");         // two columns each
+            assert(fit_columns("a\xff" "b", 4) == "a?b ");
+        } else {
+            std::printf("test_tui: no UTF-8 locale here, its part skipped\n");
+        }
+        std::setlocale(LC_CTYPE, "C");
+    }
+
+    // 10. has_sample: an empty /api/samples (before the first tick, after
+    //     the hot buffer was emptied) has none; it was drawn as zeros.
+    {
+        assert(!has_sample("{\"count\":0,\"samples\":[]}"));
+        assert(has_sample("{\"count\":1,\"samples\":[{\"ts\":1,\"cpu\":{}}]}"));
     }
 
     std::printf("test_tui: PASS\n");

@@ -60,6 +60,15 @@ struct ProcessRow {
 /// CPU first); names unescaped. Empty if there is none or it is cut off.
 std::vector<ProcessRow> parse_processes(const std::string& body);
 
+/// `s` in `width` columns of the terminal, cut and padded with spaces:
+/// each character by its width in the current locale (setlocale), and a
+/// byte that is no character there, or a control character, as '?'.
+std::string fit_columns(const std::string& s, int width);
+
+/// Whether an /api/samples body has a sample (an empty one, before the
+/// first tick or after the hot buffer was emptied, has none).
+bool has_sample(const std::string& body);
+
 /// The "hostname" of a /api/health body, unescaped; "" if none.
 std::string health_hostname(const std::string& body);
 

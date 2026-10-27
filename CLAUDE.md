@@ -157,7 +157,9 @@ tests/smoke/       — serve.sh (HTTP, WS, SIGHUP, fd check), crash.sh (SIGKILL 
                      the swap total against swapinfo),
                      net_totals.sh (root or sudo: a ping flood over a veth
                      into a netns, on FreeBSD over an epair renamed as jib
-                     names it into a VNET jail, left out of the totals)
+                     names it into a VNET jail, left out of the totals),
+                     cli.sh (suggest-rules on the L1 / L2 rings, its write
+                     errors and --window; the TUI against a silent daemon)
 addons/            — FreeBSD port + rc.d (files/budyk.in; test-port.sh builds,
                      installs and starts it), systemd unit, Docker; the .deb
                      and .rpm (addons/linux/mkpkg.sh, test-packages.sh)
@@ -187,6 +189,7 @@ tests/smoke/resources.sh build/src/budyk # spec §5 figures (a release build; ~2
 tests/smoke/crosscheck.sh build/src/budyk  # the readings against the system's own tools
 tests/smoke/swap_devices.sh build/src/budyk  # FreeBSD: swap over more than 15 devices
 tests/smoke/net_totals.sh build/src/budyk    # a veth's or a jail's epair's traffic not in the totals
+tests/smoke/cli.sh build/src/budyk           # suggest-rules and tui on real data
 tests/check_whitespace.sh                # trailing blanks, tabs, CR, final newline
 cmake --build build --target docs        # API reference (Doxygen), any warning fails it
 cmake/toolchains/freebsd-sysroot.sh 14.4 amd64 SYSROOT   # then, on Linux:

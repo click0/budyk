@@ -43,7 +43,11 @@ With
 .BR \-\-ai ,
 an LLM writes them from a summary of that history, with the API key
 given or from
-.BR ANTHROPIC_API_KEY .
+.B ANTHROPIC_API_KEY
+(on the command line, other users see the key in
+.BR ps (1);
+the environment variable is the safer way).
+The history is the L2 and the L1 rings', each stretch of time once.
 .TP
 \fBwatch\-files\fR [\fB\-\-timeout\fR \fIms\fR] \fIpath\fR ...
 Print the changes to the files named, as
