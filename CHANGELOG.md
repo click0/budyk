@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.4] — 2026-10-27
+
+Most of this release is in the config and the packages, and two of the
+config fixes change what runs. A value written as Python and Ansible
+write it, `web.auth.enabled: True`, left the dashboard without a
+password; it turns the password on now. And `rules.exec.allow` given one
+path instead of a list let `exec()` run any absolute path; it allows
+that one now. A key budyk does not know, a value that does not read and
+a YAML error are reported by name and line, and the rest loads. The
+FreeBSD port builds and installs, and its rc.d script starts budyk (it
+could not): the pidfile is `/var/run/budyk/budyk.pid`, `budyk_flags` are
+budyk's options, and the log goes to syslog. The .deb restarts a running
+service on upgrade; the .rpm does so from the next upgrade on, so after
+this one restart it by hand. The Docker image delivers alerts and loads
+its rules. On FreeBSD a jail's renamed epair no longer counts in the
+network totals, which on a jail host read lower. Also fixed:
+`warm_grace: 0`, which ran the tick in a loop; `suggest-rules` on a host
+nobody watched; the TUI on a daemon that stopped answering and on UTF-8
+process names; the dashboard after a reconnect and behind a reverse
+proxy under a path. The record format does not change: the rings of
+0.8.3 are used as they are.
+
 ### Fixed
 
 - **`hot_buffer.warm_grace: 0` ran the tick in a loop while a client
@@ -1267,6 +1289,7 @@ it turned up two untested storage paths, which are now covered.
   opened, and init with the original size works again. tier_manager.cpp
   coverage went from 84.3% to 94.4%.
 
+[0.8.4]: https://github.com/click0/budyk/releases/tag/v0.8.4
 [0.8.3]: https://github.com/click0/budyk/releases/tag/v0.8.3
 [0.8.2]: https://github.com/click0/budyk/releases/tag/v0.8.2
 [0.8.1]: https://github.com/click0/budyk/releases/tag/v0.8.1
