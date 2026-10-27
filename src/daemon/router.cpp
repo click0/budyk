@@ -146,9 +146,9 @@ HttpHandler make_router(const RouterDeps& d) {
             return !tok.empty() && sessions.verify(tok);
         };
 
-        // Static SPA — served at /, /index.html and /budyk for the
-        // browser-friendly entry. Always public; the JS itself does
-        // the auth-probe + login round-trip.
+        // Static SPA — served at / and /index.html. Always public; the JS
+        // itself does the auth-probe + login round-trip. Its URLs are
+        // relative, so a reverse proxy may serve it under a path (/budyk/).
         if (req.method == "GET" &&
             (req.path == "/" || req.path == "/index.html")) {
             budyk::HttpResponse r;
@@ -164,8 +164,11 @@ HttpHandler make_router(const RouterDeps& d) {
             budyk::HttpResponse r;
             r.status       = 200;
             r.content_type = "application/json";
+            // auth: whether the dashboard has a password, so it can offer
+            // to sign out (an API request without a session says it too).
             r.body         = std::string("{\"status\":\"ok\",\"version\":\"") + d.version +
-                             "\",\"hostname\":\"" + budyk::json_escape(d.hostname) + "\"}\n";
+                             "\",\"hostname\":\"" + budyk::json_escape(d.hostname) +
+                             "\",\"auth\":" + (cfg.auth_enabled ? "true" : "false") + "}\n";
             return r;
         }
 

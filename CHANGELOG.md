@@ -122,6 +122,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   100 %.
 - Ctrl-C at `hash-password`'s or the TUI's password prompt left the
   terminal without echo (dash, sh); it is put back.
+- **The dashboard missed the alerts raised while its WebSocket was
+  down** (a network cut, a laptop asleep): it fetched `/api/alerts`
+  once, when it opened. It fetches them again on every reconnect, and
+  lists each alert once (a new sign-in listed them all twice); an alert
+  from another day shows its date.
+- **The dashboard did not work behind a reverse proxy under a path**
+  (`/budyk/` to budyk's `/`): its URLs were absolute, so `/api/...` went
+  to the proxy's own `/api`. They are relative now.
+- The dashboard's history fetched 5000 full samples (8 MB) every minute,
+  in a tab nobody looked at too, and again for each click on a metric;
+  on a slow link the server cut the transfer off and the chart showed
+  "error". It asks for 1000 points, skips a hidden tab, and draws
+  another metric from the window it has. The window is the server's last
+  hours, not the browser's clock's.
+- Enter and a click on "Sign in" during the slow password check
+  started the dashboard twice, with two WebSockets for good; the
+  password stayed in its field for the session. There is a "sign out"
+  button with a password on (`/api/health` says `auth`), and the load bar
+  no longer flashes red against one core when a sample has no CPU group.
 
 ## [0.8.3] — 2026-10-26
 

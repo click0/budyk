@@ -24,6 +24,9 @@ body { margin:0; padding:1.2rem 1.5rem; font-family: ui-monospace, SFMono-Regula
        background: var(--bg); color: var(--fg); }
 h1 { margin:0 0 1rem 0; font-size: 1.1rem; font-weight: 600; }
 h1 .host { color: var(--muted); margin-left: .6rem; font-weight: 400; }
+h1 button { float: right; background: var(--bar); color: var(--fg); border: 1px solid transparent;
+            border-radius:.25rem; padding:.2rem .6rem; font: inherit; font-size:.8rem; font-weight: 400; cursor: pointer; }
+h1 button:hover { border-color: var(--muted); }
 .panel { display:flex; flex-direction:column; gap:.55rem; max-width: 64rem; }
 .row   { display:grid; grid-template-columns: 7rem 1fr 14rem; gap:.7rem; align-items:center; }
 .label { color: var(--muted); }
@@ -79,12 +82,12 @@ h1 .host { color: var(--muted); margin-left: .6rem; font-weight: 400; }
 <div id="login" class="hidden">
   <h1>budyk &mdash; sign in</h1>
   <input id="pw" type="password" placeholder="password" autofocus>
-  <button onclick="doLogin()">Sign in</button>
+  <button id="signIn" onclick="doLogin()">Sign in</button>
   <div id="loginErr" class="err"></div>
 </div>
 
 <div id="dash" class="hidden">
-  <h1>budyk <span class="host" id="host"></span></h1>
+  <h1>budyk <span class="host" id="host"></span><button id="signOut" class="hidden" onclick="doLogout()">sign out</button></h1>
   <div class="panel">
     <div class="row"><span class="label">Level</span>    <span class="muted" id="level">--</span>       <span class="value">&nbsp;</span></div>
     <div class="row" data-group="cpu"><span class="label">CPU</span>      <div class="bar"><i id="cpuBar"></i></div>     <span class="value" id="cpu">--</span></div>
@@ -205,8 +208,15 @@ function setBar(id, pct, warnAt = 70, critAt = 90) {
   el.parentElement.classList.toggle("crit", pct >= critAt);
 }
 
+// The server's clock against the browser's (ms), from the newest sample:
+// the history window is the server's last hours, not the browser's.
+let serverSkewMs = 0;
+let knownCores = 1;
+
 function render(s) {
   if (!s) return;
+  const tsMs = Number(s.ts) / 1e6;
+  if (Number.isFinite(tsMs) && tsMs > 0) serverSkewMs = tsMs - Date.now();
   $("level").textContent = fmtLevel(s.level);
   $("cpu").textContent = (s.cpu.total_percent ?? 0).toFixed(1) + "% / " + (s.cpu.count ?? 0) + " cores";
   setBar("cpuBar", s.cpu.total_percent ?? 0);
@@ -218,8 +228,10 @@ function render(s) {
   $("swap").textContent = (s.swap.used_percent ?? 0).toFixed(1) + "%";
   setBar("swapBar", s.swap.used_percent ?? 0, 50, 80);
 
-  const cores = Math.max(1, s.cpu.count ?? 1);
-  const loadPct = ((s.load.avg_1m ?? 0) / (cores * 1.5)) * 100;
+  // The cores of the last sample that has cpu: one without it (a rate's
+  // first read) says 0, and the load bar was drawn against one core.
+  if (collected(s, "cpu") && s.cpu.count > 0) knownCores = s.cpu.count;
+  const loadPct = ((s.load.avg_1m ?? 0) / (knownCores * 1.5)) * 100;
   $("load").textContent = `${(s.load.avg_1m ?? 0).toFixed(2)} / ${(s.load.avg_5m ?? 0).toFixed(2)} / ${(s.load.avg_15m ?? 0).toFixed(2)}`;
   setBar("loadBar", loadPct);
 
@@ -455,9 +467,10 @@ function drawChart(samples) {
 }
 
 // Every level's ring merged by time (level=all), thinned server-side to
-// at most 5000 points spread over the whole window.
+// 1000 points spread over the whole window: one per unit of the chart's
+// width. 5000 full samples were 8 MB a refresh, cut off on a slow link.
 async function fetchRange(sinceNs) {
-  const url = `/api/range?level=all&since=${sinceNs}&limit=5000`;
+  const url = `api/range?level=all&since=${sinceNs}&limit=1000`;
   const r = await fetch(url, { credentials: "same-origin" });
   if (!r.ok) throw new Error("range " + r.status);
   const doc = await r.json();
@@ -465,18 +478,21 @@ async function fetchRange(sinceNs) {
 }
 
 let histTimer = null;
+let histSamples = [];     // the last window fetched: a metric drawn from it
 async function loadHistory() {
   const r = RANGES[histRange];
   if (!r) return;
   // Exact nanosecond `since` via BigInt — Date.now() in ms is well within
   // safe-integer range, the *1e6 product is not, so don't use Number.
-  const sinceNs = (BigInt(Date.now()) - BigInt(r.ms)) * 1000000n;
+  const nowMs = Math.round(Date.now() + serverSkewMs);
+  const sinceNs = (BigInt(nowMs) - BigInt(r.ms)) * 1000000n;
   $("histInfo").textContent = "loading…";
   try {
-    const samples = await fetchRange(sinceNs.toString());
-    drawChart(samples);
-    $("histInfo").textContent = samples.length ? `${samples.length} pts` : "no data";
+    histSamples = await fetchRange(sinceNs.toString());
+    drawChart(histSamples);
+    $("histInfo").textContent = histSamples.length ? `${histSamples.length} pts` : "no data";
   } catch (e) {
+    histSamples = [];
     $("histInfo").textContent = "error";
     drawChart([]);
   }
@@ -493,7 +509,7 @@ function wireHistoryControls() {
       histMetric = key;
       for (const c of mc.children) c.className = "";
       b.className = "on";
-      loadHistory();
+      drawChart(histSamples);           // the same window: nothing to fetch
     };
     mc.appendChild(b);
   }
@@ -512,24 +528,36 @@ function wireHistoryControls() {
     rc.appendChild(b);
   }
   // Refresh the visible window every 60s so it tracks "now" without the
-  // operator clicking. The live panel still updates per-tick over WS.
+  // operator clicking, but not in a tab nobody looks at (it fetched the
+  // window every minute for days); one coming back is brought up to date.
+  // The live panel still updates per-tick over WS.
   if (histTimer) clearInterval(histTimer);
-  histTimer = setInterval(loadHistory, 60000);
+  histTimer = setInterval(() => { if (!document.hidden) loadHistory(); }, 60000);
 }
+document.addEventListener("visibilitychange", () => { if (!document.hidden && histTimer) loadHistory(); });
 
 function showDash()   { $("login").classList.add("hidden");  $("dash").classList.remove("hidden"); }
 function showLogin()  { $("dash").classList.add("hidden");   $("login").classList.remove("hidden"); $("pw").focus(); }
 function setStatus(t) { $("status").textContent = t; }
 
+// One login at a time: Enter and a click while the slow Argon2 check ran
+// started the dashboard twice, with two WebSockets for good.
+let loggingIn = false;
 async function doLogin() {
+  if (loggingIn) return;
+  loggingIn = true;
+  $("signIn").disabled = true;
   $("loginErr").textContent = "";
   try {
-    const r = await fetch("/api/auth/login", {
+    const r = await fetch("api/auth/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ password: $("pw").value }),
     });
-    if (r.ok)             return start();
+    if (r.ok) {
+      $("pw").value = "";               // not left in the page for the session
+      return await start();
+    }
     if (r.status === 401) $("loginErr").textContent = "Invalid password";
     else if (r.status === 429) {
       const wait = r.headers.get("Retry-After");
@@ -538,7 +566,19 @@ async function doLogin() {
     else                  $("loginErr").textContent = "Server returned " + r.status;
   } catch (e) {
     $("loginErr").textContent = "Network error";
+  } finally {
+    loggingIn = false;
+    $("signIn").disabled = false;
   }
+}
+
+// Ends the session: the daemon closes its WebSocket (1008) and the page
+// goes back to the sign-in form.
+async function doLogout() {
+  try { await fetch("api/auth/logout", { method: "POST", credentials: "same-origin" }); } catch (_) {}
+  closeWs();
+  setStatus("signed out");
+  showLogin();
 }
 
 // Per-entity detail of the newest sample (doc.detail in a WebSocket
@@ -648,17 +688,27 @@ function renderDetail(d) {
 // Alerts the rules raised: the latest from /api/alerts when the page
 // opens, then each as the WebSocket brings it. Newest first; the rule
 // names and messages are the rules', so they go in as text.
+// Each alert once (by time and rule): the list is fetched again after
+// every reconnect, for the alerts raised while the WebSocket was down,
+// and after a new sign-in, which listed every alert twice.
 const ALERTS_MAX = 20;
 let alertList = [];
 function addAlerts(arr) {
   if (!Array.isArray(arr) || arr.length === 0) return;
-  alertList = alertList.concat(arr).slice(-ALERTS_MAX);
+  const key = a => `${a.ts}|${a.rule}`;
+  const seen = new Set(alertList.map(key));
+  const fresh = arr.filter(a => !seen.has(key(a)));
+  if (fresh.length === 0 && alertList.length > 0) return;
+  alertList = alertList.concat(fresh)
+    .sort((x, y) => Number(x.ts) - Number(y.ts)).slice(-ALERTS_MAX);
   $("alertsBox").classList.remove("hidden");
   const tb = $("alerts");
   tb.replaceChildren();
+  const today = new Date().toDateString();
   for (const a of alertList.slice().reverse()) {
     const tr = document.createElement("tr");
-    cell(tr, fmtClock(Number(a.ts) / 1e6), "when");
+    const ms = Number(a.ts) / 1e6;       // the date too, if not today's
+    cell(tr, new Date(ms).toDateString() === today ? fmtClock(ms) : fmtClockDay(ms), "when");
     cell(tr, a.severity || "", a.severity || "");
     cell(tr, a.rule || "");
     cell(tr, a.message || "", "muted");
@@ -666,13 +716,32 @@ function addAlerts(arr) {
   }
 }
 
+async function fetchAlerts() {
+  try {
+    const ar = await fetch("api/alerts", { credentials: "same-origin" });
+    if (ar.ok) addAlerts((await ar.json()).alerts);
+  } catch (_) {}
+}
+
+// The URLs are relative to the page: behind a reverse proxy under a path
+// (/budyk/ -> budyk's /) "/api/..." went to the proxy's own /api.
 let ws = null;
+function closeWs() {
+  if (!ws) return;
+  const old = ws;
+  ws = null;
+  old.onclose = null;
+  try { old.close(); } catch (_) {}
+}
 function openWs() {
-  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  closeWs();                             // one stream per page, whatever called
+  const u = new URL("api/ws", location.href);
+  u.protocol = u.protocol === "https:" ? "wss:" : "ws:";
   setStatus("connecting WebSocket…");
-  ws = new WebSocket(`${proto}//${location.host}/api/ws`);
-  ws.onopen    = () => setStatus("live (WebSocket)");
-  ws.onmessage = (e) => {
+  const sock = new WebSocket(u.href);
+  ws = sock;
+  sock.onopen    = () => { setStatus("live (WebSocket)"); fetchAlerts(); };
+  sock.onmessage = (e) => {
     try {
       const doc = JSON.parse(e.data);
       if (doc.alerts) { addAlerts(doc.alerts); return; }
@@ -686,33 +755,37 @@ function openWs() {
   // so a close asks /api/levels (small, and behind the login too) before
   // retrying: on 401 the page goes back to the login form instead of
   // "retrying" forever.
-  ws.onclose   = async (e) => {
+  sock.onclose   = async (e) => {
+    if (sock !== ws) return;             // replaced: its successor carries on
     if (e.code !== 1008) {
       setStatus("disconnected, retrying in 2s…");
+      const again = () => { if (sock === ws) openWs(); };
       try {
-        const r = await fetch("/api/levels", { credentials: "same-origin" });
-        if (r.status !== 401) { setTimeout(openWs, 2000); return; }
-      } catch (_) { setTimeout(openWs, 2000); return; }
+        const r = await fetch("api/levels", { credentials: "same-origin" });
+        if (r.status !== 401) { setTimeout(again, 2000); return; }
+      } catch (_) { setTimeout(again, 2000); return; }
     }
+    ws = null;
     setStatus("session ended");
     showLogin();
   };
-  ws.onerror   = () => { try { ws.close(); } catch (_) {} };
+  sock.onerror   = () => { try { sock.close(); } catch (_) {} };
 }
 
 async function start() {
   $("host").textContent = location.host;
   // The host's own name, from /api/health (no login needed).
   try {
-    const hr = await fetch("/api/health");
-    const name = hr.ok ? (await hr.json()).hostname : "";
-    if (name) {
-      $("host").textContent = `${name} · ${location.host}`;
-      document.title = `${name} — budyk`;
+    const hr = await fetch("api/health");
+    const h = hr.ok ? await hr.json() : {};
+    if (h.hostname) {
+      $("host").textContent = `${h.hostname} · ${location.host}`;
+      document.title = `${h.hostname} — budyk`;
     }
+    $("signOut").classList.toggle("hidden", h.auth !== true);
   } catch (_) {}
   // Probe auth via /api/samples so the path also covers token expiry.
-  const r = await fetch("/api/samples", { credentials: "same-origin" });
+  const r = await fetch("api/samples", { credentials: "same-origin" });
   if (r.status === 401) return showLogin();
   if (!r.ok) {
     $("loginErr").textContent = "Server returned " + r.status;
@@ -720,16 +793,13 @@ async function start() {
   }
   showDash();
   try {
-    const lr = await fetch("/api/levels", { credentials: "same-origin" });
+    const lr = await fetch("api/levels", { credentials: "same-origin" });
     if (lr.ok) for (const lv of await lr.json()) levels[lv.id] = lv;
   } catch (_) {}
-  try {
-    const ar = await fetch("/api/alerts", { credentials: "same-origin" });
-    if (ar.ok) addAlerts((await ar.json()).alerts);
-  } catch (_) {}
-  // Wire + populate the history chart (independent of the live WS feed).
+  await fetchAlerts();
+  // Wire the history chart (independent of the live WS feed); it loads
+  // once the catch-up sample has given the server's clock.
   wireHistoryControls();
-  loadHistory();
   // Render the catch-up snapshot first, then go live. Backfill the
   // file-watch sparkline from the same snapshot so a page reload
   // doesn't reset the timeline visible to the operator.
@@ -750,6 +820,7 @@ async function start() {
     if (arr.length) render(arr[arr.length - 1]);
     renderDetail(doc.detail);
   } catch (_) {}
+  loadHistory();
   openWs();
 }
 

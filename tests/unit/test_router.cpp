@@ -104,10 +104,14 @@ int main() {
         World w; w.init();
         HttpResponse r = w.handler(get("/"));
         assert(r.status == 200 && has(r.content_type, "text/html") && has(r.body, "<html"));
+        // Its URLs are relative: behind a proxy under a path, "/api/..."
+        // went to the proxy's own /api.
+        assert(!has(r.body, "fetch(\"/api") && !has(r.body, "`/api") && !has(r.body, "host}/api"));
         assert(w.handler(get("/index.html")).status == 200);
         r = w.handler(get("/api/health"));
         assert(r.status == 200 &&
-               r.body == "{\"status\":\"ok\",\"version\":\"9.9.9-test\",\"hostname\":\"db\\\"1\"}\n");
+               r.body == "{\"status\":\"ok\",\"version\":\"9.9.9-test\",\"hostname\":\"db\\\"1\","
+                         "\"auth\":false}\n");
         assert(!has(r.body, "data_dir"));
         assert(w.handler(get("/nope")).status == 404);
         assert(w.handler(post("/api/health", "")).status == 404);

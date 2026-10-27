@@ -276,7 +276,11 @@ With auth on and a non-loopback `listen`, the daemon warns at start-up.
 The proxy must pass the `Host` header on (or set `X-Forwarded-Host`):
 the dashboard's WebSocket is accepted only from a page of the same
 origin, so another site open in the browser cannot read the stream. A
-logout, or a session that expires, also ends the WebSocket it opened.
+logout (the dashboard's "sign out"), or a session that expires, also
+ends the WebSocket it opened. The dashboard's URLs are relative, so the
+proxy may serve it under a path: `location /budyk/ { proxy_pass
+http://127.0.0.1:8080/; }` (the trailing slashes matter), with the
+WebSocket's `Upgrade` headers passed on.
 
 Without a password, on `listen: 127.0.0.1`, budyk answers only to its
 own names in `Host`: an IP address, `localhost` (and `*.localhost`),
