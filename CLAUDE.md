@@ -157,8 +157,9 @@ tests/smoke/       — serve.sh (HTTP, WS, SIGHUP, fd check), crash.sh (SIGKILL 
                      the swap total against swapinfo),
                      net_totals.sh (Linux, root or sudo: a ping flood over a
                      veth into a netns, left out of the network totals)
-addons/            — FreeBSD port + rc.d, systemd unit, Docker; the .deb and
-                     .rpm (addons/linux/mkpkg.sh, test-packages.sh)
+addons/            — FreeBSD port + rc.d (files/budyk.in; test-port.sh builds,
+                     installs and starts it), systemd unit, Docker; the .deb
+                     and .rpm (addons/linux/mkpkg.sh, test-packages.sh)
 cmake/toolchains/  — cross-compiling for FreeBSD on Linux: freebsd-sysroot.sh
                      (base.txz + packages, checked), freebsd-{amd64,aarch64}.cmake
 cmake/docs.cmake   — the `docs` target: Doxygen over the headers in src/
@@ -208,7 +209,9 @@ unit tests and smoke scripts in an emulated arm64 FreeBSD 14.4, and on
 FreeBSD 14.4 and 15.1 (clang; the oldest supported release of each branch)
 builds and tests both the shared (port) and the static (release)
 configuration and runs the smoke scripts on the static binary (on 15.1 also
-on the cross-compiled amd64 one). Everything
+on the cross-compiled amd64 one), then builds the port with the ports
+framework, installs its package and starts its rc.d service
+(`addons/freebsd/test-port.sh`). Everything
 must be green before a merge. Warnings are `-Wall -Wextra -Wshadow -Wconversion -Wsign-conversion`
 on every target, plus `-Wcast-align=strict` with GCC; a new implicit sign or
 width change, or a cast to a more strictly aligned pointer, is a build error

@@ -333,9 +333,16 @@ int cmd_serve(int argc, char* argv[], const char* version) {
     // the simple-YAML transpiler first, anything else is fed to Lua
     // verbatim (the transpiler emits regular watch() calls, so the engine
     // sees no difference downstream). 0, or nonzero with the reason in
-    // *err. No rules file (or none readable) is no rules: 0.
+    // *err. No rules file (or none readable) is no rules: 0, and said so
+    // (the FreeBSD port and the Docker image put the rules where the
+    // config did not look, and the daemon ran without any, in silence).
     auto load_rules_into = [&cfg](budyk::LuaEngine& e, std::string* err) -> int {
-        if (cfg.rules_path[0] == '\0' || ::access(cfg.rules_path, R_OK) != 0) return 0;
+        if (cfg.rules_path[0] == '\0') return 0;
+        if (::access(cfg.rules_path, R_OK) != 0) {
+            std::fprintf(stderr, "budyk serve: rules file '%s': %s; running without rules\n",
+                         cfg.rules_path, std::strerror(errno));
+            return 0;
+        }
         const size_t plen = std::strlen(cfg.rules_path);
         const bool   is_yaml =
             (plen >= 5 && std::strcmp(cfg.rules_path + plen - 5, ".yaml") == 0) ||

@@ -218,9 +218,16 @@ FreeBSD 15.1.
 
 ### Running as a service
 
-- **FreeBSD:** a port skeleton and an rc.d script are in
-  [`addons/freebsd/`](addons/freebsd/). The rc.d script reads
-  `budyk_enable`, `budyk_config`, `budyk_user` and `budyk_flags`.
+- **FreeBSD:** the port is in [`addons/freebsd/`](addons/freebsd/):
+  copied to `/usr/ports/sysutils/budyk` (with `budyk` added to the tree's
+  `UIDs` and `GIDs`), `make makesum install` builds and installs it, the
+  config and the FreeBSD default rules in `/usr/local/etc/budyk/` and the
+  data directory `/var/db/budyk`. Then `sysrc budyk_enable=YES` and
+  `service budyk start`. The rc.d script reads `budyk_enable`,
+  `budyk_config`, `budyk_user`, `budyk_group` and `budyk_args` (more
+  options for `budyk serve`, such as `--enable-exec`); budyk logs to
+  syslog (`/var/log/messages`). `addons/freebsd/test-port.sh` builds,
+  installs and starts it end to end, as CI does on 14.4 and 15.1.
 - **Linux:** the packages above install a hardened systemd unit; for a
   binary installed by hand it is in
   [`addons/linux/budyk.service`](addons/linux/budyk.service).
