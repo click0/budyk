@@ -7,7 +7,10 @@
 # logout); a WebSocket from another site's page (an Origin that is not
 # the Host) is refused. The config says `enabled: True`, as Python and
 # Ansible write it (it used to leave the dashboard open without a word),
-# and has a key budyk does not know, which the log must name.
+# and has a key budyk does not know, which the log must name. Its
+# `rules: path:` is left empty: no rules, said so (a null kept the default
+# path, and the daemon loaded the rules file the FreeBSD package puts
+# there).
 #
 #   tests/smoke/auth.sh path/to/budyk [port]
 
@@ -77,6 +80,8 @@ web:
     enabled: True
     password_hash: "$HASH"
     persist_sessions: false
+rules:
+  path:
 colour: red
 EOF
 
@@ -93,6 +98,9 @@ fail=0
 if grep -q "budyk config: colour: unknown key; ignored" "$DIR/log"; then
     echo "ok   an unknown key is named in the log"
 else echo "FAIL: no word in the log on the unknown key 'colour'"; fail=1; fi
+if grep -q "budyk serve: rules.path is empty; running without rules" "$DIR/log"; then
+    echo "ok   an empty rules.path is no rules, and the log says so"
+else echo "FAIL: an empty rules.path: $(grep -i rules "$DIR/log" | head -3)"; fail=1; fi
 code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/api/samples")
 if [ "$code" = 401 ]; then echo "ok   /api/samples without a session -> 401"
 else echo "FAIL: /api/samples without a session -> $code"; fail=1; fi

@@ -574,8 +574,16 @@ int parse_document(yaml_parser_t* parser, Config* out, std::string* error) {
     }
 
     if (auto* rules = yaml_find_key(&doc, root, "rules")) {
-        apply_str (&doc, rules, "path",          out->rules_path, sizeof(out->rules_path),
-                   "rules.path");
+        // `path:` with nothing, `~` or "": no rules, as 0.8.3 read the
+        // first. A null elsewhere keeps the default; here that loaded the
+        // default rules file (the FreeBSD package installs one), in silence.
+        const yaml_node_t* rp = yaml_find_key(&doc, rules, "path");
+        if (rp != nullptr && yaml_null(rp)) {
+            out->rules_path[0] = '\0';
+        } else {
+            apply_str(&doc, rules, "path", out->rules_path, sizeof(out->rules_path),
+                      "rules.path");
+        }
         apply_bool(&doc, rules, "enable_exec",   &out->rules_enable_exec,     // legacy flat key
                    "rules.enable_exec");
         apply_bool(&doc, rules, "persist_state", &out->rules_persist_state, "rules.persist_state");

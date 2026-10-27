@@ -337,7 +337,10 @@ int cmd_serve(int argc, char* argv[], const char* version) {
     // (the FreeBSD port and the Docker image put the rules where the
     // config did not look, and the daemon ran without any, in silence).
     auto load_rules_into = [&cfg](budyk::LuaEngine& e, std::string* err) -> int {
-        if (cfg.rules_path[0] == '\0') return 0;
+        if (cfg.rules_path[0] == '\0') {
+            std::fprintf(stderr, "budyk serve: rules.path is empty; running without rules\n");
+            return 0;
+        }
         if (::access(cfg.rules_path, R_OK) != 0) {
             std::fprintf(stderr, "budyk serve: rules file '%s': %s; running without rules\n",
                          cfg.rules_path, std::strerror(errno));

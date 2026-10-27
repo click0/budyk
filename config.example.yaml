@@ -105,7 +105,7 @@ storage:
 # Multi-line / computed thresholds → use a .lua file instead, the
 # engine accepts both transparently.
 rules:
-  path: "/usr/local/etc/budyk/rules.lua"
+  path: "/usr/local/etc/budyk/rules.lua"   # "" or nothing: no rules
   # Persist per-rule cooldown / fire counters across restarts so a
   # daemon bounce doesn't re-fire a rule that was mid-cooldown (which
   # would otherwise produce an alert-storm). State is flushed every 60s
