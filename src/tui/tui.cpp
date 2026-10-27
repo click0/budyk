@@ -62,7 +62,12 @@ std::string http_error(int rc) {
 
 // A request is bounded: a daemon stopped (SIGSTOP), a host that does not
 // answer, a network cut held the TUI in connect() or recv(), `q` unread.
-constexpr int64_t kHttpTimeoutMs = 3000;
+// The bound is on a wait with no progress, not on the whole request: a
+// big reply over a slow link takes as long as it takes. It is longer than
+// the daemon's own bound on a connection (5 s, HttpServer's I/O timeout),
+// since its one HTTP thread may give that whole to an idle client queued
+// ahead of the TUI (a browser's preconnect, a probe).
+constexpr int64_t kHttpIdleMs = 8000;
 
 int64_t monotonic_ms() {
     struct timespec ts{};
@@ -87,7 +92,7 @@ int http_request(const char* host, int port, const char* method,
                  const char* path, const std::string& extra_headers,
                  const std::string& body, tui_detail::HttpReply* reply) {
     g_http_errno = 0;
-    const int64_t deadline = monotonic_ms() + kHttpTimeoutMs;
+    int64_t deadline = monotonic_ms() + kHttpIdleMs;   // moved on by progress
     int fd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
     if (fd < 0) { g_http_errno = errno; return -1; }
 
@@ -123,7 +128,11 @@ int http_request(const char* host, int port, const char* method,
     size_t sent = 0;
     while (sent < req.size()) {
         const ssize_t n = ::send(fd, req.data() + sent, req.size() - sent, MSG_NOSIGNAL);
-        if (n >= 0) { sent += static_cast<size_t>(n); continue; }
+        if (n >= 0) {
+            sent += static_cast<size_t>(n);
+            deadline = monotonic_ms() + kHttpIdleMs;
+            continue;
+        }
         if (errno == EINTR) continue;
         if ((errno == EAGAIN || errno == EWOULDBLOCK) && wait_ready(fd, POLLOUT, deadline)) continue;
         g_http_errno = errno;
@@ -136,7 +145,11 @@ int http_request(const char* host, int port, const char* method,
     while (true) {
         ssize_t r = ::recv(fd, buf, sizeof(buf), 0);
         if (r == 0) break;
-        if (r > 0) { raw.append(buf, static_cast<size_t>(r)); continue; }
+        if (r > 0) {
+            raw.append(buf, static_cast<size_t>(r));
+            deadline = monotonic_ms() + kHttpIdleMs;
+            continue;
+        }
         if (errno == EINTR) continue;
         if ((errno == EAGAIN || errno == EWOULDBLOCK) && wait_ready(fd, POLLIN, deadline)) continue;
         g_http_errno = errno;
@@ -149,18 +162,18 @@ int http_request(const char* host, int port, const char* method,
 
 // POST /api/auth/login; on success *cookie becomes "budyk_session=<token>".
 // Returns the HTTP status (200 = logged in; 401 wrong password; 429
-// throttled after too many failures), or -1 when the daemon can't be
-// reached or sent no cookie.
+// throttled after too many failures), 0 for a 200 with no cookie, or
+// http_request's negative code when the daemon can't be reached (a
+// timeout was reported as a wrong password).
 int login(const char* host, int port, const std::string& password,
           std::string* cookie) {
     tui_detail::HttpReply r;
     const std::string body = "{\"password\":" + tui_detail::json_quote(password) + "}";
-    if (http_request(host, port, "POST", "/api/auth/login", "", body, &r) != 0) {
-        return -1;
-    }
+    const int rc = http_request(host, port, "POST", "/api/auth/login", "", body, &r);
+    if (rc != 0) return rc;
     if (r.status != 200) return r.status;
     *cookie = tui_detail::session_cookie(r.headers);
-    return cookie->empty() ? -1 : 200;
+    return cookie->empty() ? 0 : 200;
 }
 
 // --- formatting helpers ------------------------------------------------------
@@ -480,9 +493,20 @@ int tui_run(const char* host, int port, std::string (*ask_password)()) {
                              host, port);
                 return -1;
             }
-            if (st != 200) {
-                std::fprintf(stderr, "budyk tui: login to %s:%d failed (wrong password?)\n",
+            if (st < 0) {
+                std::fprintf(stderr, "budyk tui: login to %s:%d: %s\n", host, port,
+                             http_error(st).c_str());
+                return -1;
+            }
+            if (st == 401) {
+                std::fprintf(stderr, "budyk tui: login to %s:%d failed: wrong password\n",
                              host, port);
+                return -1;
+            }
+            if (st != 200) {
+                std::fprintf(stderr, "budyk tui: login to %s:%d failed: %s\n", host, port,
+                             st == 0 ? "no session cookie in the reply"
+                                     : ("HTTP " + std::to_string(st)).c_str());
                 return -1;
             }
             cookie_header = "Cookie: " + cookie + "\r\n";

@@ -286,22 +286,9 @@ int cmd_suggest_rules(int argc, char* argv[]) {
             "(run `budyk serve` first to collect data)\n", cfg.data_dir, cfg.data_dir);
         return 1;
     }
-    const auto by_time = [](const budyk::Sample& a, const budyk::Sample& b) {
-        return a.timestamp_nanos < b.timestamp_nanos;
-    };
-    std::sort(l2.begin(), l2.end(), by_time);
-    std::sort(l1.begin(), l1.end(), by_time);
-    // Each stretch once, at the finer level: an L1 record whose interval
-    // has L2 records is left out.
+    // Each stretch once, at the finer level.
     const uint64_t l1_ns = static_cast<uint64_t>(cfg.scheduler.l1_interval_sec) * uint64_t{1000000000};
-    std::vector<budyk::Sample> samples = l2;
-    for (const auto& r : l1) {
-        const uint64_t from = r.timestamp_nanos > l1_ns ? r.timestamp_nanos - l1_ns : 0;
-        const auto it = std::lower_bound(l2.begin(), l2.end(), from,
-            [](const budyk::Sample& s, uint64_t t) { return s.timestamp_nanos < t; });
-        if (it == l2.end() || it->timestamp_nanos > r.timestamp_nanos) samples.push_back(r);
-    }
-    std::sort(samples.begin(), samples.end(), by_time);
+    const std::vector<budyk::Sample> samples = budyk::merge_l2_l1(std::move(l2), l1, l1_ns);
 
     std::string doc;
     if (ai) {

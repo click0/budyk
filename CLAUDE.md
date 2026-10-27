@@ -159,7 +159,8 @@ tests/smoke/       — serve.sh (HTTP, WS, SIGHUP, fd check), crash.sh (SIGKILL 
                      into a netns, on FreeBSD over an epair renamed as jib
                      names it into a VNET jail, left out of the totals),
                      cli.sh (suggest-rules on the L1 / L2 rings, its write
-                     errors and --window; the TUI against a silent daemon)
+                     errors and --window; the TUI against a silent daemon,
+                     behind an idle client, through a slow reply)
 addons/            — FreeBSD port + rc.d (files/budyk.in; test-port.sh builds,
                      installs and starts it), systemd unit, Docker; the .deb
                      and .rpm (addons/linux/mkpkg.sh, test-packages.sh)

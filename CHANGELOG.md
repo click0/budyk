@@ -104,15 +104,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`budyk suggest-rules` found no history on a box nobody watched.**
   It read the L3 ring only, which in adaptive mode fills only while a
   dashboard is open: "Generated from 0 samples". It reads the L2 and L1
-  rings now, as the spec has it, each stretch once (an L1 record where
-  the L2 ring has samples is left out).
+  rings now, as the spec has it, each stretch once (an L1 record folded
+  from what the L2 ring still has is left out).
 - `suggest-rules` said "wrote 101 bytes" and exited 0 when the output
   could not be written (a full disk); it says why and exits 1. A
   `--window` past a year is refused however it is written: a number too
   large wrapped round to some hours.
 - **The TUI hung on a daemon that stopped answering** (stopped, a host
-  cut off), and `q` did nothing: each request is bounded now (3 s), and
-  the screen says the connection failed. Its socket is close-on-exec.
+  cut off), and `q` did nothing: a request that makes no progress for
+  8 s is given up now (a slow reply that keeps coming is read), and the
+  screen says the connection failed. A login that times out says so,
+  not "wrong password?". Its socket is close-on-exec.
 - **Process names in UTF-8 came out garbled in the TUI** (`~Aе~@ве~@`)
   and shifted the columns: it uses the wide ncurses and the locale now,
   and fits a name to its columns by characters, a control character
