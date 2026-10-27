@@ -324,7 +324,8 @@ in CI.
    `addons/freebsd/Makefile`.
 2. In `CHANGELOG.md` turn `[Unreleased]` into `[x.y.z] — YYYY-MM-DD` with a
    summary paragraph, add the tag link at the bottom, and open a new empty
-   `[Unreleased]`. `release.yml` publishes exactly this section as the notes.
+   `[Unreleased]`. `release.yml` publishes this section as the notes, and
+   GitHub its list of the merged pull requests after it.
 3. Open the PR; start a `release.yml` dry run (`workflow_dispatch` from the
    branch — it builds everything and skips publish); merge when all checks
    and the dry run are green.

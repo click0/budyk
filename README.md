@@ -163,7 +163,7 @@ rules `/etc/budyk/rules.lua` (kept on upgrade if you changed them), the
 systemd unit, the man page and the example rules in
 `/usr/share/budyk/rules/`; create the system user `budyk` and the data
 directory `/var/lib/budyk`. The service is not started until you enable
-it. Removing the package stops it; purging (`apt purge`) also deletes
+it; an upgrade restarts it if it runs. Removing the package stops it; purging (`apt purge`) also deletes
 `/var/lib/budyk` and the config. `addons/linux/mkpkg.sh` builds both from
 a binary of your own.
 

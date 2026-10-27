@@ -177,7 +177,7 @@ int cmd_hash_password() {
 }
 
 int cmd_suggest_rules(int argc, char* argv[]) {
-    const char* config_path = "/usr/local/etc/budyk/config.yaml";
+    const char* config_path = budyk::default_config_path();
     const char* window_arg  = "7d";
     const char* output_path = nullptr;       // nullptr → stdout
     const char* api_key     = nullptr;
@@ -321,17 +321,17 @@ int cmd_watch_files(int argc, char* argv[]) {
     }
 
     budyk::FileWatcher fw;
-    if (fw.init() != 0) {
+    if (const int rc = fw.init(); rc != 0) {
         std::fprintf(stderr,
-            "budyk watch-files: FileWatcher.init() failed\n");
+            "budyk watch-files: the file watcher cannot start: %s\n", std::strerror(-rc));
         return 1;
     }
     for (const auto& p : paths) {
         const int rc = fw.add(p);
         if (rc < 0) {
             std::fprintf(stderr,
-                "budyk watch-files: cannot watch '%s' (errno=%d)\n",
-                p.c_str(), -rc);
+                "budyk watch-files: cannot watch '%s': %s\n",
+                p.c_str(), std::strerror(-rc));
         }
     }
     std::printf("watching %zu file(s); timeout=%dms\n",

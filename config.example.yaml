@@ -139,6 +139,9 @@ rules:
     enabled: false         # `true` lets watch() actions call freeze(pid)
                            # / unfreeze(pid) to send SIGSTOP / SIGCONT;
                            # otherwise both bindings raise an error.
+    # As the user budyk (the service's), only budyk's own processes can be
+    # signalled: for another user's, freeze() returns ok = false and
+    # errno = 1 (EPERM).
     # When the list is non-empty, freeze() / unfreeze() will only signal
     # a process whose kernel-reported name (`comm`) matches one entry.
     # Empty list ⇒ no name-based gate (the engine-wide enabled flag
@@ -212,6 +215,11 @@ rules:
 #                                "/etc/sudoers modified") end,
 #     cooldown = 60,
 #   })
+#
+# The service (the packages' unit, the FreeBSD rc.d script) runs as the
+# user budyk, and a file it cannot read cannot be watched: /etc/sudoers
+# is 0440 root. The log says so ("cannot watch '/etc/sudoers': Permission
+# denied"); give budyk read access (setfacl) for such a file.
 #
 # security:
 #   file_watch:

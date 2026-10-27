@@ -60,7 +60,11 @@ grep -q '^data_dir: "/var/lib/budyk"' "$ROOT/etc/budyk/config.yaml"
 install -m 0644 "$SRC/rules/examples.lua" "$ROOT/etc/budyk/rules.lua"
 sed -e 's|/usr/local/bin/budyk|/usr/bin/budyk|g' -e 's|/var/db/budyk|/var/lib/budyk|g' \
     "$SRC/addons/linux/budyk.service" > "$ROOT/usr/lib/systemd/system/budyk.service"
-gzip -9n -c "$SRC/docs/budyk.8" > "$ROOT/usr/share/man/man8/budyk.8.gz"
+# The man page with the packages' paths in FILES (its .I lines): it
+# named /usr/local/etc/budyk and /var/db/budyk, which a package does not
+# use.
+sed -e '/^\.I /s|/usr/local/etc/budyk|/etc/budyk|' -e '/^\.I /s|/var/db/budyk|/var/lib/budyk|' \
+    "$SRC/docs/budyk.8" | gzip -9n > "$ROOT/usr/share/man/man8/budyk.8.gz"
 install -m 0644 "$SRC"/rules/*.lua "$ROOT/usr/share/budyk/rules/"
 install -m 0644 "$SRC/README.md" "$ROOT/usr/share/doc/budyk/"
 gzip -9n -c "$SRC/CHANGELOG.md" > "$ROOT/usr/share/doc/budyk/changelog.gz"
@@ -86,6 +90,9 @@ chown root:budyk /etc/budyk/config.yaml && chmod 0640 /etc/budyk/config.yaml
 if [ -d /run/systemd/system ]; then systemctl daemon-reload >/dev/null 2>&1 || true; fi'
 stop='if [ -d /run/systemd/system ]; then systemctl stop budyk.service >/dev/null 2>&1 || true; systemctl disable budyk.service >/dev/null 2>&1 || true; fi'
 reload='if [ -d /run/systemd/system ]; then systemctl daemon-reload >/dev/null 2>&1 || true; fi'
+# An upgrade restarts a running service: the old binary went on running
+# until someone restarted it.
+restart='if [ -d /run/systemd/system ]; then systemctl try-restart budyk.service >/dev/null 2>&1 || true; fi'
 
 # --- .deb -------------------------------------------------------------------
 DEB=$WORK/deb
@@ -106,7 +113,8 @@ SIZE=$(du -sk "$ROOT" | cut -f1)
     echo "$DESC" | sed 's/^/ /'
 } > "$DEB/DEBIAN/control"
 printf '/etc/budyk/config.yaml\n/etc/budyk/rules.lua\n' > "$DEB/DEBIAN/conffiles"
-printf '#!/bin/sh\nset -e\nif [ "$1" = configure ]; then\n%s\n%s\nfi\n' "$add_user" "$setup" > "$DEB/DEBIAN/postinst"
+printf '#!/bin/sh\nset -e\nif [ "$1" = configure ]; then\n%s\n%s\nif [ -n "$2" ]; then\n%s\nfi\nfi\n' \
+    "$add_user" "$setup" "$restart" > "$DEB/DEBIAN/postinst"
 printf '#!/bin/sh\nset -e\nif [ "$1" = remove ] || [ "$1" = deconfigure ]; then\n%s\nfi\n' "$stop" > "$DEB/DEBIAN/prerm"
 printf '#!/bin/sh\nset -e\n%s\nif [ "$1" = purge ]; then\n    rm -rf /var/lib/budyk\nfi\n' "$reload" > "$DEB/DEBIAN/postrm"
 chmod 0755 "$DEB/DEBIAN/postinst" "$DEB/DEBIAN/prerm" "$DEB/DEBIAN/postrm"
@@ -146,6 +154,9 @@ install -d "$RPMTOP/SPECS" "$RPMTOP/BUILD" "$RPMTOP/RPMS"
     echo
     echo "%postun"
     echo "$reload"
+    echo 'if [ "$1" -ge 1 ]; then'
+    echo "$restart"
+    echo "fi"
     echo
     echo "%files"
     echo "%attr(0755,root,root) /usr/bin/budyk"

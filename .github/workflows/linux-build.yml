@@ -442,7 +442,8 @@ jobs:
   # The Docker image, as addons/docker/docker-compose.yml builds and runs
   # it, next to a stale local build tree (.dockerignore keeps it out of
   # the image's cmake): the daemon must start on the mounted config.yaml
-  # (its port, not the example config's 8080) and collect.
+  # (its port, not the example config's 8080), load the rules and
+  # collect, and the image must have curl for the alerts.
   docker:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -468,6 +469,10 @@ jobs:
           curl -sf http://127.0.0.1:18799/api/samples |
             python3 -c 'import json, sys; s = json.load(sys.stdin)["samples"]; assert s and s[-1]["mem"]["total"] > 0 and s[-1]["proc"]["total"] > 1'
           docker compose logs | grep -q "config=/etc/budyk/config.yaml"
+          # The rules where the config looks (the image had none there),
+          # and curl(1), which every alert channel runs.
+          docker compose logs | grep "budyk serve: started" | grep -q "rules=[1-9]"
+          docker compose exec -T budyk curl --version | head -1
 
       - name: Logs and clean-up
         if: always()

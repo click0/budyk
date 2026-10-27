@@ -158,7 +158,7 @@ bool report(const std::string& name, const RingCheck& c, bool repair) {
 } // namespace
 
 int cmd_fsck(int argc, char* argv[]) {
-    const char* config_path = "/usr/local/etc/budyk/config.yaml";
+    const char* config_path = default_config_path();
     const char* dir         = nullptr;
     bool        repair      = false;
     for (int i = 2; i < argc; ++i) {

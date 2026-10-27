@@ -16,6 +16,7 @@ extern "C" {
 #include <cstring>
 
 #include <strings.h>
+#include <unistd.h>
 
 namespace budyk {
 
@@ -669,6 +670,22 @@ int config_load(const char* path, Config* out, std::string* error) {
     yaml_parser_delete(&parser);
     std::fclose(f);
     return rc;
+}
+
+const char* default_config_path(bool (*exists)(const char* path)) {
+    static const char* const kLocal = "/usr/local/etc/budyk/config.yaml";
+#ifdef BUDYK_LINUX
+    // The packages' config: `budyk fsck` and `suggest-rules` with no
+    // --config looked only under /usr/local and gave up on a package's.
+    static const char* const kEtc = "/etc/budyk/config.yaml";
+    const auto there = [exists](const char* p) {
+        return exists != nullptr ? exists(p) : ::access(p, F_OK) == 0;
+    };
+    if (!there(kLocal) && there(kEtc)) return kEtc;
+#else
+    (void)exists;
+#endif
+    return kLocal;
 }
 
 int config_load_string(const char* yaml, Config* out, std::string* error) {

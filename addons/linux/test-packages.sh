@@ -4,9 +4,11 @@
 # Install, run and remove the packages mkpkg.sh built (as root):
 #   .deb  on this host (dpkg): the binary and its version, the budyk
 #         user, the data directory and the config's owner and mode, the
-#         daemon running as budyk with the packaged config (under systemd
-#         when it is PID 1, else by hand), then remove (the config stays)
-#         and purge (config and data gone);
+#         daemon running as budyk with the packaged config and rules,
+#         fsck finding that config with no --config, the man page's
+#         paths; under systemd (when it is PID 1) the service, and an
+#         upgrade restarting it; then remove (the config stays) and purge
+#         (config and data gone);
 #   .rpm  in a Fedora container when docker works: the same install and
 #         run checks, then rpm -e; without docker, its file list and
 #         scripts only.
@@ -65,10 +67,25 @@ else
 fi
 [ "$(stat -c %U /var/lib/budyk/tier1.ring 2>/dev/null)" = budyk ] && echo "ok   its rings are budyk's" ||
     { echo "FAIL: no ring owned by budyk in /var/lib/budyk"; fail=1; }
+grep "budyk serve: started" /tmp/budyk-test.log | grep -q "rules=[1-9]" && echo "ok   the packaged rules loaded" ||
+    { echo "FAIL: the rules did not load: $(grep rules /tmp/budyk-test.log)"; fail=1; }
 kill -TERM "$DPID" 2>/dev/null; wait "$DPID" 2>/dev/null
+# With no --config, the packages' /etc/budyk/config.yaml (fsck looked
+# only under /usr/local and gave up).
+if [ ! -e /usr/local/etc/budyk/config.yaml ]; then
+    runuser -u budyk -- /usr/bin/budyk fsck > /tmp/budyk-fsck.log 2>&1 && echo "ok   budyk fsck with no --config" ||
+        { echo "FAIL: budyk fsck: $(cat /tmp/budyk-fsck.log)"; fail=1; }
+fi
 exit $fail
 EOF
 chmod 0755 "$OUT/check-installed.sh"
+
+# The man page with the packages' paths (read from the package: a
+# minimal system may not install man pages).
+dpkg-deb --fsys-tarfile "$DEB" | tar -xO ./usr/share/man/man8/budyk.8.gz | gzip -dc > "$OUT/budyk.8"
+grep -q '^\.I /etc/budyk/config.yaml' "$OUT/budyk.8" && ! grep -q '^\.I /usr/local/etc\|^\.I /var/db/' "$OUT/budyk.8" &&
+    ok "the man page has the packages' paths" || bad "the man page's paths"
+rm -f "$OUT/budyk.8"
 
 # --- .deb -----------------------------------------------------------------
 dpkg -i "$DEB" >/dev/null
@@ -84,6 +101,16 @@ if [ -d /run/systemd/system ]; then
     else
         bad "the service: $(systemctl status budyk --no-pager 2>&1 | tail -5)"
     fi
+    # An upgrade (here the same package again) restarts the running
+    # service: the old binary used to go on running.
+    before=$(systemctl show -p MainPID --value budyk)
+    dpkg -i "$DEB" >/dev/null
+    after=$(systemctl show -p MainPID --value budyk)
+    if systemctl is-active --quiet budyk && [ "$after" != 0 ] && [ "$after" != "$before" ]; then
+        ok "an upgrade restarts the service ($before -> $after)"
+    else
+        bad "the service after an upgrade: MainPID $before -> $after"
+    fi
 fi
 echo "# a local change" >> /etc/budyk/config.yaml
 dpkg -r budyk >/dev/null
@@ -96,7 +123,7 @@ dpkg -P budyk >/dev/null
 # --- .rpm -----------------------------------------------------------------
 if docker info >/dev/null 2>&1; then
     if docker run --rm -v "$OUT:/pkg:ro" fedora:41 sh -c "
-        dnf -y -q install /pkg/$(basename "$RPM") procps-ng curl util-linux >/dev/null &&
+        dnf -y -q install /pkg/$(basename "$RPM") procps-ng curl util-linux gzip >/dev/null &&
         /pkg/check-installed.sh 18991 $VER &&
         rpm -e budyk && [ ! -e /usr/bin/budyk ] && echo 'ok   rpm -e: the binary gone'"; then
         ok ".rpm installed, ran and removed in Fedora"
