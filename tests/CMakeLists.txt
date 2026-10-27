@@ -48,7 +48,9 @@ budyk_add_test(test_login_limiter   LIBS budyk_web budyk_core)
 budyk_add_test(test_ws              LIBS budyk_web budyk_core)
 budyk_add_test(test_http_util       LIBS budyk_web budyk_core)
 
-budyk_add_test(test_config          LIBS budyk_config budyk_scheduler budyk_core)
+# The example config shipped in the tree loads without a word.
+budyk_add_test(test_config          LIBS budyk_config budyk_scheduler budyk_core
+    ARGS ${CMAKE_SOURCE_DIR}/config.example.yaml)
 
 # platform collectors
 if(BUDYK_PLATFORM STREQUAL "linux")

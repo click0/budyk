@@ -244,8 +244,12 @@ in CI.
   `parse_int_full()` (`src/core/parse_int.h`): whole string, in range, or
   an error that names the value. No `atoi()`; clang-tidy (`cert-err34-c`)
   rejects it outside the collectors. In the config, durations take a unit
-  or none (`apply_seconds`: 300, 300s, 5m, 1h, 1d), and a value that does
-  not read is reported under its full name with the default kept.
+  or none (`apply_seconds`: 300, 300s, 5m, 1h, 1d), booleans any case
+  (`True`), a list one string too, and a value that does not read is
+  reported under its full name with the default kept. A new key goes in
+  `kRootKeys` and its sections in `config.cpp` as well: one it does not
+  list is reported as unknown (a typo used to be ignored without a
+  word); `test_config` loads `config.example.yaml` and expects silence.
 - Every descriptor is close-on-exec, short-lived ones too: `fopen(path,
   "re")` / `"we"`, `O_CLOEXEC`, `SOCK_CLOEXEC`, `mkostemp(..., O_CLOEXEC)`
   (worker threads fork while the main thread has a file open).

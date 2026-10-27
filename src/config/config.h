@@ -82,12 +82,15 @@ struct Config {
 };
 
 /// Load a YAML config into `out`, starting from defaults. Missing
-/// keys leave defaults in place. Returns 0 on success, negative on
-/// I/O or parse error.
+/// keys leave defaults in place, and so does an empty file. Returns 0 on
+/// success, negative on I/O or parse error.
 /// `error`, when given, gets the reason for a non-zero return: the
-/// strerror of a failed open, or "YAML parse error" (the parser's own
-/// messages go to stderr as they are found).
+/// strerror of a failed open, or the parser's reason with its line and
+/// column. A setting that does not read (a value of the wrong kind, an
+/// unknown key, a key given twice) is not an error: it is reported on
+/// stderr under its full name and the default kept.
 int config_load        (const char* path, Config* out, std::string* error = nullptr);
-int config_load_string (const char* yaml, Config* out);
+/// config_load() on YAML text instead of a file.
+int config_load_string (const char* yaml, Config* out, std::string* error = nullptr);
 
 } // namespace budyk

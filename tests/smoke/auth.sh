@@ -5,7 +5,9 @@
 # a session; a WebSocket opened with one is dropped when the session
 # ends (the upgrade checked it once, and the stream used to outlive a
 # logout); a WebSocket from another site's page (an Origin that is not
-# the Host) is refused.
+# the Host) is refused. The config says `enabled: True`, as Python and
+# Ansible write it (it used to leave the dashboard open without a word),
+# and has a key budyk does not know, which the log must name.
 #
 #   tests/smoke/auth.sh path/to/budyk [port]
 
@@ -25,9 +27,10 @@ collection:
   l3: { interval: 1, grace_period: 2 }
 web:
   auth:
-    enabled: true
+    enabled: True
     password_hash: "$HASH"
     persist_sessions: false
+colour: red
 EOF
 
 "$BIN" serve --config "$DIR/config.yaml" > "$DIR/log" 2>&1 &
@@ -40,6 +43,9 @@ until curl -s -o /dev/null "http://127.0.0.1:$PORT/api/health"; do
 done
 
 fail=0
+if grep -q "budyk config: colour: unknown key; ignored" "$DIR/log"; then
+    echo "ok   an unknown key is named in the log"
+else echo "FAIL: no word in the log on the unknown key 'colour'"; fail=1; fi
 code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/api/samples")
 if [ "$code" = 401 ]; then echo "ok   /api/samples without a session -> 401"
 else echo "FAIL: /api/samples without a session -> $code"; fail=1; fi

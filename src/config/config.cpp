@@ -21,9 +21,33 @@ namespace budyk {
 
 namespace {
 
+// YAML's null: a plain `~`, `null` or nothing at all (`allow:` with every
+// item commented out). A key with no value is as if it were not there.
+bool yaml_null(const yaml_node_t* n) {
+    if (n == nullptr || n->type != YAML_SCALAR_NODE ||
+        n->data.scalar.style != YAML_PLAIN_SCALAR_STYLE) {
+        return false;
+    }
+    const char* v = reinterpret_cast<const char*>(n->data.scalar.value);
+    return *v == '\0' || std::strcmp(v, "~") == 0 || ::strcasecmp(v, "null") == 0;
+}
+
+// The value under `key`, or nullptr when there is none. A list or a
+// mapping where a value belongs is reported under the setting's full
+// name (`path`), and the setting keeps its default.
+const char* scalar_at(yaml_document_t* d, const yaml_node_t* m, const char* key,
+                      const char* path) {
+    const yaml_node_t* n = yaml_find_key(d, m, key);
+    if (n == nullptr || yaml_null(n)) return nullptr;
+    if (const char* v = yaml_scalar(n)) return v;
+    std::fprintf(stderr, "budyk config: %s: a %s where a value belongs; ignored\n", path,
+                 n->type == YAML_SEQUENCE_NODE ? "list" : "mapping");
+    return nullptr;
+}
+
 void apply_str(yaml_document_t* d, const yaml_node_t* m, const char* key,
-               char* dst, size_t dst_cap) {
-    const char* v = yaml_scalar(yaml_find_key(d, m, key));
+               char* dst, size_t dst_cap, const char* path) {
+    const char* v = scalar_at(d, m, key, path);
     if (v == nullptr) return;
     std::strncpy(dst, v, dst_cap - 1);
     dst[dst_cap - 1] = '\0';
@@ -56,7 +80,7 @@ bool parse_duration_full(const char* v, double* seconds) {
 
 void apply_int(yaml_document_t* d, const yaml_node_t* m, const char* key, int* dst,
                const char* path) {
-    const char* v = yaml_scalar(yaml_find_key(d, m, key));
+    const char* v = scalar_at(d, m, key, path);
     if (v == nullptr) return;
     long n = 0;
     if (!parse_int_full(v, INT_MIN, INT_MAX, &n)) {
@@ -70,7 +94,7 @@ void apply_int(yaml_document_t* d, const yaml_node_t* m, const char* key, int* d
 // Whole seconds, with a unit or without (parse_duration_full).
 void apply_seconds(yaml_document_t* d, const yaml_node_t* m, const char* key, int* dst,
                    const char* path) {
-    const char* v = yaml_scalar(yaml_find_key(d, m, key));
+    const char* v = scalar_at(d, m, key, path);
     if (v == nullptr) return;
     double x = 0;
     if (!parse_duration_full(v, &x) || x != std::floor(x) || x < INT_MIN || x > INT_MAX) {
@@ -83,7 +107,7 @@ void apply_seconds(yaml_document_t* d, const yaml_node_t* m, const char* key, in
 
 void apply_double(yaml_document_t* d, const yaml_node_t* m, const char* key, double* dst,
                   const char* path) {
-    const char* v = yaml_scalar(yaml_find_key(d, m, key));
+    const char* v = scalar_at(d, m, key, path);
     if (v == nullptr) return;
     errno = 0;
     char* end = nullptr;
@@ -95,28 +119,54 @@ void apply_double(yaml_document_t* d, const yaml_node_t* m, const char* key, dou
     *dst = x;
 }
 
-void apply_bool(yaml_document_t* d, const yaml_node_t* m, const char* key, bool* dst) {
-    const char* v = yaml_scalar(yaml_find_key(d, m, key));
+// YAML's booleans in any case: true / yes / on, false / no / off (`True`
+// is what Python and Ansible write). Anything else is reported and the
+// default kept: `web.auth.enabled: True` used to leave the dashboard
+// without a password, without a word.
+void apply_bool(yaml_document_t* d, const yaml_node_t* m, const char* key, bool* dst,
+                const char* path) {
+    const char* v = scalar_at(d, m, key, path);
     if (v == nullptr) return;
-    if (std::strcmp(v, "true") == 0 || std::strcmp(v, "yes") == 0 || std::strcmp(v, "on") == 0)
+    if (::strcasecmp(v, "true") == 0 || ::strcasecmp(v, "yes") == 0 ||
+        ::strcasecmp(v, "on") == 0) {
         *dst = true;
-    else if (std::strcmp(v, "false") == 0 || std::strcmp(v, "no") == 0 || std::strcmp(v, "off") == 0)
+    } else if (::strcasecmp(v, "false") == 0 || ::strcasecmp(v, "no") == 0 ||
+               ::strcasecmp(v, "off") == 0) {
         *dst = false;
+    } else {
+        std::fprintf(stderr, "budyk config: %s: '%s' is not true or false; using %s\n",
+                     path, v, *dst ? "true" : "false");
+    }
 }
 
-// Walks a YAML sequence of scalars under `key` into dst. A non-sequence
-// node (or missing key) leaves dst untouched. Empty sequences clear dst
-// — useful for admins explicitly resetting an inherited allowlist.
+// A list of strings under `key` into dst, or one string as a list of one
+// (`allow: /usr/bin/systemctl` used to leave the exec allowlist empty,
+// and an empty one lets exec() run any absolute path). An empty list
+// clears dst: an admin's explicit reset. An item that is not a string is
+// reported and left out; a mapping is reported and dst kept.
 void apply_str_list(yaml_document_t* d, const yaml_node_t* m, const char* key,
-                    std::vector<std::string>* dst) {
+                    std::vector<std::string>* dst, const char* path) {
     const yaml_node_t* seq = yaml_find_key(d, m, key);
-    if (seq == nullptr || seq->type != YAML_SEQUENCE_NODE) return;
+    if (seq == nullptr || yaml_null(seq)) return;
+    if (const char* one = yaml_scalar(seq)) {
+        dst->assign(1, one);
+        return;
+    }
+    if (seq->type != YAML_SEQUENCE_NODE) {
+        std::fprintf(stderr, "budyk config: %s: a mapping where a list belongs; ignored\n", path);
+        return;
+    }
     dst->clear();
+    size_t index = 0;
     for (auto* item = seq->data.sequence.items.start;
-         item     != seq->data.sequence.items.top; ++item) {
+         item     != seq->data.sequence.items.top; ++item, ++index) {
         const yaml_node_t* n = yaml_document_get_node(d, *item);
         const char* s = yaml_scalar(n);
-        if (s != nullptr) dst->emplace_back(s);
+        if (s != nullptr) {
+            dst->emplace_back(s);
+        } else {
+            std::fprintf(stderr, "budyk config: %s[%zu]: not a string; left out\n", path, index);
+        }
     }
 }
 
@@ -128,22 +178,128 @@ void apply_alert_channels(yaml_document_t* d, const yaml_node_t* m,
     const yaml_node_t* seq = yaml_find_key(d, m, "channels");
     if (seq == nullptr || seq->type != YAML_SEQUENCE_NODE) return;
     dst->clear();
+    size_t index = 0;
     for (auto* item = seq->data.sequence.items.start;
-         item     != seq->data.sequence.items.top; ++item) {
+         item     != seq->data.sequence.items.top; ++item, ++index) {
         const yaml_node_t* n = yaml_document_get_node(d, *item);
-        if (n == nullptr || n->type != YAML_MAPPING_NODE) continue;
+        const std::string where = "alerts.channels[" + std::to_string(index) + "]";
+        if (n == nullptr || n->type != YAML_MAPPING_NODE) {
+            std::fprintf(stderr, "budyk config: %s: not a mapping; left out\n", where.c_str());
+            continue;
+        }
         Config::AlertChannelConfig ch;
-        const char* v = nullptr;
-        if ((v = yaml_scalar(yaml_find_key(d, n, "name")))  != nullptr) ch.name  = v;
-        if ((v = yaml_scalar(yaml_find_key(d, n, "type")))  != nullptr) ch.type  = v;
-        if ((v = yaml_scalar(yaml_find_key(d, n, "url")))   != nullptr) ch.url   = v;
-        if ((v = yaml_scalar(yaml_find_key(d, n, "topic"))) != nullptr) ch.topic = v;
-        if ((v = yaml_scalar(yaml_find_key(d, n, "token"))) != nullptr) ch.token = v;
-        if ((v = yaml_scalar(yaml_find_key(d, n, "from")))  != nullptr) ch.from  = v;
-        // A channel with no type is meaningless — silently drop it
-        // rather than register a no-op that confuses operators.
-        if (ch.type.empty()) continue;
+        const struct { const char* key; std::string* dst; } fields[] = {
+            {"name", &ch.name}, {"type", &ch.type}, {"url", &ch.url},
+            {"topic", &ch.topic}, {"token", &ch.token}, {"from", &ch.from},
+        };
+        for (const auto& f : fields) {
+            const std::string path = where + "." + f.key;
+            if (const char* v = scalar_at(d, n, f.key, path.c_str())) *f.dst = v;
+        }
+        // A channel with no type has nowhere to go: left out, and said so.
+        if (ch.type.empty()) {
+            std::fprintf(stderr,
+                "budyk config: %s (%s): no type (ntfy, discord, telegram, smtp, twilio); "
+                "left out\n", where.c_str(), ch.name.empty() ? "?" : ch.name.c_str());
+            continue;
+        }
         dst->emplace_back(std::move(ch));
+    }
+}
+
+// The keys the loader reads, section by section. A key it does not know
+// is reported, and so is one given twice (the first is the one read): a
+// typo such as `web.auth.enable: true` left the dashboard without a
+// password, without a word.
+struct KeySpec {
+    const char*    name;
+    const KeySpec* keys  = nullptr;   // a section's own keys; nullptr for a value
+    bool           items = false;     // a list whose items are sections of `keys`
+};
+
+const KeySpec kL1Keys[]         = {{"interval"}, {"metrics"}, {nullptr}};
+const KeySpec kThresholdKeys[]  = {{"load_1m"}, {"cpu_percent"}, {"swap_used_percent"},
+                                   {nullptr}};
+const KeySpec kL2Keys[]         = {{"interval"}, {"always_on"}, {"hysteresis"},
+                                   {"escalate_after"},
+                                   {"escalation_thresholds", kThresholdKeys},
+                                   {"metrics"}, {nullptr}};
+const KeySpec kL3Keys[]         = {{"interval"}, {"grace_period"}, {"metrics"}, {nullptr}};
+const KeySpec kLevelKeys[]      = {{"name"}, {"interval"}, {"priority"}, {"when"}, {"hold"},
+                                   {"storage_mb"}, {"metrics"}, {nullptr}};
+const KeySpec kHotBufferKeys[]  = {{"capacity"}, {"warm_grace"}, {nullptr}};
+const KeySpec kCollectionKeys[] = {{"mode"}, {"l1", kL1Keys}, {"l2", kL2Keys},
+                                   {"l3", kL3Keys}, {"levels", kLevelKeys, true},
+                                   {"hot_buffer", kHotBufferKeys}, {nullptr}};
+const KeySpec kStorageKeys[]    = {{"tier1_max_mb"}, {"tier2_max_mb"}, {"tier3_max_mb"},
+                                   {nullptr}};
+const KeySpec kGateKeys[]       = {{"enabled"}, {"allow"}, {nullptr}};
+const KeySpec kLimitKeys[]      = {{"instructions"}, {"memory_mb"}, {nullptr}};
+const KeySpec kRulesKeys[]      = {{"path"}, {"enable_exec"}, {"persist_state"},
+                                   {"state_path"}, {"exec", kGateKeys},
+                                   {"freeze", kGateKeys}, {"limits", kLimitKeys},
+                                   {nullptr}};
+const KeySpec kChannelKeys[]    = {{"name"}, {"type"}, {"url"}, {"topic"}, {"token"},
+                                   {"from"}, {nullptr}};
+const KeySpec kAlertsKeys[]     = {{"channels", kChannelKeys, true}, {nullptr}};
+const KeySpec kFileWatchKeys[]  = {{"enabled"}, {"paths"}, {nullptr}};
+const KeySpec kSecurityKeys[]   = {{"file_watch", kFileWatchKeys}, {nullptr}};
+const KeySpec kAuthKeys[]       = {{"enabled"}, {"password_hash"}, {"persist_sessions"},
+                                   {"max_login_failures"}, {"login_window"}, {nullptr}};
+const KeySpec kWebKeys[]        = {{"allowed_hosts"}, {"auth", kAuthKeys}, {nullptr}};
+const KeySpec kRootKeys[]       = {{"listen"}, {"port"}, {"data_dir"},
+                                   {"collection", kCollectionKeys},
+                                   {"storage", kStorageKeys}, {"rules", kRulesKeys},
+                                   {"alerts", kAlertsKeys}, {"security", kSecurityKeys},
+                                   {"web", kWebKeys}, {nullptr}};
+
+void check_keys(yaml_document_t* d, const yaml_node_t* m, const std::string& where,
+                const KeySpec* spec) {
+    const auto full = [&](const char* key) {
+        return where.empty() ? std::string(key) : where + "." + key;
+    };
+    for (auto* pair = m->data.mapping.pairs.start; pair != m->data.mapping.pairs.top; ++pair) {
+        const char* key = yaml_scalar(yaml_document_get_node(d, pair->key));
+        if (key == nullptr) {
+            std::fprintf(stderr, "budyk config: %s: a key that is not a name; ignored\n",
+                         where.empty() ? "(top level)" : where.c_str());
+            continue;
+        }
+        const KeySpec* k = spec;
+        while (k->name != nullptr && std::strcmp(k->name, key) != 0) ++k;
+        if (k->name == nullptr) {
+            std::fprintf(stderr, "budyk config: %s: unknown key; ignored\n", full(key).c_str());
+            continue;
+        }
+        for (auto* prev = m->data.mapping.pairs.start; prev != pair; ++prev) {
+            const char* pk = yaml_scalar(yaml_document_get_node(d, prev->key));
+            if (pk != nullptr && std::strcmp(pk, key) == 0) {
+                std::fprintf(stderr, "budyk config: %s: given twice; the first is read\n",
+                             full(key).c_str());
+                break;
+            }
+        }
+        const yaml_node_t* v = yaml_document_get_node(d, pair->value);
+        if (k->keys == nullptr || v == nullptr || yaml_null(v)) continue;
+        if (k->items) {
+            if (v->type != YAML_SEQUENCE_NODE) {
+                std::fprintf(stderr, "budyk config: %s: not a list; ignored\n", full(key).c_str());
+                continue;
+            }
+            size_t index = 0;
+            for (auto* item = v->data.sequence.items.start;
+                 item     != v->data.sequence.items.top; ++item, ++index) {
+                const yaml_node_t* n = yaml_document_get_node(d, *item);
+                if (n != nullptr && n->type == YAML_MAPPING_NODE) {   // others: reported where read
+                    check_keys(d, n, full(key) + "[" + std::to_string(index) + "]", k->keys);
+                }
+            }
+        } else if (v->type == YAML_MAPPING_NODE) {
+            check_keys(d, v, full(key), k->keys);
+        } else {
+            std::fprintf(stderr, "budyk config: %s: not a mapping of settings; ignored\n",
+                         full(key).c_str());
+        }
     }
 }
 
@@ -334,7 +490,7 @@ void apply_collection(yaml_document_t* d, const yaml_node_t* col, Config* out) {
 
     if (auto* l2 = yaml_find_key(d, col, "l2")) {
         apply_seconds(d, l2, "interval",   &out->scheduler.l2_interval_sec, "collection.l2.interval");
-        apply_bool   (d, l2, "always_on",  &out->scheduler.l2_always_on);
+        apply_bool   (d, l2, "always_on",  &out->scheduler.l2_always_on, "collection.l2.always_on");
         apply_seconds(d, l2, "hysteresis", &out->scheduler.hysteresis_sec, "collection.l2.hysteresis");
         apply_seconds(d, l2, "escalate_after", &out->scheduler.escalate_after_sec,
                       "collection.l2.escalate_after");
@@ -363,19 +519,50 @@ void apply_collection(yaml_document_t* d, const yaml_node_t* col, Config* out) {
     }
 }
 
-int parse_document(yaml_parser_t* parser, Config* out) {
-    yaml_document_t doc;
-    if (!yaml_parser_load(parser, &doc)) return -3;
+// libyaml's reason, where (line and column from 1) and what it was in the
+// middle of: "found unexpected end of stream at line 3, column 1 (while
+// scanning a quoted scalar from line 2)". It prints nothing itself: the
+// error used to be "YAML parse error" alone.
+std::string yaml_problem(const yaml_parser_t* p) {
+    std::string out = p->problem != nullptr ? p->problem : "not YAML";
+    char at[96];
+    std::snprintf(at, sizeof(at), " at line %zu, column %zu",
+                  p->problem_mark.line + 1, p->problem_mark.column + 1);
+    out += at;
+    if (p->context != nullptr) {
+        std::snprintf(at, sizeof(at), " from line %zu)", p->context_mark.line + 1);
+        out += " (";
+        out += p->context;
+        out += at;
+    }
+    return out;
+}
 
+int parse_document(yaml_parser_t* parser, Config* out, std::string* error) {
+    yaml_document_t doc;
+    if (!yaml_parser_load(parser, &doc)) {
+        if (error != nullptr) *error = yaml_problem(parser);
+        return -3;
+    }
+
+    // An empty file, or one of comments only, holds no settings: the
+    // defaults, as for keys left out (it was refused as a parse error).
     const yaml_node_t* root = yaml_document_get_root_node(&doc);
-    if (root == nullptr || root->type != YAML_MAPPING_NODE) {
+    if (root == nullptr || yaml_null(root)) {
+        yaml_document_delete(&doc);
+        clamp_numbers(out);
+        return 0;
+    }
+    if (root->type != YAML_MAPPING_NODE) {
+        if (error != nullptr) *error = "the top level is not a mapping of settings (key: value)";
         yaml_document_delete(&doc);
         return -4;
     }
+    check_keys(&doc, root, "", kRootKeys);
 
-    apply_str(&doc, root, "listen",   out->listen_addr, sizeof(out->listen_addr));
+    apply_str(&doc, root, "listen",   out->listen_addr, sizeof(out->listen_addr), "listen");
     apply_int(&doc, root, "port",    &out->listen_port, "port");
-    apply_str(&doc, root, "data_dir", out->data_dir,    sizeof(out->data_dir));
+    apply_str(&doc, root, "data_dir", out->data_dir,    sizeof(out->data_dir), "data_dir");
 
     apply_collection(&doc, yaml_find_key(&doc, root, "collection"), out);
 
@@ -386,11 +573,13 @@ int parse_document(yaml_parser_t* parser, Config* out) {
     }
 
     if (auto* rules = yaml_find_key(&doc, root, "rules")) {
-        apply_str (&doc, rules, "path",          out->rules_path, sizeof(out->rules_path));
-        apply_bool(&doc, rules, "enable_exec",   &out->rules_enable_exec);  // legacy flat key
-        apply_bool(&doc, rules, "persist_state", &out->rules_persist_state);
+        apply_str (&doc, rules, "path",          out->rules_path, sizeof(out->rules_path),
+                   "rules.path");
+        apply_bool(&doc, rules, "enable_exec",   &out->rules_enable_exec,     // legacy flat key
+                   "rules.enable_exec");
+        apply_bool(&doc, rules, "persist_state", &out->rules_persist_state, "rules.persist_state");
         apply_str (&doc, rules, "state_path",    out->rules_state_path,
-                   sizeof(out->rules_state_path));
+                   sizeof(out->rules_state_path), "rules.state_path");
 
         // Nested `rules.exec` block — preferred spelling. Its `enabled`
         // also maps to rules_enable_exec, so either syntax works:
@@ -403,15 +592,15 @@ int parse_document(yaml_parser_t* parser, Config* out) {
         //         - /usr/local/bin/alerter
         //         - /usr/bin/systemctl
         if (auto* exec = yaml_find_key(&doc, rules, "exec")) {
-            apply_bool    (&doc, exec, "enabled", &out->rules_enable_exec);
-            apply_str_list(&doc, exec, "allow",   &out->rules_exec_allow);
+            apply_bool    (&doc, exec, "enabled", &out->rules_enable_exec, "rules.exec.enabled");
+            apply_str_list(&doc, exec, "allow",   &out->rules_exec_allow, "rules.exec.allow");
         }
 
         // Nested `rules.freeze` block — gate + allowlist for
         // freeze() / unfreeze(). Format mirrors rules.exec.
         if (auto* fr = yaml_find_key(&doc, rules, "freeze")) {
-            apply_bool    (&doc, fr, "enabled", &out->rules_enable_freeze);
-            apply_str_list(&doc, fr, "allow",   &out->rules_freeze_allow);
+            apply_bool    (&doc, fr, "enabled", &out->rules_enable_freeze, "rules.freeze.enabled");
+            apply_str_list(&doc, fr, "allow",   &out->rules_freeze_allow, "rules.freeze.allow");
         }
 
         // Nested `rules.limits` block — how much a single call into Lua
@@ -431,24 +620,26 @@ int parse_document(yaml_parser_t* parser, Config* out) {
     // `files` global so tamper-detection rules can fire.
     if (auto* sec = yaml_find_key(&doc, root, "security")) {
         if (auto* fw = yaml_find_key(&doc, sec, "file_watch")) {
-            apply_bool    (&doc, fw, "enabled", &out->file_watch_enabled);
-            apply_str_list(&doc, fw, "paths",   &out->file_watch_paths);
+            apply_bool    (&doc, fw, "enabled", &out->file_watch_enabled,
+                           "security.file_watch.enabled");
+            apply_str_list(&doc, fw, "paths",   &out->file_watch_paths,
+                           "security.file_watch.paths");
         }
     }
 
     if (auto* web = yaml_find_key(&doc, root, "web")) {
         if (auto* auth = yaml_find_key(&doc, web, "auth")) {
-            apply_bool(&doc, auth, "enabled", &out->auth_enabled);
+            apply_bool(&doc, auth, "enabled", &out->auth_enabled, "web.auth.enabled");
             apply_str (&doc, auth, "password_hash",
-                       out->password_hash, sizeof(out->password_hash));
+                       out->password_hash, sizeof(out->password_hash), "web.auth.password_hash");
             apply_bool(&doc, auth, "persist_sessions",
-                       &out->auth_persist_sessions);
+                       &out->auth_persist_sessions, "web.auth.persist_sessions");
             apply_int    (&doc, auth, "max_login_failures", &out->auth_max_login_failures,
                           "web.auth.max_login_failures");
             apply_seconds(&doc, auth, "login_window",       &out->auth_login_window_sec,
                           "web.auth.login_window");
         }
-        apply_str_list(&doc, web, "allowed_hosts", &out->web_allowed_hosts);
+        apply_str_list(&doc, web, "allowed_hosts", &out->web_allowed_hosts, "web.allowed_hosts");
     }
 
     yaml_document_delete(&doc);
@@ -474,21 +665,24 @@ int config_load(const char* path, Config* out, std::string* error) {
     yaml_parser_t parser;
     yaml_parser_initialize(&parser);
     yaml_parser_set_input_file(&parser, f);
-    int rc = parse_document(&parser, out);
+    int rc = parse_document(&parser, out, error);
     yaml_parser_delete(&parser);
     std::fclose(f);
-    if (rc != 0 && error != nullptr) *error = "YAML parse error";
     return rc;
 }
 
-int config_load_string(const char* yaml, Config* out) {
-    if (yaml == nullptr || out == nullptr) return -1;
+int config_load_string(const char* yaml, Config* out, std::string* error) {
+    if (error != nullptr) error->clear();
+    if (yaml == nullptr || out == nullptr) {
+        if (error != nullptr) *error = "no text or no output";
+        return -1;
+    }
 
     yaml_parser_t parser;
     yaml_parser_initialize(&parser);
     yaml_parser_set_input_string(&parser,
         reinterpret_cast<const unsigned char*>(yaml), std::strlen(yaml));
-    int rc = parse_document(&parser, out);
+    int rc = parse_document(&parser, out, error);
     yaml_parser_delete(&parser);
     return rc;
 }
