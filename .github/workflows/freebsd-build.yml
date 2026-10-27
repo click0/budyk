@@ -134,6 +134,7 @@ jobs:
             tests/smoke/resources.sh build-static/src/budyk
             tests/smoke/crosscheck.sh build-static/src/budyk
             tests/smoke/swap_devices.sh build-static/src/budyk
+            tests/smoke/net_totals.sh build-static/src/budyk
             echo "::endgroup::"
 
             if [ -e budyk-cross ]; then

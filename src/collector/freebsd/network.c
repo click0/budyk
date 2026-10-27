@@ -7,13 +7,17 @@
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/sockio.h>
+#include <sys/sysctl.h>
 
 #include <ifaddrs.h>
 #include <net/if.h>
+#include <net/if_dl.h>
+#include <net/if_mib.h>
 #include <net/if_types.h>
 #include <unistd.h>
 
 #include <errno.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -29,22 +33,41 @@ int budyk_collect_network_freebsd(budyk_net_ctx_c* ctx, budyk_sample_c* s) {
     return budyk_collect_network_freebsd_ex(ctx, s, NULL);
 }
 
-/* A device's interface (em0, vtnet0, a renamed lan0) is Ethernet or
- * 802.11 and not one a cloner made: the bridge, lagg, vlan, tun, gif
- * and wg types are not, and an epair, tap or vxlan is Ethernet but its
- * driver (the letters before the unit) is a cloner's. wlan is a cloner
- * too, but its traffic is the radio's. */
-int budyk_freebsd_iface_physical(const char* name, unsigned int type,
+/* A device's interface (em0, vtnet0) is Ethernet or 802.11 and not one
+ * a cloner made: the bridge, lagg, vlan, tun, gif and wg types are not,
+ * and an epair, tap or vxlan is Ethernet but its driver (the letters
+ * before the unit) is a cloner's, as is ng_eiface's ngeth, which
+ * netgraph makes. wlan is a cloner too, but its traffic is the radio's.
+ * `driver` is the kernel's name for it, which a rename leaves: jib and
+ * Bastille rename a jail's epair0a to e0a_<jail>, iocage to vnet0.<jid>,
+ * and lan0 may be em0. */
+int budyk_freebsd_iface_physical(const char* driver, unsigned int type,
                                  const char* cloners, uint32_t ncloners) {
     if (type != IFT_ETHER && type != IFT_IEEE80211) return 0;
     size_t n = 0;
-    while (name[n] >= 'a' && name[n] <= 'z') ++n;
-    if (n == 4 && strncmp(name, "wlan", 4) == 0) return 1;
+    while (driver[n] >= 'a' && driver[n] <= 'z') ++n;
+    if (n == 4 && strncmp(driver, "wlan", 4) == 0) return 1;
+    if (n == 5 && strncmp(driver, "ngeth", 5) == 0) return 0;
     for (uint32_t i = 0; i < ncloners; ++i) {
         const char* c = cloners + (size_t)i * IFNAMSIZ;
-        if (strnlen(c, IFNAMSIZ) == n && strncmp(c, name, n) == 0) return 0;
+        if (strnlen(c, IFNAMSIZ) == n && strncmp(c, driver, n) == 0) return 0;
     }
     return 1;
+}
+
+/* The driver and unit of the interface of `ifa` ("epair3" for a
+ * renamed e0a_web), as ifconfig -D shows it, into buf; its own name
+ * when that cannot be read. */
+static const char* iface_driver(const struct ifaddrs* ifa, char* buf, size_t cap) {
+    unsigned short index = 0;
+    memcpy(&index, (const char*)ifa->ifa_addr + offsetof(struct sockaddr_dl, sdl_index),
+           sizeof(index));
+    int mib[6] = { CTL_NET, PF_LINK, NETLINK_GENERIC, IFMIB_IFDATA, (int)index,
+                   IFDATA_DRIVERNAME };
+    size_t len = cap;
+    if (index == 0 || sysctl(mib, 6, buf, &len, NULL, 0) != 0 || len == 0) return ifa->ifa_name;
+    buf[len < cap ? len : cap - 1] = '\0';
+    return buf;
 }
 
 /* The kernel's interface cloners (ifconfig -C), IFNAMSIZ bytes each; 0
@@ -101,7 +124,9 @@ int budyk_collect_network_freebsd_ex(budyk_net_ctx_c* ctx, budyk_sample_c* s, bu
                           (uint64_t)id->ifi_ibytes, (uint64_t)id->ifi_obytes, &rx, &tx);
         rx_moved += rx;
         tx_moved += tx;
-        if (budyk_freebsd_iface_physical(ifa->ifa_name, id->ifi_type, cloners, ncloners)) {
+        char driver[64];
+        if (budyk_freebsd_iface_physical(iface_driver(ifa, driver, sizeof(driver)), id->ifi_type,
+                                         cloners, ncloners)) {
             rx_physical += rx;
             tx_physical += tx;
             ++physical;

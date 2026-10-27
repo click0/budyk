@@ -67,6 +67,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rules". The daemon ran without rules without a word.
 - `cmake --install` puts the man page in `share/man/man8` (it was
   `man/man8`).
+- **FreeBSD: a jail's renamed epair counted in the network totals.**
+  Whether an interface is a device's was told from its name, and jib(8)
+  and Bastille rename a jail's `epair0a` to `e0a_<jail>`, iocage to
+  `vnet0.<jid>`: those counted, and each jail's traffic was in the totals
+  twice. The kernel's driver name (`ifconfig -D`), which a rename
+  leaves, decides now, and netgraph's `ngeth` is not a device's either.
+  `tests/smoke/net_totals.sh` runs on FreeBSD too: a ping flood over an
+  epair named as jib names it, into a VNET jail.
+- The "300 disks: disk.devices lists the first 256" line was logged
+  again each time the level rose (L1 reads no lists, L2 and L3 do: each
+  client, each escalation). A level that does not read a list leaves
+  what was found for it.
 
 ## [0.8.3] — 2026-10-26
 
