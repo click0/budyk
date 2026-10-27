@@ -19,6 +19,53 @@ PID=
 trap 'kill "$PID" 2>/dev/null || true; rm -rf "$DIR"' EXIT
 
 HASH=$(printf 'smoke-pass\n' | "$BIN" hash-password 2>/dev/null)
+
+# Ctrl-C (SIGINT) at hash-password's prompt (on a terminal: a pty here)
+# leaves the terminal echoing again; it was left with echo off. The pty
+# is not the child's controlling terminal (FreeBSD revokes that when the
+# child exits), so the SIGINT is sent, not typed; its output is read as a
+# terminal's would be (FreeBSD's TCSAFLUSH waits for that). Under TSan the
+# handler runs late and the read ends first (EINTR: an empty password,
+# exit 1): either way the terminal must echo again.
+python3 - "$BIN" > "$DIR/pty.out" 2>&1 <<'EOF' || { echo "FAIL: $(cat "$DIR/pty.out")"; exit 1; }
+import os, pty, select, signal, sys, termios, time
+master, slave = pty.openpty()
+pid = os.fork()
+if pid == 0:
+    signal.signal(signal.SIGINT, signal.SIG_DFL)    # whatever the CI shell left
+    for f in (0, 1, 2):
+        os.dup2(slave, f)
+    os.execv(sys.argv[1], [sys.argv[1], "hash-password"])
+def drain():
+    while select.select([master], [], [], 0)[0]:
+        try:
+            os.read(master, 4096)
+        except OSError:
+            return
+echo = lambda: termios.tcgetattr(slave)[3] & termios.ECHO
+deadline = time.time() + 5
+while echo() and time.time() < deadline:
+    drain()                                # until the prompt turns echo off
+    time.sleep(0.05)
+if echo():
+    sys.exit("the password prompt did not turn echo off")
+os.kill(pid, signal.SIGINT)
+deadline = time.time() + 5
+while time.time() < deadline:
+    drain()
+    done, status = os.waitpid(pid, os.WNOHANG)
+    if done:
+        break
+    time.sleep(0.05)
+else:
+    os.kill(pid, signal.SIGKILL)
+    sys.exit("hash-password went on after SIGINT")
+if os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0:
+    sys.exit("hash-password exited 0 after SIGINT")
+if not echo():
+    sys.exit("Ctrl-C at the password prompt left the terminal without echo")
+EOF
+echo "ok   Ctrl-C at the password prompt gives the terminal its echo back"
 cat > "$DIR/config.yaml" <<EOF
 data_dir: $DIR/data
 listen: 127.0.0.1

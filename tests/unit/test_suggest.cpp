@@ -6,6 +6,7 @@
 #include <cassert>
 #include <cstdio>
 #include <string>
+#include <vector>
 
 using namespace budyk;
 
@@ -187,6 +188,31 @@ int main() {
         assert(contains(doc, "disk_write_high"));
         assert(contains(doc, "net_rx_high"));
         assert(contains(doc, "net_tx_high"));
+    }
+
+    // 16. merge_l2_l1: each stretch once. L1 interval 300 s; an L2 stretch
+    //     at 30-90 s; the raw L1 tick at 330 s after it (it was dropped:
+    //     an L2 record within 300 s before it), a folded L1 record at 90 s
+    //     (the stretch again: dropped), one at 1000 s whose L2 records are
+    //     gone (kept), one at 2000 s with an L2 record at exactly 1700 s,
+    //     outside its window (1700, 2000] (kept).
+    {
+        const uint64_t s = 1000000000ULL;
+        auto rec = [&](uint64_t t, bool folded) {
+            Sample x{};
+            x.timestamp_nanos = t * s;
+            x.folded = folded;
+            return x;
+        };
+        std::vector<Sample> l2 = {rec(90, false), rec(30, false), rec(60, false),
+                                  rec(1700, false)};
+        std::vector<Sample> l1 = {rec(330, false), rec(0, false), rec(90, true),
+                                  rec(2000, true), rec(1000, true)};
+        const std::vector<Sample> m = merge_l2_l1(l2, l1, 300 * s);
+        const uint64_t want[] = {0, 30, 60, 90, 330, 1000, 1700, 2000};
+        assert(m.size() == sizeof(want) / sizeof(want[0]));
+        for (size_t i = 0; i < m.size(); ++i) assert(m[i].timestamp_nanos == want[i] * s);
+        assert(!m[3].folded);   // the L2 record at 90 s, not the folded L1 one
     }
 
     std::printf("test_suggest: PASS\n");

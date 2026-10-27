@@ -4,17 +4,22 @@
 #include "core/json_text.h"
 
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <strings.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <cerrno>
 #include <climits>
+#include <clocale>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cwchar>
 #include <string>
 #include <vector>
 
@@ -55,11 +60,40 @@ std::string http_error(int rc) {
     return out;
 }
 
+// A request is bounded: a daemon stopped (SIGSTOP), a host that does not
+// answer, a network cut held the TUI in connect() or recv(), `q` unread.
+// The bound is on a wait with no progress, not on the whole request: a
+// big reply over a slow link takes as long as it takes. It is longer than
+// the daemon's own bound on a connection (5 s, HttpServer's I/O timeout),
+// since its one HTTP thread may give that whole to an idle client queued
+// ahead of the TUI (a browser's preconnect, a probe).
+constexpr int64_t kHttpIdleMs = 8000;
+
+int64_t monotonic_ms() {
+    struct timespec ts{};
+    ::clock_gettime(CLOCK_MONOTONIC, &ts);
+    return static_cast<int64_t>(ts.tv_sec) * 1000 + ts.tv_nsec / 1000000;
+}
+
+// Until `fd` is ready for `events` or the deadline (monotonic_ms())
+// passes: true if ready, else false with errno ETIMEDOUT.
+bool wait_ready(int fd, short events, int64_t deadline_ms) {
+    while (true) {
+        const int64_t left = deadline_ms - monotonic_ms();
+        if (left <= 0) { errno = ETIMEDOUT; return false; }
+        struct pollfd p{fd, events, 0};
+        const int r = ::poll(&p, 1, static_cast<int>(left));
+        if (r > 0) return true;
+        if (r < 0 && errno != EINTR) return false;
+    }
+}
+
 int http_request(const char* host, int port, const char* method,
                  const char* path, const std::string& extra_headers,
                  const std::string& body, tui_detail::HttpReply* reply) {
     g_http_errno = 0;
-    int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    int64_t deadline = monotonic_ms() + kHttpIdleMs;   // moved on by progress
+    int fd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
     if (fd < 0) { g_http_errno = errno; return -1; }
 
     sockaddr_in sa{};
@@ -67,9 +101,18 @@ int http_request(const char* host, int port, const char* method,
     sa.sin_port   = htons(static_cast<uint16_t>(port));
     if (::inet_pton(AF_INET, host, &sa.sin_addr) != 1) { ::close(fd); return -2; }
     if (::connect(fd, reinterpret_cast<sockaddr*>(&sa), sizeof(sa)) != 0) {
-        g_http_errno = errno;
-        ::close(fd);
-        return -3;
+        int err = errno;
+        if (err == EINPROGRESS && wait_ready(fd, POLLOUT, deadline)) {
+            socklen_t len = sizeof(err);
+            if (::getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len) != 0) err = errno;
+        } else if (err == EINPROGRESS) {
+            err = errno;
+        }
+        if (err != 0) {
+            g_http_errno = err;
+            ::close(fd);
+            return -3;
+        }
     }
 
     std::string req = std::string(method) + " " + path + " HTTP/1.1\r\n";
@@ -85,17 +128,33 @@ int http_request(const char* host, int port, const char* method,
     size_t sent = 0;
     while (sent < req.size()) {
         const ssize_t n = ::send(fd, req.data() + sent, req.size() - sent, MSG_NOSIGNAL);
-        if (n < 0) { if (errno == EINTR) continue; g_http_errno = errno; ::close(fd); return -4; }
-        sent += static_cast<size_t>(n);
+        if (n >= 0) {
+            sent += static_cast<size_t>(n);
+            deadline = monotonic_ms() + kHttpIdleMs;
+            continue;
+        }
+        if (errno == EINTR) continue;
+        if ((errno == EAGAIN || errno == EWOULDBLOCK) && wait_ready(fd, POLLOUT, deadline)) continue;
+        g_http_errno = errno;
+        ::close(fd);
+        return -4;
     }
 
     std::string raw;
     char buf[4096];
     while (true) {
         ssize_t r = ::recv(fd, buf, sizeof(buf), 0);
-        if (r < 0) { if (errno == EINTR) continue; g_http_errno = errno; ::close(fd); return -5; }
         if (r == 0) break;
-        raw.append(buf, static_cast<size_t>(r));
+        if (r > 0) {
+            raw.append(buf, static_cast<size_t>(r));
+            deadline = monotonic_ms() + kHttpIdleMs;
+            continue;
+        }
+        if (errno == EINTR) continue;
+        if ((errno == EAGAIN || errno == EWOULDBLOCK) && wait_ready(fd, POLLIN, deadline)) continue;
+        g_http_errno = errno;
+        ::close(fd);
+        return -5;
     }
     ::close(fd);
     return tui_detail::parse_http_reply(raw, reply) ? 0 : -6;
@@ -103,18 +162,18 @@ int http_request(const char* host, int port, const char* method,
 
 // POST /api/auth/login; on success *cookie becomes "budyk_session=<token>".
 // Returns the HTTP status (200 = logged in; 401 wrong password; 429
-// throttled after too many failures), or -1 when the daemon can't be
-// reached or sent no cookie.
+// throttled after too many failures), 0 for a 200 with no cookie, or
+// http_request's negative code when the daemon can't be reached (a
+// timeout was reported as a wrong password).
 int login(const char* host, int port, const std::string& password,
           std::string* cookie) {
     tui_detail::HttpReply r;
     const std::string body = "{\"password\":" + tui_detail::json_quote(password) + "}";
-    if (http_request(host, port, "POST", "/api/auth/login", "", body, &r) != 0) {
-        return -1;
-    }
+    const int rc = http_request(host, port, "POST", "/api/auth/login", "", body, &r);
+    if (rc != 0) return rc;
     if (r.status != 200) return r.status;
     *cookie = tui_detail::session_cookie(r.headers);
-    return cookie->empty() ? -1 : 200;
+    return cookie->empty() ? 0 : 200;
 }
 
 // --- formatting helpers ------------------------------------------------------
@@ -339,6 +398,39 @@ std::vector<ProcessRow> parse_processes(const std::string& body) {
     return out;
 }
 
+std::string fit_columns(const std::string& s, int width) {
+    std::string out;
+    int cols = 0;
+    std::mbstate_t st{};
+    size_t i = 0;
+    while (i < s.size()) {
+        wchar_t wc = 0;
+        const size_t n = std::mbrtowc(&wc, s.data() + i, s.size() - i, &st);
+        size_t take = 1;
+        int    w    = 1;
+        bool   ok   = false;
+        if (n == static_cast<size_t>(-1) || n == static_cast<size_t>(-2) || n == 0) {
+            st = std::mbstate_t{};                     // not a character here: '?'
+        } else {
+            const int cw = (::wcwidth)(wc);   // the function: FreeBSD's macro takes an int
+            take = n;
+            ok   = cw >= 0;                            // a control character: '?'
+            w    = ok ? cw : 1;
+        }
+        if (cols + w > width) break;
+        if (ok) out.append(s, i, take);
+        else    out.push_back('?');
+        cols += w;
+        i    += take;
+    }
+    if (cols < width) out.append(static_cast<size_t>(width - cols), ' ');
+    return out;
+}
+
+bool has_sample(const std::string& body) {
+    return body.find("{\"ts\":") != std::string::npos;
+}
+
 std::string health_hostname(const std::string& body) {
     const std::string key = "\"hostname\":\"";
     const size_t at = body.find(key);
@@ -401,9 +493,20 @@ int tui_run(const char* host, int port, std::string (*ask_password)()) {
                              host, port);
                 return -1;
             }
-            if (st != 200) {
-                std::fprintf(stderr, "budyk tui: login to %s:%d failed (wrong password?)\n",
+            if (st < 0) {
+                std::fprintf(stderr, "budyk tui: login to %s:%d: %s\n", host, port,
+                             http_error(st).c_str());
+                return -1;
+            }
+            if (st == 401) {
+                std::fprintf(stderr, "budyk tui: login to %s:%d failed: wrong password\n",
                              host, port);
+                return -1;
+            }
+            if (st != 200) {
+                std::fprintf(stderr, "budyk tui: login to %s:%d failed: %s\n", host, port,
+                             st == 0 ? "no session cookie in the reply"
+                                     : ("HTTP " + std::to_string(st)).c_str());
                 return -1;
             }
             cookie_header = "Cookie: " + cookie + "\r\n";
@@ -433,6 +536,9 @@ int tui_run(const char* host, int port, std::string (*ask_password)()) {
     }
 
     // --- ncurses init --------------------------------------------------------
+    // The locale's character set (UTF-8): names are drawn as characters,
+    // not as their bytes.
+    std::setlocale(LC_ALL, "");
     ::initscr();
     ::cbreak();
     ::noecho();
@@ -466,6 +572,10 @@ int tui_run(const char* host, int port, std::string (*ask_password)()) {
             // Say what the server said instead of drawing zeros.
             ::mvprintw(2, 0, "server returned HTTP %d%s — retrying in 1s", r.status,
                        r.status == 401 ? " (login required or expired)" : "");
+        } else if (!tui_detail::has_sample(r.body)) {
+            // No sample yet (the daemon just started, or the hot buffer
+            // was emptied): it was drawn as zeros, memory at 100 %.
+            ::mvprintw(2, 0, "waiting for the first sample");
         } else {
             using tui_detail::sample_number;
             const std::string& b = r.body;
@@ -557,8 +667,11 @@ int tui_run(const char* host, int port, std::string (*ask_password)()) {
                 ::mvprintw(16, 0, "%-24s %8s %2s %7s %9s", "process", "pid", "", "CPU", "RSS");
                 for (size_t k = 0; k < top.size() && 17 + static_cast<int>(k) < LINES - 1; ++k) {
                     const auto& p = top[k];
-                    ::mvprintw(17 + static_cast<int>(k), 0, "%-24.24s %8ld %2.2s %6.1f%% %9s",
-                               p.name.c_str(), p.pid, p.state.c_str(), p.cpu_percent,
+                    // 24 columns, not 24 bytes: "%-24.24s" cut a UTF-8
+                    // name inside a character and shifted the columns.
+                    ::mvprintw(17 + static_cast<int>(k), 0, "%s %8ld %2.2s %6.1f%% %9s",
+                               tui_detail::fit_columns(p.name, 24).c_str(), p.pid,
+                               p.state.c_str(), p.cpu_percent,
                                fmt_bytes(static_cast<uint64_t>(p.rss_bytes)).c_str());
                 }
             }

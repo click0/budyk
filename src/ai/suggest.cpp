@@ -4,6 +4,7 @@
 #include "ai/baseline.h"
 #include "core/sample.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <sstream>
@@ -204,6 +205,28 @@ std::string suggest_rules_for_samples(const Sample* s, size_t n) {
     os << suggest_rule_net_rx_bytes_per_sec    (compute_net_rx_bytes_per_sec_stats    (s, n));
     os << suggest_rule_net_tx_bytes_per_sec    (compute_net_tx_bytes_per_sec_stats    (s, n));
     return os.str();
+}
+
+std::vector<Sample> merge_l2_l1(std::vector<Sample> l2, const std::vector<Sample>& l1,
+                                uint64_t l1_ns) {
+    const auto by_time = [](const Sample& a, const Sample& b) {
+        return a.timestamp_nanos < b.timestamp_nanos;
+    };
+    std::sort(l2.begin(), l2.end(), by_time);
+    std::vector<Sample> out = l2;
+    for (const auto& r : l1) {
+        if (r.folded) {
+            // The window (lo, hi], as TierAggregator folds it.
+            const uint64_t hi = r.timestamp_nanos;
+            const uint64_t lo = hi > l1_ns ? hi - l1_ns : 0;
+            const auto it = std::upper_bound(l2.begin(), l2.end(), lo,
+                [](uint64_t t, const Sample& s) { return t < s.timestamp_nanos; });
+            if (it != l2.end() && it->timestamp_nanos <= hi) continue;
+        }
+        out.push_back(r);
+    }
+    std::sort(out.begin(), out.end(), by_time);
+    return out;
 }
 
 } // namespace budyk

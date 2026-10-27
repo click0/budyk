@@ -14,8 +14,10 @@
 #include "tui/tui.h"
 #include "web/auth.h"
 
+#include <algorithm>
 #include <cerrno>
 #include <climits>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -31,30 +33,32 @@ namespace budyk {
 namespace {
 
 // Parse "<num><unit>" duration strings (s / m / h / d) → ns. Returns 0
-// on bad input. Caps at one year so a 0-padded uint64 multiplication
-// can't overflow.
+// on bad input or more than a year. The number is read whole and in
+// range (parse_int_full): strtol() and a multiplication that wrapped took
+// 213503982334602d for about 17 hours.
 uint64_t parse_window_ns(const char* s) {
     if (s == nullptr || *s == '\0') return 0;
-    char* end = nullptr;
-    long n = std::strtol(s, &end, 10);
-    if (n <= 0 || end == s || *end == '\0' || *(end + 1) != '\0') return 0;
-    uint64_t mult = 0;
-    switch (*end) {
-        case 's': mult = 1000000000ULL;          break;
-        case 'm': mult = 60ULL * 1000000000ULL;  break;
-        case 'h': mult = 3600ULL * 1000000000ULL; break;
-        case 'd': mult = 86400ULL * 1000000000ULL; break;
+    const size_t len = std::strlen(s);
+    uint64_t unit_s = 0;
+    switch (s[len - 1]) {
+        case 's': unit_s = 1;     break;
+        case 'm': unit_s = 60;    break;
+        case 'h': unit_s = 3600;  break;
+        case 'd': unit_s = 86400; break;
         default: return 0;
     }
     constexpr uint64_t kMaxSec = 366ULL * 86400ULL;
-    if (static_cast<uint64_t>(n) * (mult / 1000000000ULL) > kMaxSec) return 0;
-    return static_cast<uint64_t>(n) * mult;
+    const std::string digits(s, len - 1);
+    long n = 0;
+    if (!parse_int_full(digits.c_str(), 1, static_cast<long>(kMaxSec / unit_s), &n)) return 0;
+    return static_cast<uint64_t>(n) * unit_s * 1000000000ULL;
 }
 
 // Read up to `cap` most-recent samples from `ring_path` whose
 // timestamp_nanos is within [now - window_ns, now]. Records that fail
 // to decode (CRC mismatch / version skew) are silently skipped.
 int load_samples_for_suggest(const char* ring_path,
+                             uint8_t tier,
                              uint32_t record_size,
                              uint64_t cap,
                              uint64_t window_ns,
@@ -62,7 +66,7 @@ int load_samples_for_suggest(const char* ring_path,
     // Read only: the daemon owns the rings (and running this as root must
     // not leave a root-owned ring behind for it).
     budyk::RingFile ring;
-    if (ring.open_read_only(ring_path, /*tier*/1, record_size, cap) != 0) return -1;
+    if (ring.open_read_only(ring_path, tier, record_size, cap) != 0) return -1;
 
     const uint64_t widx     = ring.write_index();
     const uint64_t valid    = widx < cap ? widx : cap;
@@ -121,6 +125,25 @@ std::string build_llm_summary(const budyk::Sample* s, size_t n) {
 
 } // namespace
 
+namespace {
+
+// The terminal as it was before read_password() turned echo off, for a
+// signal that ends the program while it waits: Ctrl-C at the prompt left
+// the shell typing blind (dash, sh; bash puts it back itself).
+struct termios g_tty_saved;
+volatile sig_atomic_t g_tty_echo_off = 0;
+const int kTtySignals[] = {SIGINT, SIGTERM, SIGHUP, SIGQUIT};
+
+// TCSANOW: a handler must not wait for the output to drain (TCSAFLUSH
+// does, and a terminal nobody reads, or one stopped by ^S, never drains).
+void restore_tty_and_reraise(int sig) {
+    if (g_tty_echo_off) ::tcsetattr(STDIN_FILENO, TCSANOW, &g_tty_saved);
+    ::signal(sig, SIG_DFL);
+    ::raise(sig);
+}
+
+} // namespace
+
 // Read a line from stdin without echoing it. Falls back to a plain
 // getline if stdin is not a tty (piped input — caller already knows
 // the password is fine to be visible).
@@ -129,20 +152,32 @@ std::string read_password(const char* prompt) {
     std::fflush(stderr);
 
     const bool is_tty = ::isatty(STDIN_FILENO);
-    struct termios saved;
-    if (is_tty) {
-        if (::tcgetattr(STDIN_FILENO, &saved) == 0) {
-            struct termios noecho = saved;
-            noecho.c_lflag &= ~static_cast<tcflag_t>(ECHO);
-            ::tcsetattr(STDIN_FILENO, TCSAFLUSH, &noecho);
+    struct sigaction old_actions[sizeof(kTtySignals) / sizeof(kTtySignals[0])];
+    if (is_tty && ::tcgetattr(STDIN_FILENO, &g_tty_saved) == 0) {
+        struct sigaction sa{};
+        sa.sa_handler = restore_tty_and_reraise;
+        ::sigemptyset(&sa.sa_mask);
+        // A signal the caller ignores (nohup, a non-interactive shell's
+        // background job) stays ignored, as readpassphrase(3) leaves it.
+        for (size_t i = 0; i < sizeof(kTtySignals) / sizeof(kTtySignals[0]); ++i) {
+            ::sigaction(kTtySignals[i], nullptr, &old_actions[i]);
+            if (old_actions[i].sa_handler != SIG_IGN) ::sigaction(kTtySignals[i], &sa, nullptr);
         }
+        struct termios noecho = g_tty_saved;
+        noecho.c_lflag &= ~static_cast<tcflag_t>(ECHO);
+        g_tty_echo_off = 1;
+        ::tcsetattr(STDIN_FILENO, TCSAFLUSH, &noecho);
     }
 
     std::string line;
     std::getline(std::cin, line);
 
-    if (is_tty) {
-        ::tcsetattr(STDIN_FILENO, TCSAFLUSH, &saved);
+    if (g_tty_echo_off) {
+        ::tcsetattr(STDIN_FILENO, TCSAFLUSH, &g_tty_saved);
+        g_tty_echo_off = 0;
+        for (size_t i = 0; i < sizeof(kTtySignals) / sizeof(kTtySignals[0]); ++i) {
+            ::sigaction(kTtySignals[i], &old_actions[i], nullptr);
+        }
         std::fputc('\n', stderr);
     }
     return line;
@@ -229,25 +264,31 @@ int cmd_suggest_rules(int argc, char* argv[]) {
         return 1;
     }
 
-    char ring_path[1024];
-    if (std::snprintf(ring_path, sizeof(ring_path),
-                      "%s/tier1.ring", cfg.data_dir) >= static_cast<int>(sizeof(ring_path))) {
-        std::fprintf(stderr, "budyk suggest-rules: data_dir path too long\n");
-        return 1;
-    }
-
+    // The L2 and L1 rings (spec §3.7.1: Tier 2 / Tier 3): the L1 ring has
+    // a record each L1 interval whatever ran (raw, or folded from a finer
+    // level), the L2 ring one each L2 interval while L2 or finer ran. The
+    // L3 ring alone, read before, holds only what was collected while a
+    // dashboard was open: in adaptive mode, often nothing at all.
     const uint32_t record_size = static_cast<uint32_t>(budyk::record_size_for_sample());
     constexpr uint64_t kMiB = 1024 * 1024;
-    uint64_t cap = (static_cast<uint64_t>(cfg.tier1_max_mb) * kMiB) / record_size;
-    if (cap == 0) cap = 1;
-
-    std::vector<budyk::Sample> samples;
-    if (load_samples_for_suggest(ring_path, record_size, cap, window_ns, &samples) != 0) {
+    auto load = [&](const char* file, uint8_t tier, int max_mb, std::vector<budyk::Sample>* out) {
+        const std::string path = std::string(cfg.data_dir) + "/" + file;
+        uint64_t cap = (static_cast<uint64_t>(max_mb) * kMiB) / record_size;
+        if (cap == 0) cap = 1;
+        return load_samples_for_suggest(path.c_str(), tier, record_size, cap, window_ns, out);
+    };
+    std::vector<budyk::Sample> l2, l1;
+    const int rc2 = load("tier2.ring", 2, cfg.tier2_max_mb, &l2);
+    const int rc1 = load("tier3.ring", 3, cfg.tier3_max_mb, &l1);
+    if (rc2 != 0 && rc1 != 0) {
         std::fprintf(stderr,
-            "budyk suggest-rules: failed to open '%s' "
-            "(run `budyk serve` first to collect data)\n", ring_path);
+            "budyk suggest-rules: cannot read '%s/tier2.ring' or '%s/tier3.ring' "
+            "(run `budyk serve` first to collect data)\n", cfg.data_dir, cfg.data_dir);
         return 1;
     }
+    // Each stretch once, at the finer level.
+    const uint64_t l1_ns = static_cast<uint64_t>(cfg.scheduler.l1_interval_sec) * uint64_t{1000000000};
+    const std::vector<budyk::Sample> samples = budyk::merge_l2_l1(std::move(l2), l1, l1_ns);
 
     std::string doc;
     if (ai) {
@@ -273,14 +314,23 @@ int cmd_suggest_rules(int argc, char* argv[]) {
                 output_path, std::strerror(errno));
             return 1;
         }
-        std::fwrite(doc.data(), 1, doc.size(), f);
-        std::fclose(f);
+        // A write that fails (a full disk) is said so: it reported the
+        // bytes written and exit 0.
+        const bool wrote = std::fwrite(doc.data(), 1, doc.size(), f) == doc.size();
+        const int  werr  = wrote ? 0 : errno;
+        if (std::fclose(f) != 0 || !wrote) {
+            std::fprintf(stderr, "budyk suggest-rules: writing '%s': %s\n",
+                         output_path, std::strerror(werr != 0 ? werr : errno));
+            return 1;
+        }
         std::fprintf(stderr,
             "budyk suggest-rules: wrote %zu bytes to %s "
             "(%zu samples in window %s)\n",
             doc.size(), output_path, samples.size(), window_arg);
-    } else {
-        std::fputs(doc.c_str(), stdout);
+    } else if (std::fputs(doc.c_str(), stdout) == EOF || std::fflush(stdout) != 0) {
+        std::fprintf(stderr, "budyk suggest-rules: writing the standard output: %s\n",
+                     std::strerror(errno));
+        return 1;
     }
     return 0;
 }
