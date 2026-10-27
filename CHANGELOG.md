@@ -40,6 +40,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was refused.
 - An alert channel with no type, or one that is not a mapping, is
   reported as it is left out.
+- A setting left with no value (`interval:`, `~`) keeps its default,
+  except `rules.path`: left so, it runs without rules, as `""` does, and
+  the daemon says when it runs without rules.
 - **FreeBSD: the rc.d script could not start budyk.** With `budyk_user`
   set, as it is by default, rc.subr runs the command as that user, so
   `daemon(8)` ran as budyk: it could write neither `/var/run/budyk.pid`

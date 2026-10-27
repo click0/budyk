@@ -224,6 +224,22 @@ int main(int argc, char** argv) {
         assert(std::strcmp(c.rules_state_path, "/var/db/budyk/rules.tsv") == 0);
     }
 
+    // 7a-ter. rules.path given as nothing, `~`, `null` or "" is no rules
+    //         (a null kept the default, and the daemon loaded the rules
+    //         file the FreeBSD package installs there); left out, the
+    //         default stays.
+    {
+        for (const char* v : {"", " ~", " null", " \"\""}) {
+            Config c;
+            const std::string y = std::string("rules:\n  path:") + v + "\n";
+            assert(config_load_string(y.c_str(), &c) == 0);
+            assert(c.rules_path[0] == '\0');
+        }
+        Config c;
+        assert(config_load_string("rules:\n  persist_state: true\n", &c) == 0);
+        assert(std::strcmp(c.rules_path, "/usr/local/etc/budyk/rules.lua") == 0);
+    }
+
     // 7b. Missing allow key leaves the vector at default (empty).
     {
         Config c;
