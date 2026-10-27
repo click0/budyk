@@ -132,10 +132,13 @@ int main() {
         assert(!w.should_reset(0, 10 * S));
         assert(w.ns_until_due(10 * S) == UINT64_MAX);
 
-        // A client at 100 s, gone from 101 s.
+        // A client at 100 s, gone from 101 s. While it is connected
+        // nothing is due: the sleep is the level's.
         assert(!w.should_reset(1, 100 * S));
-        assert(w.ns_until_due(100 * S) == 60 * S);
+        assert(w.ns_until_due(100 * S) == UINT64_MAX);
+        assert(w.ns_until_due(150 * S) == UINT64_MAX);
         assert(!w.should_reset(0, 101 * S));
+        assert(w.ns_until_due(101 * S) == 59 * S);
         assert(w.ns_until_due(130 * S) == 30 * S);
         assert(!w.should_reset(0, 159 * S));
         assert(w.should_reset(0, 160 * S));               // 60 s after the last client
@@ -155,11 +158,22 @@ int main() {
         assert(!w.should_reset(0, 159 * S));
         assert(w.should_reset(0, 160 * S));
 
-        // Grace 0: emptied on the first tick without a client.
+        // Grace 0: emptied on the first tick without a client, and no
+        // sleep cut short while one is connected (a 0 there ran the
+        // tick in a loop: 400 samples a second).
         WarmGrace now(0);
         assert(!now.should_reset(1, 5 * S));
-        assert(now.ns_until_due(5 * S) == 0);
+        assert(now.ns_until_due(5 * S) == UINT64_MAX);
+        assert(now.ns_until_due(6 * S) == UINT64_MAX);
         assert(now.should_reset(0, 6 * S));
+        assert(now.ns_until_due(6 * S) == UINT64_MAX);    // done: nothing pending
+
+        // A client gone between two ticks: the first tick without it
+        // finds the reset already due (grace 1 s, ticks 5 s apart).
+        WarmGrace one(1 * S);
+        assert(!one.should_reset(1, 10 * S));
+        assert(one.ns_until_due(12 * S) == UINT64_MAX);
+        assert(one.should_reset(0, 15 * S));
     }
 
     std::printf("test_hot_buffer: PASS\n");

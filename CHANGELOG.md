@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`hot_buffer.warm_grace: 0` ran the tick in a loop while a client
+  was connected.** The countdown to the reset was taken from the last
+  tick with a client and capped every sleep, so with a grace of 0 the
+  daemon took about 400 samples a second (half a core, the L3 ring
+  overwritten in minutes, the hot buffer holding under a second), and a
+  grace shorter than the level's interval added ticks. The countdown now
+  starts at the first tick without a client.
+
 ## [0.8.3] — 2026-10-26
 
 Two fixes matter to anyone who runs budyk without a password. The
