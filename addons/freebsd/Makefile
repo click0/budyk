@@ -19,6 +19,7 @@ USES=		cmake lua:5.4 pkgconfig
 USE_GITHUB=	yes
 GH_ACCOUNT=	click0
 USE_RC_SUBR=	budyk
+SUB_FILES=	pkg-message
 
 CMAKE_OFF=	BUILD_TESTS ENABLE_LLM STATIC_LINK
 

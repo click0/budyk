@@ -76,6 +76,8 @@ id budyk
 [ -f "$CONF/rules.lua" ]   || fail "no $CONF/rules.lua from its sample"
 [ "$(stat -f %Su:%Sg /var/db/budyk)" = budyk:budyk ] || fail "/var/db/budyk is not budyk's"
 [ -f /usr/local/share/man/man8/budyk.8.gz ] || fail "no man page"
+pkg info -D budyk | grep -q "$CONF/config.yaml" && ! pkg info -D budyk | grep -q "%%" ||
+    fail "the pkg-message: $(pkg info -D budyk)"
 /usr/local/bin/budyk version
 
 echo "== the service"
@@ -90,7 +92,7 @@ started() {
 $SUDO service budyk onestart
 started
 $SUDO service budyk onestatus
-PID=$(cat /var/run/budyk/budyk.pid)
+PID=$($SUDO cat /var/run/budyk/budyk.pid)   # 0600, budyk's
 [ "$(ps -o user= -p "$PID" | tr -d ' ')" = budyk ] || fail "budyk does not run as budyk"
 sleep 1
 grep -q "budyk\[[0-9]*\]: budyk serve: started (config=$CONF/config.yaml" /var/log/messages ||
@@ -109,7 +111,7 @@ echo "ok   stops"
 $SUDO sysrc budyk_flags="--enable-exec" > /dev/null
 $SUDO service budyk onestart
 started
-ps -o args= -p "$(cat /var/run/budyk/budyk.pid)" | grep -q -- "--enable-exec" ||
+ps -o args= -p "$($SUDO cat /var/run/budyk/budyk.pid)" | grep -q -- "--enable-exec" ||
     fail "budyk_flags did not reach budyk"
 $SUDO service budyk onestop
 $SUDO sysrc -x budyk_flags
