@@ -286,6 +286,13 @@ jobs:
             file build-debug/src/budyk | grep -q "statically linked"
             echo "::endgroup::"
 
+            # Each binary runs here before it ships, and says its version
+            # (a dry run's VER is the version and a commit: 0.8.0-1a2b3c4d).
+            for b in build-release build-debug; do
+              "$b/src/budyk" version
+              "$b/src/budyk" version | grep -qx "budyk ${VER%%-*}"
+            done
+
             echo "::group::Stage tarballs"
             for variant in release debug; do
               if [ "$variant" = "release" ]; then
@@ -485,10 +492,12 @@ jobs:
           ls -la dist/
           cat dist/*.sha256
 
-      # Release notes are this version's CHANGELOG section only: from its
+      # Release notes are this version's CHANGELOG section, from its
       # "## [X.Y.Z]" heading up to the next "## [" heading, without the
-      # "[X.Y.Z]: <url>" link line. A tag with no section fails the run
-      # rather than publishing a release without notes.
+      # "[X.Y.Z]: <url>" link line; GitHub adds its list of the merged
+      # pull requests after it (generate_release_notes). A tag with no
+      # section fails the run rather than publishing a release without
+      # notes.
       - name: Extract release notes from CHANGELOG
         env:
           VER: ${{ needs.meta.outputs.version }}

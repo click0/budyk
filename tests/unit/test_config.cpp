@@ -707,6 +707,23 @@ int main(int argc, char** argv) {
         std::remove(tmpl);
     }
 
+    // The config a command reads without --config: /usr/local's, or on
+    // Linux the packages' /etc/budyk/config.yaml when only that one is
+    // there (`budyk fsck` on a .deb's install gave up on /usr/local).
+    {
+        const char* local = "/usr/local/etc/budyk/config.yaml";
+        auto none = [](const char*) { return false; };
+        auto both = [](const char*) { return true; };
+        auto etc  = [](const char* p) { return std::strcmp(p, "/etc/budyk/config.yaml") == 0; };
+        assert(std::strcmp(default_config_path(none), local) == 0);
+        assert(std::strcmp(default_config_path(both), local) == 0);
+#ifdef BUDYK_LINUX
+        assert(std::strcmp(default_config_path(etc), "/etc/budyk/config.yaml") == 0);
+#else
+        assert(std::strcmp(default_config_path(etc), local) == 0);
+#endif
+    }
+
     std::printf("test_config: PASS\n");
     return 0;
 }

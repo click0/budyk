@@ -8,17 +8,49 @@ budyk \- lightweight server monitoring with adaptive collection
 .RI [ options ]
 .SH COMMANDS
 .TP
-.B serve
-Start the monitoring daemon and web server.
+\fBserve\fR [\fB\-\-config\fR \fIfile\fR] [\fB\-\-enable\-exec\fR] [\fB\-\-enable\-freeze\fR]
+Start the monitoring daemon and web server, on the config
+.I file
+(see FILES for the one read without
+.BR \-\-config ).
+.B \-\-enable\-exec
+and
+.B \-\-enable\-freeze
+let the rules run programs and stop processes, as
+.I rules.exec.enabled
+and
+.I rules.freeze.enabled
+do.
 .TP
-.B tui
-Start the terminal UI.
+\fBtui\fR [\fB\-\-host\fR \fIaddress\fR] [\fB\-\-port\fR \fIport\fR]
+Start the terminal UI against the daemon at the IPv4
+.I address
+(127.0.0.1) and
+.I port
+(8080); it asks for the password if the daemon wants one.
 .TP
 .B hash\-password
-Generate an Argon2id password hash for web authentication.
+Read a password (twice on a terminal) and print its Argon2id hash, for
+.IR web.auth.password_hash .
 .TP
-.B suggest\-rules
-Generate monitoring rule suggestions from collected history.
+\fBsuggest\-rules\fR [\fB\-\-config\fR \fIfile\fR] [\fB\-\-window\fR \fIN\fR{\fBs\fR,\fBm\fR,\fBh\fR,\fBd\fR}] [\fB\-\-output\fR \fIfile\fR] [\fB\-\-ai\fR [\fB\-\-api\-key\fR \fIkey\fR]]
+Suggest monitoring rules from the history collected over the last
+.I N
+seconds, minutes, hours or days (7d, at most a year), as Lua for the
+rules file, to the standard output or
+.IR file .
+With
+.BR \-\-ai ,
+an LLM writes them from a summary of that history, with the API key
+given or from
+.BR ANTHROPIC_API_KEY .
+.TP
+\fBwatch\-files\fR [\fB\-\-timeout\fR \fIms\fR] \fIpath\fR ...
+Print the changes to the files named, as
+.I security.file_watch
+sees them (inotify, kqueue), for
+.I ms
+milliseconds (30000; \-1 waits for the first change): a diagnostic.
 .TP
 \fBfsck\fR [\fB\-\-repair\fR] [\fB\-\-config\fR \fIfile\fR] [\fIdata_dir\fR]
 Check every ring file in the data directory (the one in the config if
@@ -91,7 +123,11 @@ Monitoring rules are written in Lua and evaluated on each collection tick.
 .SH FILES
 .TP
 .I /usr/local/etc/budyk/config.yaml
-Main configuration file.
+Main configuration file, read when no
+.B \-\-config
+is given. The .deb and the .rpm install it as
+\fI/etc/budyk/config.yaml\fR, which budyk reads on Linux when
+\fI/usr/local/etc/budyk/config.yaml\fR is not there.
 .TP
 .I /usr/local/etc/budyk/rules.lua
 Lua monitoring rules.
@@ -107,7 +143,7 @@ refuse to start. The kernel releases it however the daemon exits.
 .SH SIGNALS
 .TP
 .B SIGTERM, SIGINT
-Graceful shutdown — flushes rule state, closes the HTTP server, writes
+Graceful shutdown \(em flushes rule state, closes the HTTP server, writes
 the fold windows still open and closes the ring files.
 .TP
 .B SIGHUP

@@ -79,6 +79,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   again each time the level rose (L1 reads no lists, L2 and L3 do: each
   client, each escalation). A level that does not read a list leaves
   what was found for it.
+- **The Docker image delivered no alert and loaded no rules.** It had
+  no `curl(1)`, which every alert channel runs, so each alert failed
+  (exit 127); and the example config's `rules.path` named a file the
+  image did not have. Both are in the image now, and CI checks them.
+- **Under the systemd unit a separate `/home` was never measured.**
+  `ProtectHome=yes` mounts an empty directory over it; `read-only` now
+  (the unit sees the rest of the system read-only too).
+- **`budyk fsck` and `budyk suggest-rules` gave up on a package's
+  install** without `--config`: they looked for
+  `/usr/local/etc/budyk/config.yaml`, and the packages put it in
+  `/etc/budyk/`. On Linux that one is read when the other is not there.
+  The packaged man page names the packages' paths.
+- **Upgrading the .deb or the .rpm left the old binary running** until
+  someone restarted the service. A running service is restarted now (for
+  the .rpm, on upgrades from this version on: the old package's scripts
+  run them).
+- The man page has every command's options, and `watch-files`.
+- "cannot watch '/etc/sudoers' (errno=13)" says "Permission denied" now,
+  and `config.example.yaml` says what the service's user budyk can watch
+  and signal.
+- The release's FreeBSD amd64 binaries run (`budyk version`) before
+  they are published; `file(1)` was all that checked them.
 
 ## [0.8.3] — 2026-10-26
 

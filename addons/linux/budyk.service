@@ -20,7 +20,9 @@ Group=budyk
 # Sandboxing
 NoNewPrivileges=yes
 ProtectSystem=strict
-ProtectHome=yes
+# read-only, not yes: yes mounts an empty directory over /home, so a
+# separate /home filesystem (RHEL's largest by default) was never measured.
+ProtectHome=read-only
 PrivateTmp=yes
 PrivateDevices=yes
 ProtectKernelTunables=yes

@@ -18,8 +18,9 @@ RUN cmake -B build \
 
 FROM alpine:3.20
 # libstdc++: budyk is C++ (without it: "Error loading shared library
-# libstdc++.so.6" and nothing runs).
-RUN apk add --no-cache libstdc++ lua5.4-libs yaml argon2-libs ncurses-libs \
+# libstdc++.so.6" and nothing runs). curl: every alert channel posts
+# through curl(1), and without it each alert failed (exit 127).
+RUN apk add --no-cache libstdc++ lua5.4-libs yaml argon2-libs ncurses-libs curl \
  && addgroup -S -g 871 budyk \
  && adduser  -S -D -H -G budyk -u 871 -s /sbin/nologin budyk \
  && mkdir -p /var/db/budyk /etc/budyk \
@@ -28,6 +29,9 @@ RUN apk add --no-cache libstdc++ lua5.4-libs yaml argon2-libs ncurses-libs \
 COPY --from=builder /src/build/src/budyk /usr/local/bin/budyk
 COPY config.example.yaml /etc/budyk/config.example.yaml
 COPY rules/ /usr/share/budyk/rules/
+# The rules where the example config's rules.path looks: the image had
+# none there, and budyk ran without rules.
+COPY rules/examples.lua /usr/local/etc/budyk/rules.lua
 
 USER budyk
 VOLUME ["/var/db/budyk"]

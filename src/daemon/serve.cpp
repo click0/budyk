@@ -163,7 +163,7 @@ void interruptible_sleep(int ms, const std::function<void()>& reload) {
 } // namespace
 
 int cmd_serve(int argc, char* argv[], const char* version) {
-    const char* config_path     = "/usr/local/etc/budyk/config.yaml";
+    const char* config_path     = budyk::default_config_path();
     bool        cli_enable_exec   = false;
     bool        cli_enable_freeze = false;
     for (int i = 2; i < argc; ++i) {
@@ -559,22 +559,23 @@ int cmd_serve(int argc, char* argv[], const char* version) {
     budyk::FileWatchState file_state;
     bool                  fw_active = false;
     if (cfg.file_watch_enabled && !cfg.file_watch_paths.empty()) {
-        if (file_watcher.init() == 0) {
+        if (const int irc = file_watcher.init(); irc != 0) {
+            std::fprintf(stderr,
+                "budyk serve: the file watcher cannot start: %s; file_watch disabled\n",
+                std::strerror(-irc));
+        } else {
             fw_active = true;
             for (const auto& p : cfg.file_watch_paths) {
                 const int rc = file_watcher.add(p);
                 if (rc < 0) {
                     std::fprintf(stderr,
-                        "budyk serve: cannot watch '%s' (errno=%d)\n",
-                        p.c_str(), -rc);
+                        "budyk serve: cannot watch '%s': %s\n",
+                        p.c_str(), std::strerror(-rc));
                 }
             }
             std::fprintf(stderr,
                 "budyk serve: file_watch active on %zu path(s)\n",
                 file_watcher.count());
-        } else {
-            std::fprintf(stderr,
-                "budyk serve: FileWatcher.init failed — file_watch disabled\n");
         }
     }
 

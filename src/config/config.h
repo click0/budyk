@@ -93,4 +93,10 @@ int config_load        (const char* path, Config* out, std::string* error = null
 /// config_load() on YAML text instead of a file.
 int config_load_string (const char* yaml, Config* out, std::string* error = nullptr);
 
+/// The config a command reads without --config:
+/// /usr/local/etc/budyk/config.yaml, or on Linux /etc/budyk/config.yaml
+/// (where the .deb and the .rpm put it) when only that one is there.
+/// `exists` says whether a path is there (access(2) when null).
+const char* default_config_path(bool (*exists)(const char* path) = nullptr);
+
 } // namespace budyk
