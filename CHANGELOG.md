@@ -40,6 +40,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was refused.
 - An alert channel with no type, or one that is not a mapping, is
   reported as it is left out.
+- **FreeBSD: the rc.d script could not start budyk.** With `budyk_user`
+  set, as it is by default, rc.subr runs the command as that user, so
+  `daemon(8)` ran as budyk: it could write neither `/var/run/budyk.pid`
+  nor switch users with `-u`, and `service budyk start` said only
+  "failed to start budyk". The pidfile is in `/var/run/budyk/` now, made
+  by the script for budyk, and daemon(8) takes no `-u`. `budyk_flags`,
+  which the README gave for budyk's options, went to daemon(8), which
+  refused them: it is taken as budyk's now, as is the new `budyk_args`.
+  budyk's log went to `/dev/null`; it goes to syslog, tag `budyk`.
+  `budyk_datadir` did nothing and is gone: the data_dir is the config's.
+- **The FreeBSD port could not be built or packaged.** `USE_RC_SUBR`
+  wanted `files/budyk.in`, the plist's `@sample` named no `.sample`, the
+  man page went under `${PREFIX}/man`, which the ports tree no longer
+  takes, and `/var/db/budyk` was not staged. The port builds now, passes
+  `stage-qa` and `check-plist`, and installs `config.yaml` and
+  `rules.lua` (the FreeBSD defaults, where the config's `rules.path`
+  looks: none was installed) from samples, so changes survive an
+  upgrade, with a `pkg-message`. CI builds it with the ports framework
+  on 14.4 and 15.1, installs the package and starts the service: budyk
+  must run as budyk, answer, log to syslog, have its rules, take
+  `budyk_flags`, stop, and the package remove cleanly
+  (`addons/freebsd/test-port.sh`).
+- A rules file that is not there is said so, at the start and on
+  SIGHUP: "rules file '...': No such file or directory; running without
+  rules". The daemon ran without rules without a word.
+- `cmake --install` puts the man page in `share/man/man8` (it was
+  `man/man8`).
 
 ## [0.8.3] — 2026-10-26
 

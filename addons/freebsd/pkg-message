@@ -1,0 +1,17 @@
+[
+{ type: install
+  message: <<EOM
+budyk is installed with its config in %%PREFIX%%/etc/budyk/config.yaml
+(the dashboard on http://127.0.0.1:8080, no password) and the FreeBSD
+default rules in %%PREFIX%%/etc/budyk/rules.lua. To start it now and at
+boot:
+
+  sysrc budyk_enable=YES
+  service budyk start
+
+Its log goes to syslog (/var/log/messages), its data to /var/db/budyk.
+Before opening the dashboard to the network, set a password: see
+`budyk hash-password` and web.auth in the config.
+EOM
+}
+]

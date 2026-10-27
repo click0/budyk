@@ -222,9 +222,16 @@ smoke-скрипти з крос-зібраним бінарником amd64 н�
 
 ### Запуск як служби
 
-- **FreeBSD:** заготовка порту та rc.d-скрипт лежать у
-  [`addons/freebsd/`](addons/freebsd/). rc.d-скрипт читає змінні
-  `budyk_enable`, `budyk_config`, `budyk_user` і `budyk_flags`.
+- **FreeBSD:** порт лежить у [`addons/freebsd/`](addons/freebsd/).
+  Скопіюйте його в `/usr/ports/sysutils/budyk` і додайте `budyk` до
+  `UIDs` і `GIDs` дерева; `make makesum install` збирає і встановлює
+  його: конфіг і типові правила для FreeBSD у `/usr/local/etc/budyk/`,
+  каталог даних `/var/db/budyk`. Далі `sysrc budyk_enable=YES` і
+  `service budyk start`. rc.d-скрипт читає змінні `budyk_enable`,
+  `budyk_config`, `budyk_user`, `budyk_group` і `budyk_args` (додаткові
+  параметри для `budyk serve`, наприклад `--enable-exec`); журнал budyk
+  іде в syslog (`/var/log/messages`). `addons/freebsd/test-port.sh`
+  збирає, встановлює і запускає його повністю, як CI на 14.4 і 15.1.
 - **Linux:** пакети вище встановлюють захищений systemd-юніт; для
   бінарного файлу, встановленого вручну, він лежить у
   [`addons/linux/budyk.service`](addons/linux/budyk.service).

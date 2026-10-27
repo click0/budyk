@@ -164,11 +164,13 @@ endif()
 # API reference: the `docs` target, when doxygen is installed
 include(cmake/docs.cmake)
 
-# Install
+# Install. The man page under share/man (CMAKE_INSTALL_MANDIR): the
+# ports tree no longer takes ${PREFIX}/man, and man(1) finds both.
+include(GNUInstallDirs)
 install(TARGETS budyk DESTINATION bin)
 install(FILES config.example.yaml DESTINATION etc/budyk)
 install(DIRECTORY rules/ DESTINATION share/budyk/rules)
-install(FILES docs/budyk.8 DESTINATION man/man8)
+install(FILES docs/budyk.8 DESTINATION ${CMAKE_INSTALL_MANDIR}/man8)
 
 message(STATUS "")
 message(STATUS "  budyk ${PROJECT_VERSION}")

@@ -1,0 +1,56 @@
+#!/bin/sh
+# SPDX-License-Identifier: BSD-3-Clause
+#
+# PROVIDE: budyk
+# REQUIRE: LOGIN NETWORKING
+# KEYWORD: shutdown
+#
+# Add these lines to /etc/rc.conf.local or /etc/rc.conf
+# to enable this service:
+#
+# budyk_enable (bool):   Set to NO by default.
+#                        Set it to YES to enable budyk.
+# budyk_user (string):   The user budyk runs as.
+#                        Default: "budyk".
+# budyk_group (string):  Its group.
+#                        Default: "budyk".
+# budyk_config (string): The config file.
+#                        Default: "%%PREFIX%%/etc/budyk/config.yaml".
+# budyk_args (string):   More options for `budyk serve`, such as
+#                        "--enable-exec". budyk_flags, which rc.subr
+#                        would hand to daemon(8), is taken as these too.
+#
+# budyk logs to syslog, tag "budyk" (/var/log/messages). The data_dir is
+# the config's: /var/db/budyk, which the package makes; one elsewhere
+# must exist and be budyk_user's.
+
+. /etc/rc.subr
+
+name="budyk"
+rcvar="budyk_enable"
+
+load_rc_config $name
+
+: ${budyk_enable:="NO"}
+: ${budyk_user:="budyk"}
+: ${budyk_group:="budyk"}
+: ${budyk_config:="%%PREFIX%%/etc/budyk/config.yaml"}
+: ${budyk_args:=""}
+
+# rc.subr runs the command as budyk_user (su -m): daemon(8) runs as budyk,
+# so it takes no -u, and its pidfile goes in a directory budyk owns.
+pidfile="/var/run/${name}/${name}.pid"
+required_files="${budyk_config}"
+procname="%%PREFIX%%/bin/budyk"
+command="/usr/sbin/daemon"
+command_args="-f -T ${name} -p ${pidfile} ${procname} serve --config ${budyk_config} ${budyk_args} ${budyk_flags}"
+budyk_flags=""
+
+start_precmd="budyk_prestart"
+
+budyk_prestart()
+{
+    install -d -o "${budyk_user}" -g "${budyk_group}" -m 0755 "/var/run/${name}"
+}
+
+run_rc_command "$1"

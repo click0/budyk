@@ -324,6 +324,18 @@ else
     echo "FAIL: a broken rules file on SIGHUP replaced the working rules"; fail=1
 fi
 
+# A rules file that is not there is said so: the FreeBSD port and the
+# Docker image left the config's rules.path empty, and the daemon ran
+# without rules without a word.
+mv "$DIR/rules.lua" "$DIR/rules.lua.gone"
+kill -HUP "$PID"
+sleep 1
+if grep -q "rules file '$DIR/rules.lua': No such file or directory; running without rules" "$DIR/log"; then
+    echo "ok   a missing rules file is named in the log"
+else
+    echo "FAIL: no word on the missing rules file"; fail=1
+fi
+
 kill -TERM "$PID"
 if ! wait "$PID"; then
     echo "FAIL: daemon exited non-zero"; fail=1

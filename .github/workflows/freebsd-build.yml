@@ -4,7 +4,9 @@ name: FreeBSD Build (full)
 # (shared, as addons/freebsd/Makefile builds it) and the release one
 # (static, as release.yml ships it), plus the smoke scripts against the
 # static binary and, on 15.1, against the amd64 binary cross-compiled on
-# the Linux host (cmake/toolchains/).
+# the Linux host (cmake/toolchains/); then the port itself, built by the
+# ports framework, packaged, installed and started as a service
+# (addons/freebsd/test-port.sh).
 # Runs on:
 #   * push to main       (gates mainline);
 #   * pull_request → main (gates merge);
@@ -147,6 +149,14 @@ jobs:
               tests/smoke/auth.sh ./budyk-cross
               echo "::endgroup::"
             fi
+
+            # The port as the ports framework builds it, its package and
+            # the rc.d service it installs (never exercised before: the
+            # service could not start, the port could not be packaged).
+            echo "::group::The port, its package and its service (addons/freebsd/test-port.sh)"
+            sudo pkg install -y git-tiny ninja
+            addons/freebsd/test-port.sh "$HOME/port-test"
+            echo "::endgroup::"
 
             echo "::group::Disk usage"
             df -h
