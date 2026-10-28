@@ -211,6 +211,22 @@ int main() {
         w.last_poll.store(1);                         // long ago
         w.handler(get("/api/samples"));
         assert(w.wakes == 2);
+
+        // ?last=N: the newest N (the TUI asks for 1, it drew one and was
+        // sent the whole buffer each second); more than there are is all.
+        for (const uint64_t ts : {uint64_t{200}, uint64_t{300}}) {
+            s.timestamp_nanos = ts;
+            std::lock_guard<std::mutex> g(w.hot_mtx);
+            w.hot.push(s);
+        }
+        r = w.handler(get("/api/samples?last=1"));
+        assert(r.status == 200 && has(r.body, "\"ts\":300") && !has(r.body, "\"ts\":200") &&
+               !has(r.body, "\"ts\":123456789"));
+        r = w.handler(get("/api/samples?last=2"));
+        assert(has(r.body, "\"ts\":200") && has(r.body, "\"ts\":300") &&
+               !has(r.body, "\"ts\":123456789"));
+        r = w.handler(get("/api/samples?last=99"));
+        assert(has(r.body, "\"ts\":123456789") && has(r.body, "\"ts\":300"));
     }
 
     // 5. /api/levels lists the built-in levels in order with their ids.

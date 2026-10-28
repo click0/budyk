@@ -80,7 +80,9 @@ jobs:
 
             echo "::group::Install dependencies"
             # curl and python3: the smoke scripts' HTTP and WebSocket clients.
-            sudo pkg install -y cmake pkgconf lua54 libyaml libargon2 curl python3
+            # cmake-core: FreeBSD 15's packages no longer have the cmake
+            # metaport (14's have both); cmake-core holds bin/cmake.
+            sudo pkg install -y cmake-core pkgconf lua54 libyaml libargon2 curl python3
             echo "::endgroup::"
 
             echo "::group::System info"

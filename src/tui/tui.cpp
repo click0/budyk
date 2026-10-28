@@ -473,7 +473,7 @@ int tui_run(const char* host, int port, std::string (*ask_password)()) {
     std::string cookie_header;   // "Cookie: budyk_session=...\r\n" or ""
     {
         tui_detail::HttpReply probe;
-        const int rc = http_request(host, port, "GET", "/api/samples", "", "", &probe);
+        const int rc = http_request(host, port, "GET", "/api/samples?last=1", "", "", &probe);
         if (rc != 0) {
             std::fprintf(stderr, "budyk tui: can't reach %s:%d: %s\n", host, port,
                          http_error(rc).c_str());
@@ -552,12 +552,12 @@ int tui_run(const char* host, int port, std::string (*ask_password)()) {
 
     while (!quit) {
         tui_detail::HttpReply r;
-        int rc = http_request(host, port, "GET", "/api/samples", cookie_header, "", &r);
+        int rc = http_request(host, port, "GET", "/api/samples?last=1", cookie_header, "", &r);
         if (rc == 0 && r.status == 401 && !password.empty()) {
             std::string cookie;                       // session expired: renew
             if (login(host, port, password, &cookie) == 200) {
                 cookie_header = "Cookie: " + cookie + "\r\n";
-                rc = http_request(host, port, "GET", "/api/samples", cookie_header, "", &r);
+                rc = http_request(host, port, "GET", "/api/samples?last=1", cookie_header, "", &r);
             }
         }
 

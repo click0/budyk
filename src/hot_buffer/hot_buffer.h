@@ -25,6 +25,10 @@ public:
     /// Returns number of samples written.
     size_t dump(Sample* out, size_t out_cap) const;
 
+    /// The newest `n` samples (or all, if fewer) into `out`, oldest first.
+    /// Returns the number written.
+    size_t dump_last(Sample* out, size_t n) const;
+
     void reset();
     size_t size() const;
 

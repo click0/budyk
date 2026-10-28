@@ -173,7 +173,7 @@ Dependencies:
 
 ```sh
 # FreeBSD (ncurses is in base)
-pkg install cmake pkgconf lua54 libyaml libargon2
+pkg install cmake-core pkgconf lua54 libyaml libargon2
 
 # Debian / Ubuntu
 apt install cmake g++ pkg-config liblua5.4-dev libyaml-dev libargon2-dev libncurses-dev
@@ -633,7 +633,7 @@ needs.
 | `GET` | `/api/health` | no | status, version, hostname |
 | `POST` | `/api/auth/login` | no | body `{"password": "..."}`; sets the `budyk_session` cookie |
 | `POST` | `/api/auth/logout` | no | clears the session |
-| `GET` | `/api/samples` | yes | recent samples from the in-memory buffer |
+| `GET` | `/api/samples` | yes | recent samples from the in-memory buffer; `?last=N` the newest N |
 | `GET` | `/api/range` | yes | stored history: `since`, `until` (nanoseconds since the epoch), `limit` (up to 5000), and either `level` (`L1`–`L3`, a custom level's name, or `all` for every level merged and thinned over the window) or `tier` (`1` = L3 samples, `2` = L2, `3` = L1) |
 | `GET` | `/api/alerts` | yes | the latest 100 alerts (RAM only), oldest first: `ts`, `severity`, `rule`, `message`; new ones also come over `/api/ws` as `{"alerts":[...]}` |
 | `GET` | `/api/levels` | yes | every level: `id` (the value of a sample's `level`), `name`, `interval_ms`, `priority`, `builtin`, `collects` (false for L1 and L2 in on-demand mode), `metrics` (its set, by name) |

@@ -21,6 +21,20 @@ int main() {
         Sample out[10]{};
         assert(b.size() == 0);
         assert(b.dump(out, 10) == 0);
+        assert(b.dump_last(out, 1) == 0);
+    }
+
+    // 1b. dump_last: the newest n, oldest first, across the wrap; all of
+    //     them when there are fewer (for /api/samples?last=N).
+    {
+        HotBuffer b(4);
+        for (uint64_t i = 1; i <= 6; ++i) b.push(mk(i));     // holds 3 4 5 6
+        Sample out[4]{};
+        assert(b.dump_last(out, 1) == 1 && out[0].timestamp_nanos == 6);
+        assert(b.dump_last(out, 3) == 3 && out[0].timestamp_nanos == 4 &&
+               out[2].timestamp_nanos == 6);
+        assert(b.dump_last(out, 9) == 4 && out[0].timestamp_nanos == 3 &&
+               out[3].timestamp_nanos == 6);
     }
 
     // 2. Partial fill — dump oldest-first.

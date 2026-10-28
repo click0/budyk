@@ -44,10 +44,13 @@ ssize_t send_frame(int fd, const void* data, size_t len) {
 // A control frame from the server: FIN=1, opcode, no mask, payload of
 // at most 125 bytes (RFC 6455 §5.5).
 std::string ws_control_frame(uint8_t opcode, const std::string& payload) {
+    // A longer payload is cut to 125: `size & 0x7F` wrote a length that
+    // did not match what followed (no caller passes one today).
+    const size_t len = payload.size() < 125 ? payload.size() : 125;
     std::string f;
     f.push_back(static_cast<char>(0x80 | (opcode & 0x0F)));
-    f.push_back(static_cast<char>(payload.size() & 0x7F));
-    f.append(payload);
+    f.push_back(static_cast<char>(len));
+    f.append(payload, 0, len);
     return f;
 }
 

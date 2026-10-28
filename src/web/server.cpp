@@ -239,16 +239,19 @@ ssize_t send_all(int fd, const void* data, size_t len, Deadline deadline, int io
 ssize_t send_response(int fd, const HttpResponse& r, int io_timeout_ms, size_t min_rate) {
     const Deadline deadline = Clock::now() + std::chrono::milliseconds(io_timeout_ms) +
         std::chrono::milliseconds(r.body.size() * 1000 / min_rate);
+    // Built as a string: a fixed buffer and snprintf()'s return taken as
+    // the length read past the buffer for a content type over ~200 bytes.
     std::string head;
-    head.reserve(256 + r.extra_headers.size() * 64);
-    char line[256];
-    int n = std::snprintf(line, sizeof(line),
-        "HTTP/1.1 %d %s\r\nContent-Type: %s\r\nContent-Length: %zu\r\nConnection: close\r\n",
-        r.status, status_phrase(r.status),
-        r.content_type.empty() ? "text/plain" : r.content_type.c_str(),
-        r.body.size());
-    if (n <= 0) return -1;
-    head.append(line, static_cast<size_t>(n));
+    head.reserve(256 + r.content_type.size() + r.extra_headers.size() * 64);
+    head += "HTTP/1.1 ";
+    head += std::to_string(r.status);
+    head += ' ';
+    head += status_phrase(r.status);
+    head += "\r\nContent-Type: ";
+    head += r.content_type.empty() ? "text/plain" : r.content_type;
+    head += "\r\nContent-Length: ";
+    head += std::to_string(r.body.size());
+    head += "\r\nConnection: close\r\n";
 
     for (const auto& kv : r.extra_headers) {
         head.append(kv.first);

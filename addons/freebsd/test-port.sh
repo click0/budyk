@@ -10,7 +10,7 @@
 # stop`, and the package must remove cleanly.
 #
 # Needs root or sudo without a password, git, curl and the build
-# dependencies: pkg install cmake ninja pkgconf lua54 libyaml libargon2.
+# dependencies: pkg install cmake-core ninja pkgconf lua54 libyaml libargon2.
 # It fetches the framework (Mk/, Keywords/, Templates/ of the ports tree)
 # into WORK. It installs, starts and removes the package: run it on a
 # machine for testing.
