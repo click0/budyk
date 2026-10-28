@@ -177,7 +177,8 @@ int suggest_rules_llm_cancellable(const char* api_key, const std::string& summar
     }
     const int rc = budyk::suggest_rules_llm(api_key, summary, out, why, &g_llm_cancel);
     for (size_t i = 0; i < kN; ++i) ::sigaction(kTtySignals[i], &old_actions[i], nullptr);
-    if (const int sig = g_llm_signal; sig != 0) {
+    // sig_atomic_t is a long on FreeBSD; it holds a signal number.
+    if (const int sig = static_cast<int>(g_llm_signal); sig != 0) {
         std::fprintf(stderr, "budyk suggest-rules: %s: the request was cancelled\n",
                      ::strsignal(sig));
         ::signal(sig, SIG_DFL);
