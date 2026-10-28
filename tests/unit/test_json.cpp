@@ -171,6 +171,14 @@ int main() {
         assert(json_unescape("\\u00e9") == "\xC3\xA9");          // é
         assert(json_unescape("\\u0443") == "\xD1\x83");          // у
         assert(json_unescape("\\u20ac") == "\xE2\x82\xAC");      // €
+        // A surrogate pair is one character past U+FFFF, in 4 bytes (it
+        // was 6, CESU-8: a password with an emoji, escaped, never
+        // matched); a lone surrogate is U+FFFD.
+        assert(json_unescape("p\\ud83d\\ude00w") == "p\xF0\x9F\x98\x80w");   // 😀
+        assert(json_unescape("\\uD83D\\uDE00") == "\xF0\x9F\x98\x80");
+        assert(json_unescape("\\ud83dx") == "\xEF\xBF\xBDx");
+        assert(json_unescape("\\ude00") == "\xEF\xBF\xBD");
+        assert(json_unescape("\\ud83d\\u0041") == "\xEF\xBF\xBD" "A");
         assert(json_unescape("\\q") == "q");
         assert(json_unescape("end\\") == "end\\");
         assert(json_unescape("\\u12") == "\\u12");

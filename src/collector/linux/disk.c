@@ -7,6 +7,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 /* /proc/diskstats line layout (kernel ≥ 4.18, 14+ whitespace-separated cols):
  *   major minor name
@@ -19,9 +20,13 @@
  * the device's physical sector size (see block/genhd.c).
  */
 
+/* Devices stacked on others (device mapper, md, a ZFS zvol, bcache, drbd)
+ * are left out like the virtual ones: their I/O is counted again on the
+ * disks under them. A zvol on a Proxmox host doubled the totals. */
 static int is_noise_name(const char* name) {
     static const char* kSkip[] = {
-        "loop", "ram", "zram", "dm-", "md", "fd", "sr", "nbd"
+        "loop", "ram", "zram", "dm-", "md", "fd", "sr", "nbd",
+        "zd", "bcache", "drbd"
     };
     for (size_t i = 0; i < sizeof(kSkip) / sizeof(kSkip[0]); ++i) {
         size_t n = strlen(kSkip[i]);
@@ -31,24 +36,21 @@ static int is_noise_name(const char* name) {
 }
 
 /* Returns 1 if the name looks like a partition rather than a whole disk.
- * Explicit rules matching /sys/block conventions:
- *   - nvme<N>n<M>p<K>   → partition (e.g. nvme0n1p1)
- *   - mmcblk<N>p<K>     → partition (e.g. mmcblk0p1)
+ * /sys/class/block/<name>/partition says so where sysfs is there;
+ * otherwise the kernel's naming:
+ *   - <disk ending in a digit>p<K> → partition: nvme0n1p1, mmcblk0p1,
+ *     and zd0p1 (a zvol's), rbd0p1, pmem0p1, which were counted as disks
  *   - sd<letters><N>    → partition (e.g. sda1, sdb12)
  *   - hd<letters><N>    → partition
  *   - vd<letters><N>    → partition
  *   - xvd<letters><N>   → partition
  * Everything else is treated as whole disk.
  */
-static int starts_with(const char* s, const char* prefix) {
-    return strncmp(s, prefix, strlen(prefix)) == 0;
-}
-
-static int ends_with_p_digits(const char* name) {
+static int ends_with_digit_p_digits(const char* name) {
     size_t len = strlen(name);
     size_t i = len;
     while (i > 0 && isdigit((unsigned char)name[i - 1])) --i;
-    return (i > 0 && i < len && name[i - 1] == 'p');
+    return i > 1 && i < len && name[i - 1] == 'p' && isdigit((unsigned char)name[i - 2]);
 }
 
 static int sd_family_partition(const char* name, const char* prefix) {
@@ -64,9 +66,13 @@ static int sd_family_partition(const char* name, const char* prefix) {
 }
 
 static int is_partition_name(const char* name) {
-    if (starts_with(name, "nvme") || starts_with(name, "mmcblk")) {
-        return ends_with_p_digits(name);
+    char path[512];
+    snprintf(path, sizeof(path), "%s/class/block/%.64s", budyk_linux_sys_root(), name);
+    if (access(path, F_OK) == 0) {
+        snprintf(path, sizeof(path), "%s/class/block/%.64s/partition", budyk_linux_sys_root(), name);
+        return access(path, F_OK) == 0;
     }
+    if (ends_with_digit_p_digits(name)) return 1;
     return sd_family_partition(name, "sd")
         || sd_family_partition(name, "hd")
         || sd_family_partition(name, "vd")

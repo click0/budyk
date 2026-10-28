@@ -130,6 +130,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as long as the clock stepped back (a day back: a day longer): its end
   was a time on the wall clock. It is moved back with the clock now,
   keeping what was left of it.
+- **Linux: the disk totals counted some I/O twice.** A partition of a
+  disk whose name ends in a digit is `<disk>p<N>`, and only nvme's and
+  mmcblk's were known as partitions: a ZFS zvol's (`zd0p1`, every VM disk
+  on a Proxmox host), `rbd0p1` and `pmem0p1` were disks of their own. And
+  a zvol, bcache or drbd device is counted again on the disks under it,
+  as the device mapper's and md's already were not. sysfs decides what
+  a partition is where it is there. On such hosts the totals read lower.
+- **FreeBSD: a ZFS host read low on available memory.** The ARC, which
+  the kernel gives back under pressure, was not counted, and with a warm
+  ARC available memory read under 10 % on a healthy machine (the shipped
+  `memory_low` rule fired). The ARC above its minimum counts as
+  available now: on a ZFS host it reads higher.
+- More than 8192 processes: the newest ones get no CPU rate, so
+  `proc.top` by CPU leaves them out. It is logged once, as the other
+  caps are (it was not).
+- Records older than codec v8 (budyk 0.5 and before) were read as
+  holding every group up to file_watch: a v2 record's zeros for the
+  processes and the daemon's own memory read as readings, in the rings
+  converted from them too. Each version has its own groups now.
+- A password with a character past U+FFFF (an emoji) never logged in
+  when the browser or a script sent it escaped (`\ud83d\ude00`, as
+  Python's `json.dumps` does): each half of the pair was decoded on its
+  own. A pair is one character now, and a lone half U+FFFD.
 
 ## [0.8.4] — 2026-10-27
 
