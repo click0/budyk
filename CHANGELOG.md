@@ -92,6 +92,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sample (250 KB at the default 300; at the most, 100 000, a second of
   the HTTP thread each time). `/api/samples?last=N` returns the newest
   N; the TUI and the dashboard's session check ask for one.
+- **Linux: a watched file replaced while anyone read it went unwatched.**
+  A save by rename (`vipw`, `sed -i`, a package upgrade) gives the old
+  file only an attribute change while a reader holds it open or it has
+  another name, and its deletion when the last of those goes, or never:
+  the watch stayed on the old file, and changes to the new one at the
+  path were missed. The path is checked again on such a change: Deleted,
+  Created, and the new file watched. A name of a file with another one,
+  removed, is Deleted too.
 
 ## [0.8.4] — 2026-10-27
 
