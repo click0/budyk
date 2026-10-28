@@ -15,6 +15,7 @@
 #include "web/auth.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cerrno>
 #include <climits>
 #include <csignal>
@@ -56,17 +57,24 @@ uint64_t parse_window_ns(const char* s) {
 
 // Read up to `cap` most-recent samples from `ring_path` whose
 // timestamp_nanos is within [now - window_ns, now]. Records that fail
-// to decode (CRC mismatch / version skew) are silently skipped.
+// to decode (CRC mismatch / version skew) are silently skipped. A ring
+// that cannot be opened is -1, with why in `why` ("open failed:
+// Permission denied": the rings are the service user's, 0600).
 int load_samples_for_suggest(const char* ring_path,
                              uint8_t tier,
                              uint32_t record_size,
                              uint64_t cap,
                              uint64_t window_ns,
-                             std::vector<budyk::Sample>* out) {
+                             std::vector<budyk::Sample>* out,
+                             std::string* why) {
     // Read only: the daemon owns the rings (and running this as root must
     // not leave a root-owned ring behind for it).
     budyk::RingFile ring;
-    if (ring.open_read_only(ring_path, tier, record_size, cap) != 0) return -1;
+    if (const int rc = ring.open_read_only(ring_path, tier, record_size, cap); rc != 0) {
+        *why = budyk::RingFile::describe(rc);
+        if (ring.last_errno() != 0) *why += std::string(": ") + std::strerror(ring.last_errno());
+        return -1;
+    }
 
     const uint64_t widx     = ring.write_index();
     const uint64_t valid    = widx < cap ? widx : cap;
@@ -140,6 +148,43 @@ void restore_tty_and_reraise(int sig) {
     if (g_tty_echo_off) ::tcsetattr(STDIN_FILENO, TCSANOW, &g_tty_saved);
     ::signal(sig, SIG_DFL);
     ::raise(sig);
+}
+
+// Ctrl-C (or a TERM, a HUP) while curl talks to the LLM API: the handler
+// raises the flag suggest_rules_llm() polls, curl is killed, its temp
+// files (one holds the API key) are removed, and then the signal ends
+// budyk as it would have. It used to leave the files in $TMPDIR, and
+// curl, in a process group of its own, finished the request on its own.
+static_assert(std::atomic<bool>::is_always_lock_free, "set from a signal handler");
+std::atomic<bool>     g_llm_cancel{false};
+volatile sig_atomic_t g_llm_signal = 0;
+
+void cancel_llm(int sig) {
+    g_llm_signal = sig;
+    g_llm_cancel.store(true);
+}
+
+int suggest_rules_llm_cancellable(const char* api_key, const std::string& summary,
+                                  std::string* out, std::string* why) {
+    constexpr size_t kN = sizeof(kTtySignals) / sizeof(kTtySignals[0]);
+    struct sigaction old_actions[kN];
+    struct sigaction sa{};
+    sa.sa_handler = cancel_llm;
+    ::sigemptyset(&sa.sa_mask);
+    for (size_t i = 0; i < kN; ++i) {
+        ::sigaction(kTtySignals[i], nullptr, &old_actions[i]);
+        if (old_actions[i].sa_handler != SIG_IGN) ::sigaction(kTtySignals[i], &sa, nullptr);
+    }
+    const int rc = budyk::suggest_rules_llm(api_key, summary, out, why, &g_llm_cancel);
+    for (size_t i = 0; i < kN; ++i) ::sigaction(kTtySignals[i], &old_actions[i], nullptr);
+    // sig_atomic_t is a long on FreeBSD; it holds a signal number.
+    if (const int sig = static_cast<int>(g_llm_signal); sig != 0) {
+        std::fprintf(stderr, "budyk suggest-rules: %s: the request was cancelled\n",
+                     ::strsignal(sig));
+        ::signal(sig, SIG_DFL);
+        ::raise(sig);
+    }
+    return rc;
 }
 
 } // namespace
@@ -271,19 +316,29 @@ int cmd_suggest_rules(int argc, char* argv[]) {
     // dashboard was open: in adaptive mode, often nothing at all.
     const uint32_t record_size = static_cast<uint32_t>(budyk::record_size_for_sample());
     constexpr uint64_t kMiB = 1024 * 1024;
+    // A ring that cannot be read is said so, with why: "cannot read"
+    // alone, and "run `budyk serve` first", was all an admin got for
+    // rings the service user owns, while the daemon had collected for weeks.
     auto load = [&](const char* file, uint8_t tier, int max_mb, std::vector<budyk::Sample>* out) {
         const std::string path = std::string(cfg.data_dir) + "/" + file;
         uint64_t cap = (static_cast<uint64_t>(max_mb) * kMiB) / record_size;
         if (cap == 0) cap = 1;
-        return load_samples_for_suggest(path.c_str(), tier, record_size, cap, window_ns, out);
+        std::string why;
+        const int rc = load_samples_for_suggest(path.c_str(), tier, record_size, cap,
+                                                window_ns, out, &why);
+        if (rc != 0) {
+            std::fprintf(stderr, "budyk suggest-rules: cannot read '%s': %s\n",
+                         path.c_str(), why.c_str());
+        }
+        return rc;
     };
     std::vector<budyk::Sample> l2, l1;
     const int rc2 = load("tier2.ring", 2, cfg.tier2_max_mb, &l2);
     const int rc1 = load("tier3.ring", 3, cfg.tier3_max_mb, &l1);
     if (rc2 != 0 && rc1 != 0) {
         std::fprintf(stderr,
-            "budyk suggest-rules: cannot read '%s/tier2.ring' or '%s/tier3.ring' "
-            "(run `budyk serve` first to collect data)\n", cfg.data_dir, cfg.data_dir);
+            "budyk suggest-rules: no history to read (the rings are made by `budyk serve`, "
+            "with the sizes in '%s')\n", config_path);
         return 1;
     }
     // Each stretch once, at the finer level.
@@ -294,9 +349,23 @@ int cmd_suggest_rules(int argc, char* argv[]) {
     if (ai) {
         const std::string summary = build_llm_summary(samples.data(), samples.size());
         std::string why;
-        if (budyk::suggest_rules_llm(api_key, summary, &doc, &why) != 0) {
+        if (suggest_rules_llm_cancellable(api_key, summary, &doc, &why) != 0) {
             std::fprintf(stderr, "budyk suggest-rules: LLM call failed: %s\n", why.c_str());
             return 1;
+        }
+        // Spec §3.7.1 step 6: the reply is checked before it is written.
+        // A cut-off or malformed one was written out, and exit 0.
+        const int n = budyk::check_suggested_rules(doc, &why);
+        if (n <= 0) {
+            std::fprintf(stderr,
+                "budyk suggest-rules: the LLM's reply is not a rules file budyk loads (%s); "
+                "nothing written\n", n == 0 ? "no watch() rule in it" : why.c_str());
+            return 1;
+        }
+        if (doc.find("exec(") != std::string::npos || doc.find("exec (") != std::string::npos) {
+            std::fprintf(stderr,
+                "budyk suggest-rules: note: the suggestion calls exec(): read what it "
+                "would run before you use it\n");
         }
         // Prefix the doc with a header so the user knows it's Tier B.
         doc = "-- AI-suggested rules (Tier B, LLM-generated). Review before using.\n"
@@ -304,6 +373,15 @@ int cmd_suggest_rules(int argc, char* argv[]) {
               " samples in window " + window_arg + ".\n\n" + doc;
     } else {
         doc = budyk::suggest_rules_for_samples(samples.data(), samples.size());
+        // The templates' own output, checked as the daemon would load it:
+        // a comment in a condition once made every such file fail to load.
+        std::string why;
+        if (budyk::check_suggested_rules(doc, &why) < 0) {
+            std::fprintf(stderr,
+                "budyk suggest-rules: the suggested rules do not load (%s); nothing written\n",
+                why.c_str());
+            return 1;
+        }
     }
 
     if (output_path != nullptr) {

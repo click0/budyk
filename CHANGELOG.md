@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The rules `budyk suggest-rules` wrote did not load on almost any
+  host.** Each disk and network rule had its threshold in words as a
+  comment after the condition (`> 52428800  -- 50.0 MiB/s end,`), which
+  took the function's `end` with it, so the whole file failed: "'end'
+  expected". A disk read 1 MiB/s at its busiest is enough for such a
+  rule. The rate in words is in the rule's comment now, and the file is
+  loaded as `budyk serve` loads one before it is written.
+- The suggested rules fired on a single tick, and again every other tick
+  while the condition held: they wait 5 ticks in a row now (3 for
+  memory), as the spec's examples do. The CPU threshold is 85 % at the
+  least, as spec §3.7.1 has it for a p99 of 45 % (it was 60 %).
+- `suggest-rules` says why a ring cannot be read ("open failed:
+  Permission denied": the rings are the service user's, 0600), each
+  ring on its own; it said only "run `budyk serve` first".
+- **`suggest-rules --ai` wrote whatever the LLM replied, and exit 0.** A
+  reply cut off at its length limit ended mid-rule and was written as it
+  was. A reply that did not end normally, or that does not load as a
+  rules file, is refused now and nothing is written; one that calls
+  `exec()` is pointed out.
+- **Ctrl-C during `suggest-rules --ai` left the API key on disk.** curl,
+  in a process group of its own, did not get the terminal's signal and
+  finished the request alone, and its temp files, the request headers
+  with the key among them, stayed in `$TMPDIR`. curl is killed now and
+  the files removed before the signal ends budyk.
+
 ## [0.8.4] — 2026-10-27
 
 Most of this release is in the config and the packages, and two of the

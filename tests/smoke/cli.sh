@@ -6,9 +6,13 @@
 #   - suggest-rules reads the L1 and L2 rings (spec §3.7.1): a daemon
 #     that ran with no client (adaptive: L1 only, the L3 ring empty) gave
 #     "Generated from 0 samples", since only the L3 ring was read;
+#   - suggest-rules names a ring it cannot read, and why;
 #   - suggest-rules says when its output cannot be written (/dev/full),
 #     and refuses a --window past a year however it is written (a huge
 #     number wrapped to some hours);
+#   - Ctrl-C during suggest-rules --ai (a stand-in curl that takes its
+#     time) kills curl and leaves no temp file in $TMPDIR, the API key's
+#     among them (they stayed, and curl finished the request alone);
 #   - the TUI against an address that takes the connection and never
 #     answers gives up within seconds with the reason (it waited for
 #     ever, `q` unread);
@@ -101,6 +105,18 @@ else
     echo "FAIL: suggest-rules: $(cat "$DIR/err")"; fail=1
 fi
 
+# A config that is not the daemon's (rings of other sizes): each ring
+# said, with why (it was "cannot read ... run `budyk serve` first").
+{ cat "$DIR/config.yaml"; printf 'storage:\n  tier2_max_mb: 3\n  tier3_max_mb: 3\n'; } > "$DIR/other.yaml"
+if "$BIN" suggest-rules --config "$DIR/other.yaml" --window 1h > /dev/null 2> "$DIR/err"; then
+    echo "FAIL: suggest-rules on rings of another size exited 0"; fail=1
+elif grep -q "tier2.ring': file size does not match" "$DIR/err" &&
+     grep -q "tier3.ring': file size does not match" "$DIR/err"; then
+    echo "ok   a ring that cannot be read is named, with why"
+else
+    echo "FAIL: suggest-rules on rings of another size: $(cat "$DIR/err")"; fail=1
+fi
+
 if [ -w /dev/full ]; then
     if "$BIN" suggest-rules --config "$DIR/config.yaml" --window 1h --output /dev/full 2> "$DIR/err"; then
         echo "FAIL: suggest-rules --output /dev/full exited 0: $(cat "$DIR/err")"; fail=1
@@ -110,6 +126,44 @@ if [ -w /dev/full ]; then
         echo "FAIL: suggest-rules --output /dev/full: $(cat "$DIR/err")"; fail=1
     fi
 fi
+python3 - "$BIN" "$DIR" <<'EOF' || fail=1
+import os, signal, subprocess, sys, time
+binary, d = sys.argv[1], sys.argv[2]
+os.makedirs(d + "/bin")
+os.makedirs(d + "/tmp")
+with open(d + "/bin/curl", "w") as f:
+    f.write("#!/bin/sh\ntouch '%s/started'\nsleep 3\ntouch '%s/finished'\n" % (d, d))
+os.chmod(d + "/bin/curl", 0o755)
+env = dict(os.environ, PATH=d + "/bin:" + os.environ["PATH"], TMPDIR=d + "/tmp",
+           ANTHROPIC_API_KEY="sk-smoke-not-a-key")
+p = subprocess.Popen([binary, "suggest-rules", "--config", d + "/config.yaml",
+                      "--window", "1h", "--ai"], env=env, stderr=subprocess.PIPE, text=True)
+end = time.time() + 10
+while not os.path.exists(d + "/started") and time.time() < end and p.poll() is None:
+    time.sleep(0.05)
+if not os.path.exists(d + "/started"):
+    p.kill()
+    sys.exit("FAIL: the stand-in curl never started: %s" % p.communicate()[1].strip())
+while_running = os.listdir(d + "/tmp")
+p.send_signal(signal.SIGINT)                     # Ctrl-C
+try:
+    err = p.communicate(timeout=5)[1]
+except subprocess.TimeoutExpired:
+    p.kill()
+    sys.exit("FAIL: suggest-rules --ai went on after SIGINT")
+time.sleep(4)                                    # past the stand-in's 3 s
+left = os.listdir(d + "/tmp")
+if not while_running:
+    sys.exit("FAIL: no temp file while curl ran: the check proves nothing")
+if p.returncode != -signal.SIGINT:
+    sys.exit("FAIL: suggest-rules --ai: exit %d after SIGINT: %s" % (p.returncode, err.strip()))
+if left:
+    sys.exit("FAIL: temp files left in TMPDIR after Ctrl-C: %s" % left)
+if os.path.exists(d + "/finished"):
+    sys.exit("FAIL: curl went on with the request after budyk was interrupted")
+print("ok   Ctrl-C during suggest-rules --ai kills curl and removes its %d temp files"
+      % len(while_running))
+EOF
 took=
 for w in 367d 213503982334602d 99999999999999999999d 0d -1d 7 d; do
     if "$BIN" suggest-rules --config "$DIR/config.yaml" --window "$w" > /dev/null 2>&1; then

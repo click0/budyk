@@ -582,7 +582,10 @@ budyk suggest-rules --config config.yaml --window 7d --output suggested.lua
 
 This reads the collected history (the L2 and L1 rings: every L1
 interval is there, whether anyone was looking or not) and writes
-`watch()` rules with thresholds derived from it. Review them before use.
+`watch()` rules with thresholds derived from it, each to fire when its
+condition holds 5 ticks in a row (3 for memory). The file is loaded as
+`budyk serve` would load it before it is written. Review the rules
+before use.
 
 ### Checking the ring files
 

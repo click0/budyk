@@ -2,6 +2,7 @@
 #include "ai/baseline.h"
 #include "ai/suggest.h"
 #include "core/sample.h"
+#include "rules/lua_engine.h"
 
 #include <cassert>
 #include <cstdio>
@@ -24,7 +25,9 @@ int main() {
         assert(suggest_rule_load_1m              (empty, 4.0)  == "");
     }
 
-    // 2. CPU threshold = max(60, ceil(p99+15)); p99=45 → 60.
+    // 2. CPU threshold = max(85, ceil(p99+15)); p99=45 → 85, as spec
+    //    §3.7.1 has it (the floor was 60). Five ticks in a row, as the
+    //    spec's examples have it: one tick fired it, every other tick.
     {
         MetricBaseline b{};
         b.n = 100; b.min = 5; b.max = 55; b.mean = 20; b.stddev = 10;
@@ -32,8 +35,11 @@ int main() {
         std::string r = suggest_rule_cpu_total_percent(b);
         assert(!r.empty());
         assert(contains(r, "watch(\"high_cpu\""));
-        assert(contains(r, "cpu.total_percent > 60"));
+        assert(contains(r, "cpu.total_percent > 85"));
+        assert(contains(r, "for_ticks = 5,"));
         assert(contains(r, "p99=45.0"));
+        b.p99 = 78;
+        assert(contains(suggest_rule_cpu_total_percent(b), "cpu.total_percent > 93"));
     }
 
     // 3. CPU threshold capped at 95 when p99 is already high.
@@ -50,8 +56,9 @@ int main() {
         b.n = 100; b.min = 6.2; b.max = 70; b.mean = 40;
         std::string r = suggest_rule_mem_available_percent(b);
         assert(contains(r, "watch(\"memory_low\""));
-        assert(contains(r, "severity = \"critical\""));
+        assert(contains(r, "severity  = \"critical\""));
         assert(contains(r, "mem.available_percent < 5"));
+        assert(contains(r, "for_ticks = 3,"));
     }
 
     // 4b. Memory: floor(min-2) above the 5% floor — uses the computed value.
@@ -68,7 +75,7 @@ int main() {
         b.n = 100; b.min = 30; b.mean = 50;
         std::string r = suggest_rule_mem_available_percent(b);
         assert(contains(r, "mem.available_percent < 10"));
-        assert(contains(r, "severity = \"warning\""));
+        assert(contains(r, "severity  = \"warning\""));
     }
 
     // 6. Swap never used → no rule.
@@ -153,7 +160,10 @@ int main() {
         std::string r = suggest_rule_disk_write_bytes_per_sec(b);
         assert(!r.empty());
         assert(contains(r, "watch(\"disk_write_high\""));
-        assert(contains(r, "50.0 MiB/s"));
+        assert(contains(r, "threshold 50.0 MiB/s"));
+        // The rate in words is in the rationale's comment, not after the
+        // condition, where it commented out the function's `end`.
+        assert(contains(r, "return disk.write_bytes_per_sec > 52428800 end,"));
     }
 
     // 14. Net rx — active; threshold = max(ceil(p99 * 1.5), 5 MiB/s).
@@ -213,6 +223,65 @@ int main() {
         assert(m.size() == sizeof(want) / sizeof(want[0]));
         for (size_t i = 0; i < m.size(); ++i) assert(m[i].timestamp_nanos == want[i] * s);
         assert(!m[3].folded);   // the L2 record at 90 s, not the folded L1 one
+    }
+
+    // 17. The document loads as the daemon loads a rules file, and its
+    //     rules fire: all eight, disk and network among them (each of
+    //     those had a `--` comment that took its function's `end`, and
+    //     the file did not load: spec §5 item 14). Over the thresholds,
+    //     memory_low fires on the 3rd tick and the rest on the 5th; under
+    //     them, nothing does.
+    {
+        Sample h[100]{};
+        for (int i = 0; i < 100; ++i) {
+            h[i].groups = kGroupsAll;
+            h[i].cpu.total_percent     = 30.0 + i % 20;
+            h[i].cpu.count             = 4;
+            h[i].mem.available_percent = 40.0 - i % 35;   // dips to 6 %
+            h[i].swap.used_percent     = 5.0 + i % 10;
+            h[i].load.avg_1m           = 1.0 + 0.01 * i;
+            h[i].disk.read_bytes_per_sec  = (80ULL + static_cast<unsigned>(i)) << 20;
+            h[i].disk.write_bytes_per_sec = (40ULL + static_cast<unsigned>(i)) << 20;
+            h[i].net.rx_bytes_per_sec     = (10ULL + static_cast<unsigned>(i)) << 20;
+            h[i].net.tx_bytes_per_sec     = (5ULL  + static_cast<unsigned>(i)) << 20;
+        }
+        const std::string doc = suggest_rules_for_samples(h, 100);
+        std::string why;
+        assert(check_suggested_rules(doc, &why) == 8);
+
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        if (e.load_string(doc.c_str()) != 0) {
+            std::fprintf(stderr, "%s\n%s\n", doc.c_str(), e.last_error().c_str());
+            assert(false);
+        }
+        assert(e.rule_count() == 8);
+        Sample quiet = h[0];
+        quiet.mem.available_percent = 50;
+        for (int t = 0; t < 6; ++t) assert(e.eval_tick(quiet) == 0);
+
+        Sample hot{};
+        hot.groups = kGroupsAll;
+        hot.cpu.total_percent = 100; hot.cpu.count = 4;
+        hot.mem.available_percent = 1;
+        hot.swap.used_percent = 100;
+        hot.load.avg_1m = 1000;
+        hot.disk.read_bytes_per_sec = hot.disk.write_bytes_per_sec = 1ULL << 40;
+        hot.net.rx_bytes_per_sec    = hot.net.tx_bytes_per_sec    = 1ULL << 40;
+        const int fired[] = {0, 0, 1, 0, 7};   // memory_low at 3, the rest at 5
+        for (int t = 0; t < 5; ++t) assert(e.eval_tick(hot) == fired[t]);
+        for (const auto& r : e.rules()) assert(r.fire_count == 1);
+    }
+
+    // 18. A text that does not load is -1, with Lua's reason; a comment
+    //     after a condition is what the throughput rules had.
+    {
+        std::string why;
+        assert(check_suggested_rules(
+            "watch(\"x\", { when = function() return cpu.total_percent > 1  -- 1 % end,\n"
+            "  action = alert })\n", &why) == -1);
+        assert(contains(why, "'end' expected"));
+        assert(check_suggested_rules("-- nothing\n", &why) == 0);
     }
 
     std::printf("test_suggest: PASS\n");
