@@ -135,6 +135,34 @@ int plain_table_only(lua_State* L) {
         }
         lua_pop(L, 1);
     }
+    // The elements they visit, charged before they run: the loop is in C,
+    // one instruction for the call, and 150 000 inserts at the front of a
+    // list as long took over a minute. insert(t, pos, v) and remove(t, pos)
+    // shift what is after pos, sort compares about n log2 n times, concat
+    // reads n.
+    if (lua_type(L, 1) == LUA_TTABLE) {
+        const auto n = static_cast<uint64_t>(lua_rawlen(L, 1));
+        const char* name = lua_tostring(L, lua_upvalueindex(2));
+        const bool has_pos = lua_isinteger(L, 2) != 0;
+        const lua_Integer pos = has_pos ? lua_tointeger(L, 2) : 0;
+        uint64_t work = 0;
+        if (std::strcmp(name, "insert") == 0) {
+            if (lua_gettop(L) >= 3 && has_pos && pos >= 1 && static_cast<uint64_t>(pos) <= n) {
+                work = n - static_cast<uint64_t>(pos) + 1;
+            }
+        } else if (std::strcmp(name, "remove") == 0) {
+            if (has_pos && pos >= 1 && static_cast<uint64_t>(pos) < n) {
+                work = n - static_cast<uint64_t>(pos);
+            }
+        } else if (std::strcmp(name, "sort") == 0) {
+            uint64_t bits = 0;
+            for (uint64_t m = n; m != 0; m >>= 1) ++bits;
+            work = n * bits;
+        } else {
+            work = n;                                       // concat
+        }
+        budyk_lua_charge(L, work);
+    }
     return call_upvalue(L);
 }
 
@@ -236,6 +264,13 @@ void open_sandbox_libs(lua_State* L) {
 // enough that the hook costs nothing measurable (test_rule_perf).
 constexpr int kHookInterval = 1000;
 
+// The bytes the Lua state is handed count as instructions too, this many
+// to one: a single instruction copies a string whatever its length
+// (`s .. "x"` with s of 2 MiB, s:upper(), table.concat), and a rule well
+// under the instruction limit took 25 s a tick that way. About what a
+// copy of that many bytes costs next to a VM instruction.
+constexpr size_t kAllocBytesPerInstruction = 64;
+
 void* LuaEngine::alloc(void* ud, void* ptr, size_t osize, size_t nsize) {
     auto* self = static_cast<LuaEngine*>(ud);
     // When ptr is null, osize is the type of object being created, not
@@ -256,6 +291,20 @@ void* LuaEngine::alloc(void* ud, void* ptr, size_t osize, size_t nsize) {
     void* p = std::realloc(ptr, nsize);
     if (p == nullptr) return nullptr;
     self->memory_used_ = self->memory_used_ - old + nsize;
+    // Growth is charged (kAllocBytesPerInstruction). An allocator must not
+    // raise; past the limit the hook is set to fire on the next
+    // instruction, and raises there (as lua.c stops a script from its
+    // signal handler).
+    if (nsize > old) {
+        self->alloc_bytes_ += nsize - old;
+        if (self->alloc_bytes_ >= kAllocBytesPerInstruction) {
+            self->instructions_used_ += self->alloc_bytes_ / kAllocBytesPerInstruction;
+            self->alloc_bytes_ %= kAllocBytesPerInstruction;
+            if (self->instructions_used_ > self->instruction_limit_ && self->L_ != nullptr) {
+                lua_sethook(self->L_, &LuaEngine::count_hook, LUA_MASKCOUNT, 1);
+            }
+        }
+    }
     return p;
 }
 
@@ -293,6 +342,7 @@ void LuaEngine::charge(lua_State* L, uint64_t n) {
 
 void LuaEngine::begin_call() {
     instructions_used_ = 0;
+    alloc_bytes_       = 0;
     if (L_ != nullptr) lua_sethook(L_, &LuaEngine::count_hook, LUA_MASKCOUNT, kHookInterval);
 }
 
