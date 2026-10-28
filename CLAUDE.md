@@ -6,20 +6,37 @@ budyk (Ukrainian "будик" — alarm clock) is a lightweight, self-contained 
 monitoring daemon for FreeBSD and Linux. Single static binary, no external
 dependencies at runtime, no database. BSD-3-Clause license.
 
-## Architecture overview
+## The spec and this file
 
-- **Language:** C++17 (everything except the collectors) + C (platform collectors)
-- **Build:** CMake 3.22+; a static binary by default (`STATIC_LINK=ON`)
-- **Collection:** 3-level adaptive model (L1 heartbeat / L2 watchful / L3 active)
-  plus custom levels (name, interval, priority, Lua `when` condition, hold);
-  each level reads its own `MetricSet` (`collection.<level>.metrics`:
-  minimal / standard / full or a list; `collect_one()` runs only those
-  collectors), and `collection.mode` is adaptive / always / on-demand.
-  `Sample::groups` says what a sample has; a rate's first read in a row is
-  a baseline, not in `groups` (`Sample::baseline`). Rules skip what their
-  sample lacks (`lua_bindings.cpp`: the proxies raise, the engine skips)
-- **Rule engine:** embedded Lua 5.4, sandboxed `watch()` API, per-call
-  instruction and memory limits
+The design is in `docs/budyk-spec-en.md` (Ukrainian: `docs/budyk-spec-uk.md`,
+same section numbers): the adaptive L1/L2/L3 model (§3.4.1), the hot buffer
+(§3.4.2), irregular density in the rings (§3.4.3), the `collection:` config
+(§3.4.4), the ring format (§3.5), the Lua rules: syntax, sandbox, pipeline,
+nil skips a tick (§3.6), AI suggestions (§3.7), the resource figures (§5).
+Read it there; this file does not repeat it.
+
+The spec was written before the code. Where they differ, the code wins, and
+this file says how it is actually built. The spec's proposals that were
+**not** followed: the project layout (§3.1; see the tree below), libuv /
+kqueue / epoll, mongoose / libwebsockets, msgpack, cJSON (§3.2), an event
+loop with all I/O non-blocking (§3.3 item 6; see Threads and I/O),
+`MetricSource` as the extension point (§3.3 item 2; kept unused, see the
+end), `__FreeBSD__` / `__linux__` branching (§3.3 item 1; `BUDYK_FREEBSD` /
+`BUDYK_LINUX`), `write_idx` updated atomically in the mmap'd header (§3.5;
+SIGBUS on arm64, see Shared state), and a 10 ms time limit per rule (§3.6.3;
+an instruction count, see the rules decision).
+
+## Architecture: beyond the spec
+
+- **Language and build:** C++17 + plain C collectors, CMake 3.22+, static by
+  default (`STATIC_LINK=ON`); spec §3.3 items 1, 7, 8.
+- **Collection:** besides L1/L2/L3, custom levels (name, interval, priority,
+  Lua `when` condition, hold); each level reads its own `MetricSet`
+  (`collection.<level>.metrics`: minimal / standard / full or a list;
+  `collect_one()` runs only those collectors). `Sample::groups` says what a
+  sample has; a rate's first read in a row is a baseline, not in `groups`
+  (`Sample::baseline`). Rules skip what their sample lacks
+  (`lua_bindings.cpp`: the proxies raise, the engine skips).
 - **Metrics:** fixed totals in `Sample` (persisted); per-entity detail
   (`budyk_detail_c`: each core, disk, interface, filesystem, and the top
   processes from the tracker in `src/collector/detail.c`) collected by
@@ -44,29 +61,28 @@ dependencies at runtime, no database. BSD-3-Clause license.
   a baseline. Filesystems are read from `/proc/self/mountinfo`, read-only
   by the filesystem's own options (systemd's ProtectSystem=strict makes
   every mount look read-only).
-- **Storage:** one ring file per level (mmap'd header, `pwrite` records,
-  CRC32C, level markers). A new ring's header goes in with `pwrite`
-  before it is mapped (a store through the mapping into the sparse
-  file's hole is SIGBUS on a full disk); a ring of the right size with an
-  all-zero header is made anew; a store that fails is logged once with
-  its reason (`TierManager::store_error()`). While L3 or a custom level collects,
-  `TierManager::store()` also folds its samples (`TierAggregator`) into one
-  L2 record per L2 interval and one L1 record per L1 interval, flagged
-  `folded` in the record header; `query_all()` (`/api/range?level=all`)
-  shows each stretch once, at the finest level still on disk.
-- **Web:** hand-written HTTP/1.1 + WebSocket (RFC 6455) server in `src/web`.
-  No mongoose, no libwebsockets. The SPA is a string literal in
-  `src/web/spa.cpp`.
-- **TUI:** ncurses; polls `/api/samples` once a second
+- **Storage:** one ring file per level, records in a codec of our own. A
+  new ring's header goes in with `pwrite` before it is mapped (a store
+  through the mapping into the sparse file's hole is SIGBUS on a full
+  disk); a ring of the right size with an all-zero header is made anew; a
+  store that fails is logged once with its reason
+  (`TierManager::store_error()`). The folds of spec §3.4.1 are
+  `TierAggregator`, called from `TierManager::store()` while L3 or a custom
+  level collects: one L2 record per L2 interval, one L1 record per L1
+  interval, flagged `folded`; `query_all()` (`/api/range?level=all`) shows
+  each stretch once, at the finest level still on disk.
+- **Web:** hand-written HTTP/1.1 + WebSocket (RFC 6455) server in `src/web`;
+  the SPA is a string literal in `src/web/spa.cpp`.
+- **TUI:** ncurses; polls `/api/samples` once a second.
 - **Alerts:** every alert is logged, queued by `LuaEngine::raise_alert()`
   for the serve loop (WebSocket frame `{"alerts":[...]}`, the last 100 for
   `/api/alerts`) and sent to ntfy / Discord / Telegram / SMTP / Twilio
-  through `curl(1)` from a worker thread
-- **Rules (spec §3.6):** `cooldown` defaults to `for_ticks`; `when()`
-  returning nil skips the tick and keeps the streak, returning nothing is
-  false; `action` may be a list (`{ alert, escalate, exec(...) }`); `exec()`
-  in the rules file itself returns the command as an action instead of
-  running it (`LuaEngine::loading()`)
+  through `curl(1)` from a worker thread.
+- **Rules (on top of spec §3.6):** `cooldown` defaults to `for_ticks`
+  ticks; `when()` returning nothing is false (nil skips, as in §3.6.5);
+  `action` may be a list (`{ alert, escalate, exec(...) }`); `exec()` in the
+  rules file itself returns the command as an action instead of running it
+  (`LuaEngine::loading()`).
 
 ## Threads and I/O (how it actually runs)
 
@@ -97,6 +113,7 @@ There is no event-loop library (no libuv, kqueue or epoll). The daemon is:
   called by the main thread once per tick, answers pings, honours close
   frames and drops clients that hung up; with auth on, `drop_sessions()`
   then closes (1008) every client whose session ended (logout, expiry).
+  A vanished client releases L3 on the next tick.
 - **Worker threads** (`src/rules/worker.*`): one for alerts, one for
   `exec()`. Bounded FIFO of 256 jobs, started on first use, cancelled on
   shutdown after a grace period. Both survive a SIGHUP rules reload.
@@ -140,27 +157,7 @@ src/cli/           — the one-shot commands: hash-password, suggest-rules,
                      watch-files, tui, fsck (fsck.cpp)
 src/main.cpp       — dispatch only
 tests/unit/        — one assert()-based executable per module (ctest)
-tests/smoke/       — serve.sh (HTTP, WS, SIGHUP, fd check), crash.sh (SIGKILL +
-                     restart), warm_grace.sh (hot buffer emptied after warm_grace),
-                     escalate.sh (a sustained anomaly escalates L2 to L3),
-                     fsck.sh (fsck, recovery after a crash, the data_dir lock),
-                     upgrade.sh (rings of an older release converted on start),
-                     modes.sh (per-level metric sets, always / on-demand),
-                     resources.sh (spec §5 items 2-6: RSS, CPU, disk, L1 -> L3,
-                     catch-up, binary size; release builds only),
-                     auth.sh (login, the WebSocket ends with its session, a
-                     cross-origin WebSocket refused),
-                     crosscheck.sh (the readings against free, swapinfo, uptime,
-                     ps, ss / netstat, df, /sys or ifconfig and kern.disks, a
-                     busy loop and a 64 MB write),
-                     swap_devices.sh (FreeBSD, root or sudo: 17 swap devices,
-                     the swap total against swapinfo),
-                     net_totals.sh (root or sudo: a ping flood over a veth
-                     into a netns, on FreeBSD over an epair renamed as jib
-                     names it into a VNET jail, left out of the totals),
-                     cli.sh (suggest-rules on the L1 / L2 rings, its write
-                     errors and --window; the TUI against a silent daemon,
-                     behind an idle client, through a slow reply)
+tests/smoke/       — daemon-level scripts, one per line in the commands below
 addons/            — FreeBSD port + rc.d (files/budyk.in; test-port.sh builds,
                      installs and starts it), systemd unit, Docker; the .deb
                      and .rpm (addons/linux/mkpkg.sh, test-packages.sh)
@@ -178,49 +175,51 @@ cmake -B build                           # Release unless -DCMAKE_BUILD_TYPE say
                                          # -DBUDYK_PLATFORM=linux|freebsd only checks it matches
 cmake --build build -j
 ctest --test-dir build                   # unit tests
-tests/smoke/serve.sh build/src/budyk     # daemon: endpoints, WS, SIGHUP, close-on-exec
-tests/smoke/crash.sh build/src/budyk     # daemon: SIGKILL + restart, at most one record lost
-tests/smoke/warm_grace.sh build/src/budyk  # daemon: hot buffer emptied after warm_grace
-tests/smoke/escalate.sh build/src/budyk  # daemon: a sustained anomaly escalates L2 to L3
-tests/smoke/fsck.sh build/src/budyk      # fsck, start-up recovery, the data_dir lock
+tests/smoke/serve.sh build/src/budyk     # HTTP, WS, SIGHUP, close-on-exec (fds watched 3 s)
+tests/smoke/crash.sh build/src/budyk     # SIGKILL + restart, at most one record lost
+tests/smoke/warm_grace.sh build/src/budyk  # hot buffer emptied after warm_grace
+tests/smoke/escalate.sh build/src/budyk  # a sustained anomaly escalates L2 to L3
+tests/smoke/fsck.sh build/src/budyk      # fsck, recovery after a crash, the data_dir lock
 tests/smoke/upgrade.sh build/src/budyk OLD/budyk  # rings of an older release converted
 tests/smoke/modes.sh build/src/budyk     # metric sets per level, always / on-demand
-tests/smoke/auth.sh build/src/budyk      # login, sessions, the WebSocket's origin and end
-tests/smoke/resources.sh build/src/budyk # spec §5 figures (a release build; ~2 min)
-tests/smoke/crosscheck.sh build/src/budyk  # the readings against the system's own tools
-tests/smoke/swap_devices.sh build/src/budyk  # FreeBSD: swap over more than 15 devices
-tests/smoke/net_totals.sh build/src/budyk    # a veth's or a jail's epair's traffic not in the totals
-tests/smoke/cli.sh build/src/budyk           # suggest-rules and tui on real data
+tests/smoke/auth.sh build/src/budyk      # login, the WebSocket ends with its session,
+                                         # a cross-origin WebSocket refused
+tests/smoke/resources.sh build/src/budyk # spec §5 items 2-6: RSS, CPU, disk, L1 -> L3,
+                                         # catch-up, binary size (release builds; ~2 min)
+tests/smoke/crosscheck.sh build/src/budyk  # readings against free, swapinfo, uptime, ps,
+                                         # ss / netstat, df, /sys or ifconfig, kern.disks,
+                                         # a busy loop and a 64 MB write
+tests/smoke/swap_devices.sh build/src/budyk  # FreeBSD, root or sudo: 17 swap devices
+                                         # against swapinfo
+tests/smoke/net_totals.sh build/src/budyk    # root or sudo: a ping flood over a veth into
+                                         # a netns (FreeBSD: an epair renamed as jib names
+                                         # it, into a VNET jail) left out of the totals
+tests/smoke/cli.sh build/src/budyk       # suggest-rules on the L1 / L2 rings, its write
+                                         # errors and --window; the TUI against a silent
+                                         # daemon, behind an idle client, a slow reply
 tests/check_whitespace.sh                # trailing blanks, tabs, CR, final newline
 cmake --build build --target docs        # API reference (Doxygen), any warning fails it
+cmake -B build-asan -DSTATIC_LINK=OFF -DENABLE_SANITIZERS=ON   # as CI: ASan + UBSan
+cmake -B build-tsan -DSTATIC_LINK=OFF -DENABLE_TSAN=ON         # as CI: ThreadSanitizer
 cmake/toolchains/freebsd-sysroot.sh 14.4 amd64 SYSROOT   # then, on Linux:
 cmake -B build-fbsd --toolchain cmake/toolchains/freebsd-amd64.cmake -DFREEBSD_SYSROOT=SYSROOT
 ```
 
-CI (see `.github/workflows/linux-build.yml`) adds `-DENABLE_WERROR=ON`, builds
-and tests the .deb and .rpm (`addons/linux/test-packages.sh`), holds the
-static builds (Linux, FreeBSD 14.4 and 15.1) to the spec's resource figures
-(`tests/smoke/resources.sh`), runs
-the tests under ASan + UBSan (`-DSTATIC_LINK=OFF -DENABLE_SANITIZERS=ON`)
-together with the smoke scripts, under ThreadSanitizer
-(`-DSTATIC_LINK=OFF -DENABLE_TSAN=ON`) with the serve smoke test, runs
-cppcheck, clang-tidy (checks in `.clang-tidy`), the Doxygen reference
-(`--target docs`) and `tests/check_whitespace.sh`, gates line coverage of `core/` and `storage/`
-at 85% (`tests/coverage_report.py`), builds the Docker image and runs it
-with `addons/docker/docker-compose.yml` on a config of its own (next to a
-stale `build/`, which `.dockerignore` keeps out), cross-compiles for FreeBSD 14.4 amd64
-and aarch64, runs clang-tidy on the FreeBSD side of the code and the aarch64
-unit tests and smoke scripts in an emulated arm64 FreeBSD 14.4, and on
-FreeBSD 14.4 and 15.1 (clang; the oldest supported release of each branch)
-builds and tests both the shared (port) and the static (release)
-configuration and runs the smoke scripts on the static binary (on 15.1 also
-on the cross-compiled amd64 one), then builds the port with the ports
-framework, installs its package and starts its rc.d service
-(`addons/freebsd/test-port.sh`). Everything
-must be green before a merge. Warnings are `-Wall -Wextra -Wshadow -Wconversion -Wsign-conversion`
-on every target, plus `-Wcast-align=strict` with GCC; a new implicit sign or
-width change, or a cast to a more strictly aligned pointer, is a build error
-in CI.
+CI is `linux-build.yml` (Linux builds, the .deb and .rpm, ASan + UBSan and
+TSan with the smoke scripts, cppcheck, clang-tidy, Doxygen, whitespace,
+Docker, coverage, the FreeBSD cross builds and an emulated arm64 FreeBSD)
+and `freebsd-build.yml` (14.4 and 15.1: the port and the static
+configuration, the smoke scripts, the port installed and started); each
+file's header says what it runs. Everything must be green before a merge.
+The gates a local build does not show:
+
+- `-DENABLE_WERROR=ON`: `-Wall -Wextra -Wshadow -Wconversion
+  -Wsign-conversion` on every target, plus `-Wcast-align=strict` with GCC.
+  A new implicit sign or width change, or a cast to a more strictly aligned
+  pointer, fails the build.
+- Line coverage of `core/` and `storage/` at least 85%
+  (`tests/coverage_report.py`).
+- The static builds held to the spec §5 figures (`tests/smoke/resources.sh`).
 
 ## Coding conventions
 
@@ -231,11 +230,10 @@ in CI.
   Comments in `.c`/`.cpp` files and inside function bodies stay `//`. Put
   `<placeholders>`, `\n` and the like in backticks: Doxygen otherwise reads
   them as HTML tags and commands, and its warnings fail CI.
-- C++17, no exceptions (`-fno-exceptions`), no RTTI (`-fno-rtti`). Lua raises
-  errors with `luaL_error` (a longjmp): never hold a C++ object with a
-  destructor across a call that may raise — see the pattern in
+- No exceptions, no RTTI, collectors plain C (spec §3.3 items 1, 7). Lua
+  raises errors with `luaL_error` (a longjmp): never hold a C++ object with
+  a destructor across a call that may raise — see the pattern in
   `src/rules/lua_stdlib.cpp`.
-- Collectors are plain C (no C++ in `src/collector/`)
 - Errors via return codes. Two conventions exist today: `-errno` (collectors,
   file watcher, freeze, state files) and small negative ordinals (ring file,
   tier manager, HTTP server, exec, alerts, TUI client). The ordinal modules
@@ -261,7 +259,6 @@ in CI.
 - Every descriptor is close-on-exec, short-lived ones too: `fopen(path,
   "re")` / `"we"`, `O_CLOEXEC`, `SOCK_CLOEXEC`, `mkostemp(..., O_CLOEXEC)`
   (worker threads fork while the main thread has a file open).
-  `tests/smoke/serve.sh` watches the daemon's descriptors for 3 s.
 - Other programs run through `exec_command()` with an argv, never a shell
   (`system`/`popen` are rejected by `cert-env33-c`); secrets go in 0600
   temp files from `write_private_tmp()`, not on the command line.
@@ -276,88 +273,66 @@ in CI.
 - Squash-merge; after the merge, confirm the tree on `main` is identical to
   the commit that was tested.
 
-## Key design decisions (as implemented)
+## Key design decisions (where the code goes past the spec)
 
-1. The collector tick runs on the main thread; HTTP on its own thread; slow
-   work (alert delivery, `exec()`) on Worker threads with bounded queues.
-2. Lua rules are sandboxed: no `io`/`os`/`load`/`loadfile`/`dofile`/`require`;
-   the sample tables are read-only proxies, created once and updated in
-   place (`src/rules/lua_bindings.cpp`), bound in a protected call with
-   raw sets (a failed bind skips the tick's rules; nothing after a
-   failed call may allocate on the Lua heap outside one);
-   library work in C is charged to the instruction limit too
+1. Lua sandbox (spec §3.6.3) as built: the sample tables are read-only
+   proxies, created once and updated in place
+   (`src/rules/lua_bindings.cpp`), bound in a protected call with raw sets
+   (a failed bind skips the tick's rules; nothing after a failed call may
+   allocate on the Lua heap outside one). Instead of a time limit, every
+   call into Lua is limited to `rules.limits.instructions` (default
+   1 000 000) and the engine to `rules.limits.memory_mb` (default 16).
+   Library work in C is charged to the instruction limit too
    (`LuaEngine::charge()`): `src/rules/lua_pattern.c` is Lua 5.4.7's
    own pattern matcher (MIT, kept as Lua writes it, the changes marked
    "budyk") with a step count, `table.move` is charged, past the limit
    the hook raises on every instruction (no `pcall` carries on),
    `xpcall` runs its handler after the call and `setmetatable` refuses
-   `__gc` (Lua runs both with hooks off);
-   `exec()` is gated by `--enable-exec` or `rules.exec.enabled` plus an
-   allowlist; every call into Lua is limited to `rules.limits.instructions`
-   (default 1 000 000) and the engine to `rules.limits.memory_mb`
-   (default 16). A runaway rule gets an error, not the daemon.
-3. The hot buffer is RAM-only and never touches disk; it is emptied once no
-   client has been connected for `hot_buffer.warm_grace` (`WarmGrace`).
-4. Storage records carry an absolute timestamp, a level marker, a flags
-   byte (bit 0: folded) and a CRC32C; each level has its own ring;
-   `write_idx` is advanced only after the `pwrite`. A codec version only
-   appends fields; a ring of smaller (older) records is converted on start
-   (`convert_ring()`, tests/smoke/upgrade.sh against v0.6.4 and v0.7.0;
-   codec v9, 542-byte records, since ICMP). On start
+   `__gc` (Lua runs both with hooks off). `exec()` is gated by
+   `--enable-exec` or `rules.exec.enabled` plus an allowlist. A runaway
+   rule gets an error, not the daemon.
+2. The hot buffer (spec §3.4.2) is emptied once no client has been
+   connected for `hot_buffer.warm_grace` (`WarmGrace`).
+3. Storage records (spec §3.4.3, §3.5) also carry a flags byte (bit 0:
+   folded); `write_idx` is advanced only after the `pwrite`. A codec
+   version only appends fields; a ring of smaller (older) records is
+   converted on start (`convert_ring()`, tests/smoke/upgrade.sh against
+   v0.6.4 and v0.7.0; codec v9, 542-byte records, since ICMP). On start
    `TierManager::init()` also counts in a record that reached its slot but
    not the index (`count_unindexed()`), so a daemon crash loses no stored
    record (`tests/smoke/crash.sh`, `fsck.sh`). `budyk serve` holds an
-   flock on `<data_dir>/budyk.lock`: one daemon per data_dir. The L2 and
-   L1 rings get folded records while a finer level runs (spec §3.4.1); a
+   flock on `<data_dir>/budyk.lock`: one daemon per data_dir. A fold
    window ends after its interval, when the level drops to the ring's
    own, or on shutdown — a SIGKILL loses the open windows, not the raw
    samples.
-5. `exec()` is asynchronous: it returns `{ queued = true }` and the outcome
+4. `exec()` is asynchronous: it returns `{ queued = true }` and the outcome
    is logged. `exec(cmd, { timeout = s, wait = true })` is the inline form,
    capped at 60 s.
-6. Slow WebSocket consumers are dropped, not waited on; a vanished client
-   releases L3 on the next tick.
-7. Failed logins are throttled per client address (429 + `Retry-After`);
+5. Failed logins are throttled per client address (429 + `Retry-After`);
    no password hash is computed for a throttled attempt.
-8. The version string comes from `project(VERSION)` only (`BUDYK_VERSION`).
+6. The version string comes from `project(VERSION)` only (`BUDYK_VERSION`).
 
 ## Release procedure
 
-1. Bump `project(budyk VERSION x.y.z)` in `CMakeLists.txt`, the `.TH` line in
-   `docs/budyk.8` (date and version) and `DISTVERSION` in
+1. Bump the version in `project(budyk VERSION x.y.z)` in `CMakeLists.txt`,
+   the `.TH` line of `docs/budyk.8` (date too) and `DISTVERSION` in
    `addons/freebsd/Makefile`.
-2. In `CHANGELOG.md` turn `[Unreleased]` into `[x.y.z] — YYYY-MM-DD` with a
-   summary paragraph, add the tag link at the bottom, and open a new empty
-   `[Unreleased]`. `release.yml` publishes this section as the notes, and
-   GitHub its list of the merged pull requests after it.
-3. Open the PR; start a `release.yml` dry run (`workflow_dispatch` from the
-   branch — it builds everything and skips publish); merge when all checks
-   and the dry run are green.
-4. The maintainer publishes, on GitHub: **Releases → Draft a new release**,
-   tag `vx.y.z` created on publish, target `main` (the merged release
-   commit: nothing merged after it), any title, the body left empty, then
-   **Publish release** (a saved draft makes no tag and starts nothing).
-   The tag starts `release.yml`, which checks CMakeLists.txt and
-   CHANGELOG.md against the tag, builds, and completes that release: its
-   name, the CHANGELOG section as the body, the files (0.8.1 and 0.8.2
-   were published so). If its publish job fails with 403 "Resource not
-   accessible by integration" (v0.6.5, after the tag had been made on the
-   wrong commit and made again), delete the release, keep the tag, and
-   re-run the failed jobs: the workflow then creates the release itself.
-   The other ways in: **Actions → Release binaries → Run workflow** on
-   `main` with `tag` = `vx.y.z` (the workflow creates the tag and the
-   release), or a push of tag `vx.y.z` on `main`. Any way, the run builds
-   static tarballs, release and debug, for
-   linux-amd64, freebsd14.4-amd64 and freebsd15.1-amd64 (built in VMs) and
-   freebsd14.4-aarch64 (cross-compiled, smoke-tested in an emulated arm64
-   VM), and the Linux .deb and .rpm (installed, run and removed first),
-   checks every `.sha256` in one `sha256sum -c` run, and publishes the
-   release. For about 7 minutes the release shows no files.
-5. Verify the published release: tag → commit, the body, 20 assets, checksums,
-   `file` on every binary, `budyk version`, and the smoke scripts against the
-   published Linux binary.
+2. In `CHANGELOG.md`, `[Unreleased]` becomes `[x.y.z] — YYYY-MM-DD` with a
+   summary paragraph, the tag link goes at the bottom, and a new empty
+   `[Unreleased]` opens. That section is the release notes.
+3. Open the PR, start a `release.yml` dry run (Run workflow from the branch,
+   no `tag`), and merge when it and every check are green.
+4. The maintainer publishes on GitHub: **Releases → Draft a new release**,
+   tag `vx.y.z` created on publish, target `main` at the merged release
+   commit, body empty, **Publish release** (a saved draft starts nothing).
+   The other ways in, what gets built, and what to do when the publish job
+   gets a 403 are in the header of `release.yml`. The files appear about
+   7 minutes later.
+5. Verify the published release: tag → commit, the body, 20 assets,
+   checksums, `file` on every binary, `budyk version`, and the smoke scripts
+   against the published Linux binary.
 
-## Known gaps against the spec (`docs/budyk-spec-en.md`)
+## Known gaps against the spec
 
 - The per-entity detail (cores, disks, interfaces, filesystems, top
   processes) is live only: not in the rings, so not in the history.
@@ -373,7 +348,3 @@ in CI.
 - `ENABLE_EXEC` in `CMakeLists.txt`: a build-time gate for a binary with
   `exec()` compiled out (air-gapped or hardened hosts), on top of the runtime
   `--enable-exec` / `rules.exec.enabled`.
-
-## Full technical specification
-
-See `docs/budyk-spec-en.md` (English) and `docs/budyk-spec-uk.md` (Ukrainian).
