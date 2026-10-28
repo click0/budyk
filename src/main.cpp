@@ -16,6 +16,7 @@
 #include "cli/commands.h"
 #include "daemon/serve.h"
 
+#include <csignal>
 #include <cstdio>
 #include <cstring>
 
@@ -26,6 +27,11 @@
 #endif
 
 int main(int argc, char* argv[]) {
+    // A write past the file size limit (`ulimit -f`, LimitFSIZE=) fails
+    // with EFBIG and is reported as any failed write is: SIGXFSZ ended
+    // budyk at once, with nothing in the log (a ring's ftruncate on start).
+    std::signal(SIGXFSZ, SIG_IGN);
+
     if (argc < 2) {
         std::fprintf(stderr,
             "budyk — lightweight server monitoring with adaptive collection\n"

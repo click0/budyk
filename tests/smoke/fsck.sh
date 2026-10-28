@@ -119,6 +119,44 @@ expect_fsck 4 "1 damaged record (slot 2): skipped on read, cannot be repaired" "
 expect_fsck 4 "1 with problems left" --repair "$DIR/data"
 expect_fsck 8 "not a directory" "$DIR/config.yaml"
 
+# A header of zero bytes (the L1 ring's) and an empty file (the L2 ring):
+# budyk serve makes both anew and counts in the records after the blank
+# header, so fsck says so, not "move it aside" (which threw them away).
+python3 - "$DIR/data/tier3.ring" <<'EOF'
+import sys
+with open(sys.argv[1], "r+b") as f:
+    f.write(bytes(64))
+EOF
+: > "$DIR/data/tier2.ring"
+expect_fsck 4 "tier3.ring: blank header (all zero bytes): budyk serve writes the header anew on start and counts in the records after it" "$DIR/data"
+expect_fsck 4 "tier2.ring: empty file: budyk serve writes the header anew on start" "$DIR/data"
+if grep -q "move it aside" "$DIR/fsck.out"; then
+    echo "FAIL: fsck still says to move a ring aside:"; cat "$DIR/fsck.out"; fail=1
+fi
+start
+stop
+if grep -qE "tier3.ring: [1-9][0-9]* record\(s\) written before a crash and not yet indexed, now counted in" "$DIR/log"; then
+    echo "ok   budyk serve counts in the records after a blank header"
+else
+    echo "FAIL: the records after the blank header were not counted in"; fail=1
+fi
+
+# A file size limit under the rings' sizes (ulimit -f, LimitFSIZE=): the
+# start fails and says why. SIGXFSZ ended budyk, nothing in its log.
+mkdir "$DIR/small"
+sed "s|^data_dir: .*|data_dir: $DIR/small|" "$DIR/config.yaml" > "$DIR/small.yaml"
+set +e
+sh -c 'ulimit -f 2048; exec "$0" serve --config "$1"' "$BIN" "$DIR/small.yaml" > "$DIR/small.log" 2>&1
+st=$?
+set -e
+if [ "$st" -gt 128 ]; then
+    echo "FAIL: under ulimit -f, budyk serve was killed by signal $((st - 128))"; fail=1
+elif [ "$st" -ne 0 ] && grep -q "File too large" "$DIR/small.log"; then
+    echo "ok   a file size limit under the rings' sizes is reported (exit $st)"
+else
+    echo "FAIL: under ulimit -f: exit $st: $(cat "$DIR/small.log")"; fail=1
+fi
+
 if grep -qE 'ERROR: (Address|Leak)Sanitizer|ThreadSanitizer|runtime error:' "$DIR/log" "$DIR/fsck.out"; then
     echo "FAIL: sanitizer report"; fail=1
 fi

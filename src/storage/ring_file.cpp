@@ -2,6 +2,7 @@
 #include "storage/ring_file.h"
 #include "core/endian.h"
 
+#include <algorithm>
 #include <cerrno>
 #include <cstring>
 #include <fcntl.h>
@@ -143,11 +144,13 @@ int RingFile::read_header(const char* path, Header* out, int* err) {
         ::close(fd);
         return -4;
     }
+    if (st.st_size == 0) { ::close(fd); return -15; }   // what a failed header write leaves
     uint8_t h[kHeaderSize];
     const ssize_t n = st.st_size >= static_cast<off_t>(kHeaderSize)
                     ? ::pread(fd, h, kHeaderSize, 0) : 0;
     ::close(fd);
     if (n != static_cast<ssize_t>(kHeaderSize))       return -13;
+    if (std::all_of(h, h + kHeaderSize, [](uint8_t b) { return b == 0; })) return -16;
     if (std::memcmp(h, kMagicBytes, 8) != 0)          return -8;
     if (le_get_u32(h + 8) != kFormatVersion)          return -9;
     out->tier        = h[12];
@@ -270,6 +273,8 @@ const char* RingFile::describe(int rc) {
         case -12: return "capacity in the header differs";
         case -13: return "file is shorter than a ring header";
         case -14: return "writing the header failed";
+        case -15: return "empty file";
+        case -16: return "blank header (all zero bytes)";
         default:  return "unknown error";
     }
 }

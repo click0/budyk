@@ -125,6 +125,34 @@ int main() {
         assert(lock_data_dir("/nonexistent/dir", &holder) == -ENOENT);
     }
 
+    // N+1. As root (`sudo budyk fsck --repair`), on a data directory
+    //      another user owns: the lock file is that user's (it was made
+    //      root's, 0600, and the service, running as that user, could not
+    //      start); one left root's by an older run is given back. Run as
+    //      root only.
+    if (::geteuid() == 0) {
+        char tmpl[] = "/tmp/budyk_lock_XXXXXX";
+        const char* dir = ::mkdtemp(tmpl);
+        assert(dir != nullptr);
+        const uid_t uid = 65534;                       // nobody
+        const gid_t gid = 65534;
+        assert(::chown(dir, uid, gid) == 0);
+        std::string holder;
+        const std::string lock = std::string(dir) + "/budyk.lock";
+        int fd = lock_data_dir(dir, &holder);
+        assert(fd >= 0);
+        struct stat st{};
+        assert(::stat(lock.c_str(), &st) == 0 && st.st_uid == uid && st.st_gid == gid);
+        ::close(fd);
+        assert(::chown(lock.c_str(), 0, 0) == 0);      // what an older fsck --repair left
+        fd = lock_data_dir(dir, &holder);
+        assert(fd >= 0);
+        assert(::stat(lock.c_str(), &st) == 0 && st.st_uid == uid && st.st_gid == gid);
+        ::close(fd);
+        ::unlink(lock.c_str());
+        ::rmdir(dir);
+    }
+
     std::printf("test_util: PASS\n");
     return 0;
 }

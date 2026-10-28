@@ -3,10 +3,12 @@
 
 #include <cerrno>
 #include <cstdio>
+#include <cstring>
 #include <string>
 
 #include <fcntl.h>
 #include <sys/file.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 namespace budyk {
@@ -33,6 +35,18 @@ int lock_data_dir(const char* dir, std::string* holder) {
     const std::string path = lock_path(dir);
     const int fd = ::open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
     if (fd < 0) return -errno;
+    // Root (`sudo budyk fsck --repair`) leaves the lock file the data
+    // directory's owner's: made root's, 0600, it kept the service, which
+    // runs as that owner (budyk), from starting ("cannot lock: Permission
+    // denied"). One a run of that left behind is given back the same way.
+    struct stat fst{}, dst{};
+    if (::geteuid() == 0 && ::fstat(fd, &fst) == 0 && ::stat(dir, &dst) == 0 &&
+        (fst.st_uid != dst.st_uid || fst.st_gid != dst.st_gid)) {
+        if (::fchown(fd, dst.st_uid, dst.st_gid) != 0) {
+            std::fprintf(stderr, "budyk: cannot give '%s' to the owner of '%s': %s\n",
+                         path.c_str(), dir, std::strerror(errno));
+        }
+    }
     if (::flock(fd, LOCK_EX | LOCK_NB) != 0) {
         const int err = errno;
         if (holder != nullptr) *holder = read_holder(fd);
