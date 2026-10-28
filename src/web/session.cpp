@@ -126,7 +126,10 @@ int SessionStore::load(const char* path) {
 int SessionStore::save(const char* path) const {
     if (path == nullptr) return -EINVAL;
 
-    // Snapshot under the lock, then do I/O unlocked.
+    // One save at a time (save_mtx_), each with the table as it is when
+    // its turn comes: the last file written is the newest. The snapshot is
+    // taken under mtx_, the I/O done without it.
+    std::lock_guard<std::mutex> one(save_mtx_);
     std::map<std::string, uint64_t> snap;
     {
         std::lock_guard<std::mutex> g(mtx_);
@@ -149,8 +152,15 @@ int SessionStore::save(const char* path) const {
         std::fprintf(f, "%s\t%llu\n", kv.first.c_str(),
                      static_cast<unsigned long long>(kv.second));
     }
-    std::fflush(f);
-    std::fclose(f);
+    // A file that could not be written whole (a full disk) does not
+    // replace the one there.
+    const bool flushed = std::fflush(f) == 0 && std::ferror(f) == 0;
+    const int  werr    = flushed ? 0 : errno;
+    if (std::fclose(f) != 0 || !flushed) {
+        const int e = werr != 0 ? werr : errno;
+        ::unlink(tmp.c_str());
+        return -(e != 0 ? e : EIO);
+    }
 
     if (std::rename(tmp.c_str(), path) != 0) {
         const int e = -errno;

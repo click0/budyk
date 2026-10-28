@@ -62,6 +62,12 @@ private:
     void        autosave() const;
 
     mutable std::mutex mtx_;
+    /// One save at a time, its snapshot and its file: they all write
+    /// `<path>.tmp` and rename it. The HTTP thread (a login, a logout) and
+    /// the main thread (a WebSocket's session expiring) saved at once, one
+    /// truncated the other's file and a rename failed (ENOENT), or the
+    /// older snapshot was the one left.
+    mutable std::mutex save_mtx_;
     uint64_t           ttl_ns_;
     std::map<std::string, uint64_t> deadline_;   ///< token → expires_at_ns
     std::string        persist_path_;            ///< empty = RAM-only

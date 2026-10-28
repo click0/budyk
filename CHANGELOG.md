@@ -81,6 +81,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   watched nothing until its timeout, for ever with `-1`, and exited 0);
   `hash-password` refuses an argument, and says when the hash cannot be
   written (`> /dev/full` exited 0).
+- **The saved sessions could be lost or stale after a restart.** A login
+  or a logout (the HTTP thread) and a WebSocket's session expiring (the
+  main thread) saved `sessions.tsv` at once through the same temp file:
+  one truncated the other's, a rename failed, or the older table was
+  the one left, and after a restart signed-in users had to sign in
+  again. One save at a time now, and a file that could not be written
+  whole (a full disk) does not replace the one there.
 
 ## [0.8.4] — 2026-10-27
 

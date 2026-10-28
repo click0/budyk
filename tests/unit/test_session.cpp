@@ -4,6 +4,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <cassert>
 #include <chrono>
 #include <cstdio>
@@ -156,6 +157,30 @@ int main() {
         SessionStore a;
         assert(a.load("/tmp/budyk_sess_does_not_exist_zz") == 0);
         assert(a.size() == 0);
+    }
+
+    // 11. Two threads saving at once (the HTTP thread on a login or a
+    //     logout, the main thread on a WebSocket's session expiring) both
+    //     wrote <path>.tmp: one truncated the other's file and its rename
+    //     failed (ENOENT, about half the saves). One at a time now: every
+    //     save succeeds, and the file holds the whole table.
+    {
+        const std::string path = "/tmp/budyk_sess_race_" + std::to_string(::getpid());
+        SessionStore a(/*ttl_s*/ 3600);
+        for (int i = 0; i < 20; ++i) assert(!a.create().empty());   // no persist path yet
+        std::atomic<int> failed{0};
+        auto saver = [&] {
+            for (int i = 0; i < 1000; ++i) {
+                if (a.save(path.c_str()) != 0) failed.fetch_add(1);
+            }
+        };
+        std::thread t1(saver), t2(saver);
+        t1.join();
+        t2.join();
+        assert(failed.load() == 0);
+        SessionStore b(/*ttl_s*/ 3600);
+        assert(b.load(path.c_str()) == 0 && b.size() == 20);
+        ::unlink(path.c_str());
     }
 
     std::printf("test_session: PASS\n");
