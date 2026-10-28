@@ -974,6 +974,29 @@ int main() {
         assert(std::fgets(ran + std::strlen(ran), static_cast<int>(sizeof(ran) - std::strlen(ran)), f) == nullptr);
         std::fclose(f);
         assert(std::strcmp(ran, "logger\n") == 0);              // never as "sh"
+
+        // 36c. A NUL in argv[0] ended the path realpath() and execvp()
+        //      saw, not the name the check read: "<dir>/sh\0<dir>/logger"
+        //      resolved to the allowed file, was named logger, and ran as
+        //      sh. Refused, in any argument.
+        const std::string nul_src =
+            "watch('c', { cooldown = 0, when = function() return exec('" + other +
+            "\\0" + allowed + "', { timeout = 5, wait = true }).ok end })\n"
+            "watch('d', { cooldown = 0, when = function() return exec({'" + allowed +
+            "', 'x\\0y'}, { timeout = 5, wait = true }).ok end })\n";
+        LuaEngine e2;
+        assert(e2.init(true) == 0);
+        e2.set_exec_allowlist({allowed});
+        assert(e2.load_string(nul_src.c_str()) == 0);
+        assert(e2.eval_tick(mk(0, 0, 0, 0)) == 0);
+        assert(e2.rules()[0].last_error.find("argv[1] holds a NUL byte") != std::string::npos);
+        assert(e2.rules()[1].last_error.find("argv[2] holds a NUL byte") != std::string::npos);
+        f = std::fopen(record.c_str(), "r");
+        assert(f != nullptr);
+        assert(std::fgets(ran, sizeof(ran), f) != nullptr);
+        assert(std::fgets(ran, sizeof(ran), f) == nullptr);      // nothing ran since
+        std::fclose(f);
+        e2.shutdown();
         e.shutdown();
         ::unlink(allowed.c_str());
         ::unlink(other.c_str());
@@ -1686,6 +1709,29 @@ int main() {
         assert(e.rules()[2].last_error.find("table.concat: a table with __index is not supported") !=
                std::string::npos);
         assert(e.rules()[3].last_error.find("setmetatable: __gc is not supported") != std::string::npos);
+        e.shutdown();
+    }
+
+    // watch() registers rules while the rules file loads. From a rule's
+    // when() or action it ran while eval_tick() walked the rules: the
+    // vector grew under the loop (a heap use-after-free under ASan on the
+    // first tick), and each tick added rules. It is an error there now,
+    // and the rules stay as loaded.
+    {
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        assert(e.load_string(
+            "watch('w', { cooldown = 0, when = function()\n"
+            "  for i = 1, 64 do watch('x' .. i, { when = function() return true end }) end\n"
+            "  return true\n"
+            "end })\n"
+            "watch('a', { cooldown = 0, when = function() return true end,\n"
+            "  action = function() watch('y', { when = function() return true end }) end })\n")
+            == 0);
+        for (int t = 0; t < 3; ++t) assert(e.eval_tick(mk(0, 0, 0, 0)) == 1);   // 'a' fires
+        assert(e.rule_count() == 2);
+        assert(e.rules()[0].last_error.find("cannot be called from a rule") != std::string::npos);
+        assert(e.rules()[1].last_error.find("cannot be called from a rule") != std::string::npos);
         e.shutdown();
     }
     ::alarm(0);

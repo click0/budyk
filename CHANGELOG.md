@@ -33,6 +33,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   finished the request alone, and its temp files, the request headers
   with the key among them, stayed in `$TMPDIR`. curl is killed now and
   the files removed before the signal ends budyk.
+- **A rule that called `watch()` crashed the daemon or ran on freed
+  memory.** `watch()` from a rule's `when()` or action added a rule while
+  the tick walked them: the list moved under the loop (a use-after-free,
+  the first tick under ASan), and each tick added more. It is an error
+  there now, logged for that rule; rules are registered while the rules
+  file loads.
+- **A NUL byte in `exec()`'s command passed the allowlist as another
+  program.** `"/bin/sh\0/usr/bin/logger"`, with `/usr/bin/logger` allowed
+  on BusyBox, resolved to the allowed file, was named `logger`, and ran
+  `/bin/sh`. An argument with a NUL byte is refused.
+- The programs `exec()` and the alert channels run started with SIGPIPE
+  ignored, as the daemon has it: a script's `producer | head -1` got
+  write errors instead of ending quietly. They start with the default
+  signals and none blocked.
+- `exec()` with an options table, at the memory limit, could skip the
+  destructors of its arguments (a leak each call).
+- **ntfy messages lost their line breaks** (`-d @file` drops CR and LF):
+  `--data-binary`. **An SMTP or Twilio password with blanks was cut at the
+  first one** (a netrc file splits on them; a Gmail app password as Google
+  shows it, `abcd efgh ijkl mnop`): the user and password go to curl in
+  its config file, quoted, as the URL does.
 
 ## [0.8.4] — 2026-10-27
 

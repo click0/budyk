@@ -108,6 +108,17 @@ bool opt_count_field(lua_State* L, int tbl, const char* key, lua_Integer lo,
 // at load time, so a misconfigured rule fails loudly instead of silently
 // doing nothing.
 int l_watch(lua_State* L) {
+    // Rules are registered while the rules file loads. watch() from a
+    // rule's when() or action ran while eval_tick() walked the rules: the
+    // vector grew under it (a use-after-free), and each tick added rules.
+    auto* eng = engine_from(L);
+    if (eng == nullptr) {
+        return luaL_error(L, "watch: engine not bound");
+    }
+    if (!eng->loading()) {
+        return luaL_error(L, "watch() registers a rule while the rules file loads; "
+                             "it cannot be called from a rule");
+    }
     const char* name = luaL_checkstring(L, 1);
     luaL_checktype(L, 2, LUA_TTABLE);
 
@@ -176,11 +187,6 @@ int l_watch(lua_State* L) {
     if (!opt_count_field(L, 2, "cooldown", 0, 1000000, for_ticks, &cooldown_ticks)) {
         return luaL_error(L, "watch(%s): 'cooldown' must be a whole number from 0 to 1000000",
                           name);
-    }
-
-    auto* eng = engine_from(L);
-    if (eng == nullptr) {
-        return luaL_error(L, "watch: engine not bound");
     }
 
     // The refs and the action list allocate, and so may raise: they come
@@ -297,12 +303,38 @@ bool argv_element(lua_State* L, int idx, std::string* out) {
 
 // Does the work of exec(): 0 with *out saying what it did (Checked while
 // the rules file loads: nothing run), or -1 with a message in err. It
-// never raises and pushes nothing: luaL_error longjmps past C++
-// destructors, and this function owns std::string / std::vector objects,
-// so l_exec raises, and builds the result table, only after they are
-// gone. Raw table access keeps metamethods from raising in here too.
+// pushes nothing, and raises only before its first C++ object: luaL_error
+// longjmps past C++ destructors, and this function owns std::string /
+// std::vector objects, so l_exec raises, and builds the result table,
+// only after they are gone. Raw table access keeps metamethods from
+// raising in here too.
 int exec_impl(lua_State* L, budyk::LuaEngine* eng, ExecOutcome* out, char* err,
               size_t err_cap) {
+    // Optional second argument: a timeout in seconds, or a table
+    //   { timeout = <seconds>, wait = <bool> }.
+    // Default 30 s, at most a day; clamped here so a huge Lua integer
+    // can't wrap through the int. Read first: pushing a key may raise
+    // (out of memory), which must happen before any C++ object exists;
+    // it came after the argv strings, whose destructors the raise skipped.
+    int  timeout_s = 30;
+    bool wait      = false;
+    auto take_timeout = [&](int idx) {
+        const lua_Integer t = lua_tointeger(L, idx);
+        if (t > 0) timeout_s = static_cast<int>(t < 86400 ? t : 86400);
+    };
+    if (lua_isnumber(L, 2)) {
+        take_timeout(2);
+    } else if (lua_istable(L, 2)) {
+        lua_pushstring(L, "timeout");
+        lua_rawget(L, 2);
+        if (lua_isnumber(L, -1)) take_timeout(-1);
+        lua_pop(L, 1);
+        lua_pushstring(L, "wait");
+        lua_rawget(L, 2);
+        wait = lua_toboolean(L, -1) != 0;
+        lua_pop(L, 1);
+    }
+
     // Accept either exec("/path/to/cmd")          (single-arg form)
     //            or exec({"/bin/sh", "-c", "..."}) (argv table form).
     std::vector<std::string> argv_storage;
@@ -329,6 +361,16 @@ int exec_impl(lua_State* L, budyk::LuaEngine* eng, ExecOutcome* out, char* err,
     } else {
         std::snprintf(err, err_cap, "exec: expected string or argv table");
         return -1;
+    }
+    // A NUL ends the string realpath() and execvp() see, not the one the
+    // allowlist's name check reads: "/bin/sh\0/usr/bin/logger" resolved to
+    // the BusyBox an allowed /usr/bin/logger is, was named logger, and ran
+    // as sh.
+    for (size_t i = 0; i < argv_storage.size(); ++i) {
+        if (argv_storage[i].find('\0') != std::string::npos) {
+            std::snprintf(err, err_cap, "exec: argv[%zu] holds a NUL byte", i + 1);
+            return -1;
+        }
     }
 
     // --- Hardening -----------------------------------------------------
@@ -387,30 +429,6 @@ int exec_impl(lua_State* L, budyk::LuaEngine* eng, ExecOutcome* out, char* err,
     // While the rules file loads, exec() runs nothing: the checks above
     // pass, and the caller (l_exec) hands back the command as an action.
     if (eng->loading()) return 0;
-
-    // Optional second argument: a timeout in seconds, or a table
-    //   { timeout = <seconds>, wait = <bool> }.
-    // Default 30 s, at most a day; clamped here so a huge Lua integer
-    // can't wrap through the int. Raw access: a metamethod must not
-    // raise in here (see the function comment).
-    int  timeout_s = 30;
-    bool wait      = false;
-    auto take_timeout = [&](int idx) {
-        const lua_Integer t = lua_tointeger(L, idx);
-        if (t > 0) timeout_s = static_cast<int>(t < 86400 ? t : 86400);
-    };
-    if (lua_isnumber(L, 2)) {
-        take_timeout(2);
-    } else if (lua_istable(L, 2)) {
-        lua_pushstring(L, "timeout");
-        lua_rawget(L, 2);
-        if (lua_isnumber(L, -1)) take_timeout(-1);
-        lua_pop(L, 1);
-        lua_pushstring(L, "wait");
-        lua_rawget(L, 2);
-        wait = lua_toboolean(L, -1) != 0;
-        lua_pop(L, 1);
-    }
 
     if (!wait) {
         // The normal case (spec §3.6: fork+exec, non-blocking). The

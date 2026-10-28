@@ -89,7 +89,7 @@ if(LUA_FOUND)
 endif()
 budyk_add_test(test_exec_action     LIBS budyk_rules budyk_core)
 budyk_add_test(test_worker          LIBS budyk_rules budyk_core)
-budyk_add_test(test_alert           LIBS budyk_rules budyk_core)
+budyk_add_test(test_alert           LIBS budyk_rules budyk_core Threads::Threads)
 budyk_add_test(test_freeze          LIBS budyk_rules budyk_core)
 
 budyk_add_test(test_file_watcher    LIBS budyk_security budyk_core)

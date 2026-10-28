@@ -54,48 +54,39 @@ bool write_tmp(const std::string& body, char* path_out, size_t cap) {
     return write_private_tmp("budyk_alert_", body, path_out, cap);
 }
 
-// "machine <host> login <user> password <pass>\n" for --netrc-file,
-// with the host taken from the URL. False when the URL has no host or
-// user_pass has no ':'.
-bool netrc_for(const char* url, const std::string& user_pass, std::string* out) {
-    const char* p = std::strstr(url, "://");
-    if (p == nullptr) return false;
-    p += 3;
-    const char* end = p;
-    while (*end != '\0' && *end != '/' && *end != ':') ++end;
-    const auto colon = user_pass.find(':');
-    if (colon == std::string::npos) return false;
-    *out  = "machine ";
-    out->append(p, end);
-    *out += " login ";
-    *out += user_pass.substr(0, colon);
-    *out += " password ";
-    *out += user_pass.substr(colon + 1);
-    *out += "\n";
-    return true;
-}
-
-// A curl config file (-K) holding the URL, so it never appears in
-// curl's argv: a Telegram bot token sits in the URL path and a Discord
-// webhook URL is itself the credential, and argv is readable by every
-// local user through ps(1). The file is 0600 from mkstemp and unlinked
-// as soon as curl exits. Quoting per curl's config syntax: backslash,
-// double quote and the control characters that would start a new line
-// or option are escaped, so a URL from the config file is one `url`
-// value whatever it contains.
-bool write_url_config(const char* url, char* path_out, size_t cap) {
-    std::string cfg = "url = \"";
-    for (const char* p = url; *p != '\0'; ++p) {
-        switch (*p) {
-            case '\\': cfg += "\\\\"; break;
-            case '"':  cfg += "\\\""; break;
-            case '\n': cfg += "\\n";  break;
-            case '\r': cfg += "\\r";  break;
-            case '\t': cfg += "\\t";  break;
-            default:   cfg += *p;     break;
+// `key = "value"` for a curl config file, quoted per curl's config
+// syntax: backslash, double quote and the control characters that would
+// start a new line or option are escaped, so the value is one value
+// whatever it contains.
+std::string config_line(const char* key, const std::string& value) {
+    std::string line = key;
+    line += " = \"";
+    for (const char c : value) {
+        switch (c) {
+            case '\\': line += "\\\\"; break;
+            case '"':  line += "\\\""; break;
+            case '\n': line += "\\n";  break;
+            case '\r': line += "\\r";  break;
+            case '\t': line += "\\t";  break;
+            default:   line += c;      break;
         }
     }
-    cfg += "\"\n";
+    line += "\"\n";
+    return line;
+}
+
+// A curl config file (-K) holding the URL, and the "user:password" when
+// there is one, so neither appears in curl's argv: a Telegram bot token
+// sits in the URL path and a Discord webhook URL is itself the
+// credential, and argv is readable by every local user through ps(1).
+// The file is 0600 from mkstemp and unlinked as soon as curl exits. The
+// password went through a netrc file, which splits on blanks: a Gmail
+// app password as Google shows it, "abcd efgh ijkl mnop", was sent as
+// "abcd".
+bool write_curl_config(const char* url, const std::string& user_pass,
+                       char* path_out, size_t cap) {
+    std::string cfg = config_line("url", url);
+    if (!user_pass.empty()) cfg += config_line("user", user_pass);
     return write_tmp(cfg, path_out, cap);
 }
 
@@ -161,15 +152,17 @@ int curl_post(const char* url,
         return -2;
     }
     char url_path[PATH_MAX];
-    if (!write_url_config(url, url_path, sizeof(url_path))) {
+    if (!write_curl_config(url, "", url_path, sizeof(url_path))) {
         ::unlink(body_path);
         ::unlink(hdr_path);
         return -2;
     }
 
+    // --data-binary: -d @file drops the file's CR, LF and NUL bytes, and
+    // an ntfy message, its body as it is, came out on one line.
     const int rc = run_curl({"-sS", "-X", "POST",
                              "-H", std::string("@") + hdr_path,
-                             "-d", std::string("@") + body_path,
+                             "--data-binary", std::string("@") + body_path,
                              "--max-time", "10", "-K", url_path}, 15, cancel);
     ::unlink(body_path);
     ::unlink(hdr_path);
@@ -178,42 +171,32 @@ int curl_post(const char* url,
 }
 
 // HTTP POST with HTTP basic auth and an x-www-form-urlencoded body.
-// Used for Twilio's REST API; basic-auth credentials ride via curl's
-// --netrc-file so they don't appear in `ps`/argv.
+// Used for Twilio's REST API; the "user:password" rides in the -K config
+// file (write_curl_config) so it doesn't appear in `ps`/argv.
 int curl_basic_form_post(const char* url,
                          const std::string& user_pass,
                          const std::string& form_body,
               const std::atomic<bool>* cancel) {
+    if (user_pass.find(':') == std::string::npos) return -2;
     char body_path[PATH_MAX];
     if (!write_tmp(form_body, body_path, sizeof(body_path))) return -1;
-
-    // netrc: curl --netrc-file matches by host, taken from the URL.
-    std::string netrc_blob;
-    if (!netrc_for(url, user_pass, &netrc_blob)) { ::unlink(body_path); return -2; }
-    char netrc_path[PATH_MAX];
-    if (!write_tmp(netrc_blob, netrc_path, sizeof(netrc_path))) {
+    char cfg_path[PATH_MAX];
+    if (!write_curl_config(url, user_pass, cfg_path, sizeof(cfg_path))) {
         ::unlink(body_path);
         return -3;
     }
-    char url_path[PATH_MAX];
-    if (!write_url_config(url, url_path, sizeof(url_path))) {
-        ::unlink(body_path);
-        ::unlink(netrc_path);
-        return -3;
-    }
 
-    const int rc = run_curl({"-sS", "-X", "POST", "--netrc-file", netrc_path,
+    const int rc = run_curl({"-sS", "-X", "POST",
                              "-H", "Content-Type: application/x-www-form-urlencoded",
-                             "-d", std::string("@") + body_path,
-                             "--max-time", "10", "-K", url_path}, 15, cancel);
+                             "--data-binary", std::string("@") + body_path,
+                             "--max-time", "10", "-K", cfg_path}, 15, cancel);
     ::unlink(body_path);
-    ::unlink(netrc_path);
-    ::unlink(url_path);
+    ::unlink(cfg_path);
     return rc == 0 ? 0 : -4;
 }
 
-// SMTP delivery via curl. Credentials again pass through --netrc-file
-// (so neither the SMTP user nor password is visible in argv).
+// SMTP delivery via curl. The credentials again ride in the -K config
+// file (so neither the SMTP user nor password is visible in argv).
 //   url: smtp://host:port or smtps://host:port
 //   user_pass: "user:pass" (may be empty for unauth relays)
 //   from/to: envelope sender + recipient
@@ -224,36 +207,19 @@ int curl_smtp(const char* url,
               const std::string& to,
               const std::string& message,
               const std::atomic<bool>* cancel) {
+    if (!user_pass.empty() && user_pass.find(':') == std::string::npos) return -2;
     char body_path[PATH_MAX];
     if (!write_tmp(message, body_path, sizeof(body_path))) return -1;
-
-    char netrc_path[PATH_MAX] = {0};
-    if (!user_pass.empty()) {
-        std::string netrc_blob;
-        if (!netrc_for(url, user_pass, &netrc_blob)) { ::unlink(body_path); return -2; }
-        if (!write_tmp(netrc_blob, netrc_path, sizeof(netrc_path))) {
-            ::unlink(body_path);
-            return -4;
-        }
-    }
-
-    std::vector<std::string> args = {"-sS"};
-    if (netrc_path[0] != '\0') {
-        args.push_back("--netrc-file");
-        args.push_back(netrc_path);
-    }
-    char url_path[PATH_MAX];
-    if (!write_url_config(url, url_path, sizeof(url_path))) {
+    char cfg_path[PATH_MAX];
+    if (!write_curl_config(url, user_pass, cfg_path, sizeof(cfg_path))) {
         ::unlink(body_path);
-        if (netrc_path[0] != '\0') ::unlink(netrc_path);
         return -4;
     }
-    args.insert(args.end(), {"--mail-from", from, "--mail-rcpt", to,
-                             "-T", body_path, "--max-time", "15", "-K", url_path});
-    const int rc = run_curl(args, 20, cancel);
+    const int rc = run_curl({"-sS", "--mail-from", from, "--mail-rcpt", to,
+                             "-T", body_path, "--max-time", "15", "-K", cfg_path},
+                            20, cancel);
     ::unlink(body_path);
-    ::unlink(url_path);
-    if (netrc_path[0] != '\0') ::unlink(netrc_path);
+    ::unlink(cfg_path);
     return rc == 0 ? 0 : -5;
 }
 
