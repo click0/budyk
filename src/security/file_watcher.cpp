@@ -198,8 +198,22 @@ int FileWatcher::poll(int timeout_ms, std::vector<FileChangeEvent>* out) {
             const bool gone = (ev.mask & (IN_DELETE_SELF | IN_MOVE_SELF |
                                           IN_UNMOUNT | IN_IGNORED)) != 0;
             for (const auto& path : paths) {
-                batch.emit(path, gone ? FileChangeKind::Deleted : FileChangeKind::Modified);
-                if (gone) lost(path);
+                // IN_ATTRIB (the link count) is all the old file of a
+                // rename-over save gets while it lives on, held open by a
+                // reader or with another hard link: IN_DELETE_SELF comes
+                // when the last of those goes, or never, and until then
+                // the new file at the path was not watched (vipw, sed -i,
+                // a package upgrade, while anyone read /etc/passwd). The
+                // path is asked again: another file there, or none, is
+                // the old one gone, and the new one is watched below.
+                bool off = gone;
+                if (!off && (ev.mask & IN_ATTRIB) != 0) {
+                    const int wd = sys_watch(path);
+                    off = wd != ev.wd;
+                    if (off && wd >= 0 && id_to_paths_.count(wd) == 0) sys_unwatch(wd);
+                }
+                batch.emit(path, off ? FileChangeKind::Deleted : FileChangeKind::Modified);
+                if (off) lost(path);
             }
         }
     }

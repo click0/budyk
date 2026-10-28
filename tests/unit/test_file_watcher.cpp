@@ -6,6 +6,7 @@
 
 #include "security/file_watcher.h"
 
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -276,6 +277,43 @@ int main() {
         assert(fw.count() == 0);
         fw.shutdown();
         ::unlink(moved.c_str());
+    }
+
+    // 11b. A save by rename while the old file lives on: a reader holds it
+    //      open, and it has another name. inotify gives the old file only
+    //      IN_ATTRIB then, and IN_DELETE_SELF once the last of those goes,
+    //      or never: the path stayed watched on the old file, and writes
+    //      to the new one were missed (vipw or a package upgrade while
+    //      anyone read /etc/passwd). Deleted then Created, and the next
+    //      write is seen. The old file's other name removed is Deleted for
+    //      it, the reader still there.
+    {
+        FileWatcher fw;
+        assert(fw.init() == 0);
+        const std::string p    = make_tmp();
+        const std::string keep = p + ".keep";
+        assert(::link(p.c_str(), keep.c_str()) == 0);
+        const int held = ::open(p.c_str(), O_RDONLY | O_CLOEXEC);
+        assert(held >= 0);
+        assert(fw.add(p) > 0);
+        touch(p + ".new", "replaced");
+        assert(::rename((p + ".new").c_str(), p.c_str()) == 0);
+        std::vector<FileChangeEvent> events;
+        assert(wait_for(fw, p, FileChangeKind::Deleted, &events));
+        assert(wait_for(fw, p, FileChangeKind::Created, &events));
+        events.clear();
+        touch(p, "edited after the save");
+        assert(wait_for(fw, p, FileChangeKind::Modified, &events));
+
+        assert(fw.add(keep) > 0);
+        assert(fw.count() == 2);
+        events.clear();
+        assert(::unlink(keep.c_str()) == 0);
+        assert(wait_for(fw, keep, FileChangeKind::Deleted, &events));
+        assert(fw.count() == 1);
+        ::close(held);
+        fw.shutdown();
+        ::unlink(p.c_str());
     }
 
 #if defined(BUDYK_LINUX)
