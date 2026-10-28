@@ -199,34 +199,27 @@ tests/smoke/cli.sh build/src/budyk       # suggest-rules on the L1 / L2 rings, i
                                          # daemon, behind an idle client, a slow reply
 tests/check_whitespace.sh                # trailing blanks, tabs, CR, final newline
 cmake --build build --target docs        # API reference (Doxygen), any warning fails it
+cmake -B build-asan -DSTATIC_LINK=OFF -DENABLE_SANITIZERS=ON   # as CI: ASan + UBSan
+cmake -B build-tsan -DSTATIC_LINK=OFF -DENABLE_TSAN=ON         # as CI: ThreadSanitizer
 cmake/toolchains/freebsd-sysroot.sh 14.4 amd64 SYSROOT   # then, on Linux:
 cmake -B build-fbsd --toolchain cmake/toolchains/freebsd-amd64.cmake -DFREEBSD_SYSROOT=SYSROOT
 ```
 
-CI (see `.github/workflows/linux-build.yml`) adds `-DENABLE_WERROR=ON`, builds
-and tests the .deb and .rpm (`addons/linux/test-packages.sh`), holds the
-static builds (Linux, FreeBSD 14.4 and 15.1) to the spec's resource figures
-(`tests/smoke/resources.sh`), runs
-the tests under ASan + UBSan (`-DSTATIC_LINK=OFF -DENABLE_SANITIZERS=ON`)
-together with the smoke scripts, under ThreadSanitizer
-(`-DSTATIC_LINK=OFF -DENABLE_TSAN=ON`) with the serve smoke test, runs
-cppcheck, clang-tidy (checks in `.clang-tidy`), the Doxygen reference
-(`--target docs`) and `tests/check_whitespace.sh`, gates line coverage of `core/` and `storage/`
-at 85% (`tests/coverage_report.py`), builds the Docker image and runs it
-with `addons/docker/docker-compose.yml` on a config of its own (next to a
-stale `build/`, which `.dockerignore` keeps out), cross-compiles for FreeBSD 14.4 amd64
-and aarch64, runs clang-tidy on the FreeBSD side of the code and the aarch64
-unit tests and smoke scripts in an emulated arm64 FreeBSD 14.4, and on
-FreeBSD 14.4 and 15.1 (clang; the oldest supported release of each branch)
-builds and tests both the shared (port) and the static (release)
-configuration and runs the smoke scripts on the static binary (on 15.1 also
-on the cross-compiled amd64 one), then builds the port with the ports
-framework, installs its package and starts its rc.d service
-(`addons/freebsd/test-port.sh`). Everything
-must be green before a merge. Warnings are `-Wall -Wextra -Wshadow -Wconversion -Wsign-conversion`
-on every target, plus `-Wcast-align=strict` with GCC; a new implicit sign or
-width change, or a cast to a more strictly aligned pointer, is a build error
-in CI.
+CI is `linux-build.yml` (Linux builds, the .deb and .rpm, ASan + UBSan and
+TSan with the smoke scripts, cppcheck, clang-tidy, Doxygen, whitespace,
+Docker, coverage, the FreeBSD cross builds and an emulated arm64 FreeBSD)
+and `freebsd-build.yml` (14.4 and 15.1: the port and the static
+configuration, the smoke scripts, the port installed and started); each
+file's header says what it runs. Everything must be green before a merge.
+The gates a local build does not show:
+
+- `-DENABLE_WERROR=ON`: `-Wall -Wextra -Wshadow -Wconversion
+  -Wsign-conversion` on every target, plus `-Wcast-align=strict` with GCC.
+  A new implicit sign or width change, or a cast to a more strictly aligned
+  pointer, fails the build.
+- Line coverage of `core/` and `storage/` at least 85%
+  (`tests/coverage_report.py`).
+- The static builds held to the spec §5 figures (`tests/smoke/resources.sh`).
 
 ## Coding conventions
 
@@ -321,39 +314,23 @@ in CI.
 
 ## Release procedure
 
-1. Bump `project(budyk VERSION x.y.z)` in `CMakeLists.txt`, the `.TH` line in
-   `docs/budyk.8` (date and version) and `DISTVERSION` in
+1. Bump the version in `project(budyk VERSION x.y.z)` in `CMakeLists.txt`,
+   the `.TH` line of `docs/budyk.8` (date too) and `DISTVERSION` in
    `addons/freebsd/Makefile`.
-2. In `CHANGELOG.md` turn `[Unreleased]` into `[x.y.z] — YYYY-MM-DD` with a
-   summary paragraph, add the tag link at the bottom, and open a new empty
-   `[Unreleased]`. `release.yml` publishes this section as the notes, and
-   GitHub its list of the merged pull requests after it.
-3. Open the PR; start a `release.yml` dry run (`workflow_dispatch` from the
-   branch — it builds everything and skips publish); merge when all checks
-   and the dry run are green.
-4. The maintainer publishes, on GitHub: **Releases → Draft a new release**,
-   tag `vx.y.z` created on publish, target `main` (the merged release
-   commit: nothing merged after it), any title, the body left empty, then
-   **Publish release** (a saved draft makes no tag and starts nothing).
-   The tag starts `release.yml`, which checks CMakeLists.txt and
-   CHANGELOG.md against the tag, builds, and completes that release: its
-   name, the CHANGELOG section as the body, the files (0.8.1 and 0.8.2
-   were published so). If its publish job fails with 403 "Resource not
-   accessible by integration" (v0.6.5, after the tag had been made on the
-   wrong commit and made again), delete the release, keep the tag, and
-   re-run the failed jobs: the workflow then creates the release itself.
-   The other ways in: **Actions → Release binaries → Run workflow** on
-   `main` with `tag` = `vx.y.z` (the workflow creates the tag and the
-   release), or a push of tag `vx.y.z` on `main`. Any way, the run builds
-   static tarballs, release and debug, for
-   linux-amd64, freebsd14.4-amd64 and freebsd15.1-amd64 (built in VMs) and
-   freebsd14.4-aarch64 (cross-compiled, smoke-tested in an emulated arm64
-   VM), and the Linux .deb and .rpm (installed, run and removed first),
-   checks every `.sha256` in one `sha256sum -c` run, and publishes the
-   release. For about 7 minutes the release shows no files.
-5. Verify the published release: tag → commit, the body, 20 assets, checksums,
-   `file` on every binary, `budyk version`, and the smoke scripts against the
-   published Linux binary.
+2. In `CHANGELOG.md`, `[Unreleased]` becomes `[x.y.z] — YYYY-MM-DD` with a
+   summary paragraph, the tag link goes at the bottom, and a new empty
+   `[Unreleased]` opens. That section is the release notes.
+3. Open the PR, start a `release.yml` dry run (Run workflow from the branch,
+   no `tag`), and merge when it and every check are green.
+4. The maintainer publishes on GitHub: **Releases → Draft a new release**,
+   tag `vx.y.z` created on publish, target `main` at the merged release
+   commit, body empty, **Publish release** (a saved draft starts nothing).
+   The other ways in, what gets built, and what to do when the publish job
+   gets a 403 are in the header of `release.yml`. The files appear about
+   7 minutes later.
+5. Verify the published release: tag → commit, the body, 20 assets,
+   checksums, `file` on every binary, `budyk version`, and the smoke scripts
+   against the published Linux binary.
 
 ## Known gaps against the spec
 
