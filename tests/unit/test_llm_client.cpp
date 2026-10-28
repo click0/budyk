@@ -9,6 +9,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <cassert>
 #include <cstdio>
 #include <cstdlib>
@@ -63,9 +64,11 @@ done
 printf 'HDR:' >> 'REC'; cat "$hdr" >> 'REC'
 printf 'MODE:%s\n' "$(stat -c %a "$hdr" 2>/dev/null || stat -f %Lp "$hdr")" >> 'REC'
 case "$FAKE_CURL_MODE" in
-  ok)     printf '%s' '{"content":[{"type":"text","text":"```lua\nwatch(\"x\", {})\n```"}]}' > "$out" ;;
+  ok)     printf '%s' '{"content":[{"type":"text","text":"```lua\nwatch(\"x\", {})\n```"}],"stop_reason":"end_turn"}' > "$out" ;;
   fail)   echo 'curl: (6) Could not resolve host: api.anthropic.com' > "$err"; exit 6 ;;
   apierr) printf '%s' '{"type":"error","error":{"type":"authentication_error"}}' > "$out" ;;
+  cut)    printf '%s' '{"content":[{"type":"text","text":"```lua\nwatch(\"m\", { when = function() return mem.available_percent < "}],"stop_reason":"max_tokens"}' > "$out" ;;
+  slow)   sleep 5; echo done >> 'REC' ;;
 esac
 )SH";
 
@@ -129,6 +132,15 @@ int main() {
     {
         const std::string body = R"({"content":[{"text":"a\\b\\c"}]})";
         assert(llm_extract_response_text(body) == "a\\b\\c");
+    }
+
+    // 7b. stop_reason: a string, null (none) or not there.
+    {
+        assert(llm_extract_stop_reason(R"({"content":[],"stop_reason":"max_tokens"})") ==
+               "max_tokens");
+        assert(llm_extract_stop_reason(R"({"stop_reason": "end_turn"})") == "end_turn");
+        assert(llm_extract_stop_reason(R"({"stop_reason":null,"x":"y"})").empty());
+        assert(llm_extract_stop_reason("{}").empty());
     }
 
     // 8. suggest_rules_llm guards on empty key.
@@ -197,6 +209,25 @@ int main() {
         ::setenv("FAKE_CURL_MODE", "apierr", 1);
         assert(suggest_rules_llm("SECRET_KEY", "summary", &out, &why) == -5);
         assert(contains(why, "authentication_error"));
+
+        // A reply cut off at max_tokens is refused: it ends mid-rule, and
+        // was written out as it was.
+        ::setenv("FAKE_CURL_MODE", "cut", 1);
+        out.clear();
+        assert(suggest_rules_llm("SECRET_KEY", "summary", &out, &why) == -6);
+        assert(contains(why, "max_tokens") && out.empty());
+        assert(entries(tmp) == 0);
+
+        // Cancelled (the CLI's handler for Ctrl-C raises the flag): curl
+        // is killed rather than waited for, and the files, the one with
+        // the key among them, are gone.
+        ::setenv("FAKE_CURL_MODE", "slow", 1);
+        const std::atomic<bool> cancel{true};
+        assert(suggest_rules_llm("SECRET_KEY", "summary", &out, &why, &cancel) == -7);
+        assert(why == "cancelled");
+        assert(entries(tmp) == 0);
+        ::sleep(1);
+        assert(!contains(slurp(rec), "done"));         // killed, not finished
 
         ::setenv("TMPDIR", (dir + "/missing").c_str(), 1);
         assert(suggest_rules_llm("SECRET_KEY", "summary", &out, &why) == -2);

@@ -3,6 +3,7 @@
 
 #include "ai/baseline.h"
 #include "core/sample.h"
+#include "rules/lua_engine.h"
 
 #include <algorithm>
 #include <cmath>
@@ -14,16 +15,28 @@ namespace budyk {
 
 namespace {
 
+// How many ticks in a row a condition must hold before the rule fires
+// (its cooldown is as many, the engine's default): spec §3.6.2's examples,
+// 5 for a load, 3 for memory running out. Without it a rule fired on one
+// tick and again every other tick while the condition held.
+constexpr int kSustainTicks       = 5;
+constexpr int kSustainTicksMemory = 3;
+
+// One watch() call. `when_expr` is Lua up to the `end` that closes its
+// function: a `--` comment in it took that `end` with it, and the file
+// did not load.
 std::string fmt_rule(const char* name,
                      const char* rationale,
                      const char* severity,
-                     const std::string& when_expr) {
+                     const std::string& when_expr,
+                     int for_ticks) {
     std::ostringstream os;
     os << "-- " << rationale << '\n'
        << "watch(\"" << name << "\", {\n"
-       << "  when     = function() return " << when_expr << " end,\n"
-       << "  severity = \"" << severity << "\",\n"
-       << "  action   = alert,\n"
+       << "  when      = function() return " << when_expr << " end,\n"
+       << "  for_ticks = " << for_ticks << ",\n"
+       << "  severity  = \"" << severity << "\",\n"
+       << "  action    = alert,\n"
        << "})\n\n";
     return os.str();
 }
@@ -39,10 +52,11 @@ std::string fmt_num(double v, int prec = 1) {
 std::string suggest_rule_cpu_total_percent(const MetricBaseline& b) {
     if (b.n == 0) return {};
 
-    // Spec §3.7.1: p99 at 45% → ~85% (~2× headroom).
-    // Generalize: threshold = max(60, ceil(p99 + 15)), capped at 95.
+    // Spec §3.7.1: p99 at 45% → 85%. Threshold = max(85, ceil(p99 + 15)),
+    // capped at 95 (the floor was 60: 45% gave 60, an alert at a load the
+    // host had every day).
     double t = std::ceil(b.p99 + 15.0);
-    if (t < 60.0) t = 60.0;
+    if (t < 85.0) t = 85.0;
     if (t > 95.0) t = 95.0;
 
     std::ostringstream rat;
@@ -50,7 +64,7 @@ std::string suggest_rule_cpu_total_percent(const MetricBaseline& b) {
         << "%, max=" << fmt_num(b.max) << "% over " << b.n << " samples";
     std::ostringstream cond;
     cond << "cpu.total_percent > " << fmt_num(t, 0);
-    return fmt_rule("high_cpu", rat.str().c_str(), "warning", cond.str());
+    return fmt_rule("high_cpu", rat.str().c_str(), "warning", cond.str(), kSustainTicks);
 }
 
 std::string suggest_rule_mem_available_percent(const MetricBaseline& b) {
@@ -72,7 +86,7 @@ std::string suggest_rule_mem_available_percent(const MetricBaseline& b) {
         << "%, mean=" << fmt_num(b.mean) << "% over " << b.n << " samples";
     std::ostringstream cond;
     cond << "mem.available_percent < " << fmt_num(t, 0);
-    return fmt_rule("memory_low", rat.str().c_str(), severity, cond.str());
+    return fmt_rule("memory_low", rat.str().c_str(), severity, cond.str(), kSustainTicksMemory);
 }
 
 std::string suggest_rule_swap_used_percent(const MetricBaseline& b) {
@@ -88,7 +102,7 @@ std::string suggest_rule_swap_used_percent(const MetricBaseline& b) {
         << "%, max=" << fmt_num(b.max) << "% over " << b.n << " samples";
     std::ostringstream cond;
     cond << "swap.used_percent > " << fmt_num(t, 0);
-    return fmt_rule("swap_pressure", rat.str().c_str(), "warning", cond.str());
+    return fmt_rule("swap_pressure", rat.str().c_str(), "warning", cond.str(), kSustainTicks);
 }
 
 std::string suggest_rule_load_1m(const MetricBaseline& b, double cpu_count) {
@@ -104,7 +118,7 @@ std::string suggest_rule_load_1m(const MetricBaseline& b, double cpu_count) {
         << ", max=" << fmt_num(b.max, 2) << " over " << b.n << " samples";
     std::ostringstream cond;
     cond << "load.avg_1m > " << fmt_num(t, 1);
-    return fmt_rule("load_high", rat.str().c_str(), "warning", cond.str());
+    return fmt_rule("load_high", rat.str().c_str(), "warning", cond.str(), kSustainTicks);
 }
 
 // ---------------------------------------------------------------------------
@@ -142,15 +156,16 @@ std::string suggest_throughput_rule(const MetricBaseline& b,
     double floor_bytes = min_floor_mb * mib;
     if (t < floor_bytes) t = floor_bytes;
 
+    // The threshold in words goes in the rationale: as a comment after
+    // the condition it commented out the function's `end`.
     std::ostringstream rat;
     rat << "Tier A: " << metric_expr
         << " p99=" << fmt_bps(b.p99)
         << ", max=" << fmt_bps(b.max)
-        << " over " << b.n << " samples";
+        << " over " << b.n << " samples; threshold " << fmt_bps(t);
     std::ostringstream cond;
-    cond << metric_expr << " > " << fmt_num(t, 0)
-         << "  -- " << fmt_bps(t);
-    return fmt_rule(rule_name, rat.str().c_str(), "warning", cond.str());
+    cond << metric_expr << " > " << fmt_num(t, 0);
+    return fmt_rule(rule_name, rat.str().c_str(), "warning", cond.str(), kSustainTicks);
 }
 
 } // namespace
@@ -205,6 +220,19 @@ std::string suggest_rules_for_samples(const Sample* s, size_t n) {
     os << suggest_rule_net_rx_bytes_per_sec    (compute_net_rx_bytes_per_sec_stats    (s, n));
     os << suggest_rule_net_tx_bytes_per_sec    (compute_net_tx_bytes_per_sec_stats    (s, n));
     return os.str();
+}
+
+int check_suggested_rules(const std::string& lua, std::string* error) {
+    LuaEngine e;
+    if (e.init(/*enable_exec*/ true) != 0) {
+        if (error != nullptr) *error = "the rules engine did not start";
+        return -1;
+    }
+    if (e.load_string(lua.c_str()) != 0) {
+        if (error != nullptr) *error = e.last_error();
+        return -1;
+    }
+    return e.rule_count();
 }
 
 std::vector<Sample> merge_l2_l1(std::vector<Sample> l2, const std::vector<Sample>& l1,

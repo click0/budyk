@@ -107,17 +107,21 @@ std::string llm_escape_json(const std::string& s) { return json_escape(s); }
 
 std::string llm_unescape_json(const std::string& s) { return json_unescape(s); }
 
-std::string llm_extract_response_text(const std::string& body) {
-    // Anthropic /v1/messages response shape:
-    //   {"content":[{"type":"text","text":"..."}, ...], ...}
-    // Pick the first "text":"<value>" — sufficient for the Tier-B
-    // suggester since we ask for a single text block.
-    auto key = body.find("\"text\":");
-    if (key == std::string::npos) return {};
-    auto open = body.find('"', key + 7);
-    if (open == std::string::npos) return {};
+namespace {
 
-    size_t i = open + 1;
+// The string value of the first `"key":` in `body`, JSON-unescaped; empty
+// when there is none, or the value is not a string (`null`).
+std::string string_value(const std::string& body, const char* key) {
+    const std::string k = std::string("\"") + key + "\":";
+    const size_t at = body.find(k);
+    if (at == std::string::npos) return {};
+    size_t i = at + k.size();
+    while (i < body.size() && (body[i] == ' ' || body[i] == '\t' ||
+                               body[i] == '\n' || body[i] == '\r')) {
+        ++i;
+    }
+    if (i >= body.size() || body[i] != '"') return {};
+    const size_t open = i++;
     while (i < body.size()) {
         if (body[i] == '\\' && i + 1 < body.size()) { i += 2; continue; }
         if (body[i] == '"')                          break;
@@ -127,10 +131,25 @@ std::string llm_extract_response_text(const std::string& body) {
     return llm_unescape_json(body.substr(open + 1, i - (open + 1)));
 }
 
+} // namespace
+
+std::string llm_extract_response_text(const std::string& body) {
+    // Anthropic /v1/messages response shape:
+    //   {"content":[{"type":"text","text":"..."}, ...], "stop_reason":"end_turn", ...}
+    // Pick the first "text":"<value>" — sufficient for the Tier-B
+    // suggester since we ask for a single text block.
+    return string_value(body, "text");
+}
+
+std::string llm_extract_stop_reason(const std::string& body) {
+    return string_value(body, "stop_reason");
+}
+
 int suggest_rules_llm(const std::string& api_key,
                       const std::string& summary,
                       std::string*       out,
-                      std::string*       error) {
+                      std::string*       error,
+                      const std::atomic<bool>* cancel) {
     if (api_key.empty() || out == nullptr) {
         describe(error, api_key.empty() ? "no API key" : "no output buffer");
         return -1;
@@ -189,9 +208,13 @@ int suggest_rules_llm(const std::string& api_key,
         kEndpoint, nullptr,
     };
     ExecResult res{};
-    if (exec_command(argv, kCurlMaxTime + 15, &res) != 0) {
+    if (exec_command(argv, kCurlMaxTime + 15, &res, cancel) != 0) {
         describe(error, std::string("cannot start curl(1): ") + std::strerror(errno));
         return -3;
+    }
+    if (res.cancelled) {
+        describe(error, "cancelled");
+        return -7;
     }
     if (res.timed_out) {
         describe(error, "curl(1) did not finish in " + std::to_string(kCurlMaxTime + 15) + " s");
@@ -218,6 +241,14 @@ int suggest_rules_llm(const std::string& api_key,
     if (text.empty()) {
         describe(error, "no text in the API response: " + one_line(resp));
         return -5;
+    }
+    // A reply cut off at max_tokens ends mid-rule (`mem.available_percent < `)
+    // and was written out as it was.
+    const std::string stop = llm_extract_stop_reason(resp);
+    if (!stop.empty() && stop != "end_turn") {
+        describe(error, "the reply did not end normally (stop_reason " + stop +
+                        "): it is not a whole rules file");
+        return -6;
     }
     *out = strip_fences(text);
     return 0;

@@ -29,6 +29,14 @@ std::string suggest_rule_net_tx_bytes_per_sec    (const MetricBaseline& b);
 /// suggested-rules.lua document (header + each warranted rule).
 std::string suggest_rules_for_samples(const Sample* s, size_t n);
 
+/// Loads `lua` as `budyk serve` loads a rules file, in a scratch engine
+/// (the rules sandbox and its limits), and returns how many watch()
+/// rules it registers, or -1 with the Lua error in `error` (spec §3.7.1:
+/// a suggestion is checked before it is written). exec() may be named in
+/// an action: while a file loads it runs nothing. freeze() stays off: a
+/// call to it while the file loads would stop the process.
+int check_suggested_rules(const std::string& lua, std::string* error);
+
 /// The samples suggest-rules reads (spec §3.7.1: Tier 2 and Tier 3): the
 /// L2 ring's records and the L1 ring's, oldest first, each stretch once.
 /// A folded L1 record (`Sample::folded`) whose window, the `l1_ns` up to
