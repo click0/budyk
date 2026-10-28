@@ -6,7 +6,9 @@
 #   - suggest-rules reads the L1 and L2 rings (spec §3.7.1): a daemon
 #     that ran with no client (adaptive: L1 only, the L3 ring empty) gave
 #     "Generated from 0 samples", since only the L3 ring was read;
-#   - suggest-rules names a ring it cannot read, and why;
+#   - suggest-rules names a ring it cannot read, and why; watch-files
+#     with nothing to watch and hash-password with an argument or a full
+#     output fail (they exited 0);
 #   - suggest-rules says when its output cannot be written (/dev/full),
 #     and refuses a --window past a year however it is written (a huge
 #     number wrapped to some hours);
@@ -115,6 +117,25 @@ elif grep -q "tier2.ring': file size does not match" "$DIR/err" &&
     echo "ok   a ring that cannot be read is named, with why"
 else
     echo "FAIL: suggest-rules on rings of another size: $(cat "$DIR/err")"; fail=1
+fi
+
+# watch-files with nothing it can watch, hash-password with an argument
+# or a full output: each a failure (each exited 0; watch-files waited out
+# its timeout first).
+if "$BIN" watch-files --timeout 100 "$DIR/no-such-file" > /dev/null 2> "$DIR/err"; then
+    echo "FAIL: watch-files on nothing it can watch exited 0"; fail=1
+elif grep -q "none of the paths can be watched" "$DIR/err"; then
+    echo "ok   watch-files with nothing to watch is a failure"
+else echo "FAIL: watch-files on nothing: $(cat "$DIR/err")"; fail=1; fi
+if printf 'pw\n' | "$BIN" hash-password --rounds 3 > /dev/null 2> "$DIR/err"; then
+    echo "FAIL: hash-password took an argument it does not have"; fail=1
+else echo "ok   hash-password refuses an argument"; fi
+if [ -w /dev/full ]; then
+    if printf 'pw\n' | "$BIN" hash-password > /dev/full 2> "$DIR/err"; then
+        echo "FAIL: hash-password > /dev/full exited 0"; fail=1
+    elif grep -q "writing the standard output: No space left on device" "$DIR/err"; then
+        echo "ok   hash-password says when the hash cannot be written"
+    else echo "FAIL: hash-password > /dev/full: $(cat "$DIR/err")"; fail=1; fi
 fi
 
 if [ -w /dev/full ]; then

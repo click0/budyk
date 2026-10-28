@@ -63,6 +63,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in C. Every 64 bytes the rules allocate count as an instruction now,
   every match is charged in full, and insert, remove, sort and concat
   are charged by the elements they move, compare or read.
+- **An exec allowlist written as mappings allowed everything.**
+  `rules.exec.allow: [ { path: /usr/local/bin/x } ]`, or a mapping for
+  the list, was reported and left the allowlist empty, and an empty one
+  lets `exec()` run any absolute path (as one path instead of a list did
+  before 0.8.4). An allowlist left with nothing usable allows nothing
+  now, and says so; `[]` still allows any. The same for
+  `rules.freeze.allow`.
+- A path or a password hash longer than its field holds (255 bytes) was
+  cut to fit without a word: the daemon wrote its rings to the cut
+  `data_dir`, and a cut hash let no one log in. It is reported, and the
+  setting kept.
+- A custom level's `when`, `hold` or `storage_mb`, a level's `metrics`
+  and `collection.mode` left with no value (`~`) are as if not there:
+  `hold: ~` dropped the level, `when: ~` was the Lua text `~`.
+- `watch-files` with no path it can watch says so and exits 1 (it
+  watched nothing until its timeout, for ever with `-1`, and exited 0);
+  `hash-password` refuses an argument, and says when the hash cannot be
+  written (`> /dev/full` exited 0).
 
 ## [0.8.4] — 2026-10-27
 

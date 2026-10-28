@@ -10,7 +10,8 @@
 # and has a key budyk does not know, which the log must name. Its
 # `rules: path:` is left empty: no rules, said so (a null kept the default
 # path, and the daemon loaded the rules file the FreeBSD package puts
-# there).
+# there). Then an exec allowlist written as mappings: it allows nothing
+# (it was left empty, which let exec() run anything).
 #
 #   tests/smoke/auth.sh path/to/budyk [port]
 
@@ -184,6 +185,45 @@ if ! wait "$PID"; then
     echo "FAIL: daemon exited non-zero"; fail=1
 fi
 PID=
+
+# An exec allowlist written as mappings (`- path: ...`) has nothing
+# usable in it: it allows nothing, and says so. It was left empty, and
+# an empty one let a rule's exec() run any absolute path.
+mkdir -p "$DIR/data2"
+cat > "$DIR/rules2.lua" <<EOF
+watch('touch', { cooldown = 0, when = function()
+  return exec({ '/bin/sh', '-c', 'touch $DIR/PWNED' }, { timeout = 5, wait = true }).ok
+end })
+EOF
+cat > "$DIR/config2.yaml" <<EOF
+data_dir: $DIR/data2
+listen: 127.0.0.1
+port: $PORT
+collection:
+  mode: always
+  l3: { interval: 1 }
+rules:
+  path: $DIR/rules2.lua
+  exec:
+    enabled: true
+    allow:
+      - path: /usr/local/bin/budyk-alerter
+EOF
+"$BIN" serve --config "$DIR/config2.yaml" >> "$DIR/log" 2>&1 &
+PID=$!
+sleep 3
+kill -TERM "$PID"
+wait "$PID" || { echo "FAIL: daemon (exec allowlist) exited non-zero"; fail=1; }
+PID=
+if [ -e "$DIR/PWNED" ]; then
+    echo "FAIL: an allowlist of mappings let exec() run /bin/sh"; fail=1
+elif grep -q "rules.exec.allow: no usable entry; it allows nothing" "$DIR/log" &&
+     grep -q "exec: '/bin/sh' not in allowlist" "$DIR/log"; then
+    echo "ok   an allowlist with no usable entry allows nothing, and says so"
+else
+    echo "FAIL: exec allowlist of mappings: $(grep -E 'exec|allow' "$DIR/log" | head -3)"; fail=1
+fi
+
 if grep -qE 'ERROR: (Address|Leak)Sanitizer|ThreadSanitizer|runtime error:' "$DIR/log"; then
     echo "FAIL: sanitizer report"; fail=1
 fi
