@@ -27,6 +27,15 @@ void prepare_child_and_exec(const char* const argv[], int timeout_seconds) {
     // New process group so the parent can kill -pgid on timeout.
     setpgid(0, 0);
 
+    // The program starts with the default signal dispositions and none
+    // blocked. The daemon ignores SIGPIPE (a client that hangs up), and an
+    // ignored signal stays ignored across execve: a rule's script got
+    // EPIPE where `producer | head -1` ends the producer quietly.
+    signal(SIGPIPE, SIG_DFL);
+    sigset_t none;
+    sigemptyset(&none);
+    sigprocmask(SIG_SETMASK, &none, nullptr);
+
     // Detach stdio — we don't want the child scribbling on our logs.
     int devnull = open("/dev/null", O_RDWR | O_CLOEXEC);
     if (devnull < 0) _exit(127);

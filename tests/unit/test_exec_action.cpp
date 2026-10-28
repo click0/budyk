@@ -5,8 +5,10 @@
 
 #include <atomic>
 #include <cassert>
+#include <csignal>
 #include <cstdio>
 #include <thread>
+#include <pthread.h>
 #include <unistd.h>
 
 using namespace budyk;
@@ -103,6 +105,30 @@ int main() {
         assert(rc == 0);
         assert(r.exit_status == 127);
         assert(r.timed_out   == false);
+    }
+
+    // 6. The child starts with SIGPIPE at its default and nothing blocked,
+    //    whatever the daemon has: it ignores SIGPIPE, an ignored signal
+    //    stays ignored across execve, and a rule's `producer | head -1`
+    //    got EPIPE instead of ending quietly. A shell that sends itself
+    //    SIGPIPE dies of it, and one sent SIGTERM while the parent blocks
+    //    it dies of that.
+    if (exists("/bin/sh")) {
+        ::signal(SIGPIPE, SIG_IGN);
+        sigset_t block, old;
+        sigemptyset(&block);
+        sigaddset(&block, SIGTERM);
+        assert(pthread_sigmask(SIG_BLOCK, &block, &old) == 0);
+        const char* pipe_argv[] = {"/bin/sh", "-c", "kill -PIPE $$; exit 3", nullptr};
+        ExecResult r{};
+        assert(exec_command(pipe_argv, 5, &r) == 0);
+        assert(r.signal == SIGPIPE && r.exit_status == 0);
+        const char* term_argv[] = {"/bin/sh", "-c", "kill -TERM $$; exit 3", nullptr};
+        r = ExecResult{};
+        assert(exec_command(term_argv, 5, &r) == 0);
+        assert(r.signal == SIGTERM);
+        assert(pthread_sigmask(SIG_SETMASK, &old, nullptr) == 0);
+        ::signal(SIGPIPE, SIG_DFL);
     }
 
     std::printf("test_exec_action: PASS\n");

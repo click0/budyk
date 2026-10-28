@@ -10,6 +10,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <thread>
+#include <vector>
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -21,6 +23,20 @@ using namespace budyk;
 
 static bool contains(const std::string& hay, const char* needle) {
     return hay.find(needle) != std::string::npos;
+}
+
+// An executable `name` in one of $PATH's directories.
+static bool on_path(const char* name) {
+    const char* path = ::getenv("PATH");
+    std::string dirs = path != nullptr ? path : "";
+    for (size_t at = 0; at <= dirs.size(); ) {
+        size_t end = dirs.find(':', at);
+        if (end == std::string::npos) end = dirs.size();
+        const std::string file = dirs.substr(at, end - at) + "/" + name;
+        if (end > at && ::access(file.c_str(), X_OK) == 0) return true;
+        at = end + 1;
+    }
+    return false;
 }
 
 int main() {
@@ -352,8 +368,12 @@ int main() {
         // ...the files do, and are private to the daemon.
         assert(file_lines.find("url = \"https://api.telegram.org/botBOT_TOKEN_SECRET/sendMessage\"") != std::string::npos);
         assert(file_lines.find("url = \"https://discord.example/api/webhooks/WEBHOOK_SECRET?x=\\\"q\\\"\"") != std::string::npos);
-        assert(file_lines.find("password TWILIO_SECRET") != std::string::npos);
-        assert(file_lines.find("password MAIL_SECRET")   != std::string::npos);
+        assert(file_lines.find("user = \"AC1:TWILIO_SECRET\"")      != std::string::npos);
+        assert(file_lines.find("user = \"mailuser:MAIL_SECRET\"")   != std::string::npos);
+        assert(argv_lines.find("--netrc-file") == std::string::npos);
+        // The body as it is: -d @file drops its line breaks.
+        assert(argv_lines.find(" [-d] ") == std::string::npos);
+        assert(argv_lines.find(" [--data-binary] [@") != std::string::npos);
         assert(file_lines.find("mode=600") != std::string::npos);
         assert(file_lines.find("mode=644") == std::string::npos);
 
@@ -361,6 +381,67 @@ int main() {
         ::unlink(fake.c_str());
         ::unlink(rec.c_str());
         ::rmdir(dir);
+    }
+
+    // 16. What a server gets from the real curl(1), when it is installed:
+    //     an ntfy message keeps its line breaks (-d @file dropped them:
+    //     "/var 97% fulllargest: ..."), and a Twilio token whose password
+    //     has blanks (a Gmail app password as Google shows it) is sent
+    //     whole (netrc split it: Basic auth of "AC1:abcd").
+    if (on_path("curl")) {
+        int lfd = ::socket(AF_INET, SOCK_STREAM, 0);
+        assert(lfd >= 0);
+        sockaddr_in sa{};
+        sa.sin_family      = AF_INET;
+        sa.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        assert(::bind(lfd, reinterpret_cast<sockaddr*>(&sa), sizeof(sa)) == 0);
+        assert(::listen(lfd, 4) == 0);
+        socklen_t len = sizeof(sa);
+        assert(::getsockname(lfd, reinterpret_cast<sockaddr*>(&sa), &len) == 0);
+        const std::string base = "http://127.0.0.1:" + std::to_string(ntohs(sa.sin_port));
+
+        std::vector<std::string> requests;
+        std::thread server([&] {
+            for (int i = 0; i < 2; ++i) {
+                const int c = ::accept(lfd, nullptr, nullptr);
+                if (c < 0) return;
+                std::string req;
+                char buf[4096];
+                size_t want = std::string::npos;     // header block + body
+                while (req.size() < want) {
+                    const ssize_t n = ::recv(c, buf, sizeof(buf), 0);
+                    if (n <= 0) break;
+                    req.append(buf, static_cast<size_t>(n));
+                    const size_t end = req.find("\r\n\r\n");
+                    if (want == std::string::npos && end != std::string::npos) {
+                        const size_t cl = req.find("Content-Length: ");
+                        want = end + 4 + (cl != std::string::npos && cl < end
+                            ? std::stoul(req.substr(cl + 16)) : 0);
+                    }
+                }
+                const char ok[] = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                (void)::send(c, ok, sizeof(ok) - 1, MSG_NOSIGNAL);
+                ::close(c);
+                requests.push_back(req);
+            }
+        });
+
+        AlertDispatcher d;
+        AlertChannel ntfy;
+        ntfy.name = "n"; ntfy.type = "ntfy"; ntfy.url = base; ntfy.topic = "t";
+        d.add_channel(std::move(ntfy));
+        AlertChannel tw;
+        tw.name = "w"; tw.type = "twilio"; tw.url = base + "/tw";
+        tw.from = "+1"; tw.topic = "+2"; tw.token = "AC1:abcd efgh ijkl";
+        d.add_channel(std::move(tw));
+        assert(d.dispatch(AlertSeverity::Warning, "disk_full", "/var 97% full\nlargest: log") == 2);
+        assert(d.flush(30000));
+        server.join();
+        ::close(lfd);
+        assert(requests.size() == 2);
+        assert(d.delivered() == 2);
+        assert(contains(requests[0], "\r\n\r\n/var 97% full\nlargest: log"));
+        assert(contains(requests[1], "Authorization: Basic QUMxOmFiY2QgZWZnaCBpamts\r\n"));
     }
 
     std::printf("test_alert: PASS\n");
