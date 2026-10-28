@@ -126,6 +126,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   interval at 5 minutes, systemd's stop timeout ran out first and the
   daemon was killed, its open fold windows and rule state not saved. A
   signal wakes the sleep at once now, whichever thread takes it.
+- A level kept by `escalate()` or a custom level's `hold` stayed on for
+  as long as the clock stepped back (a day back: a day longer): its end
+  was a time on the wall clock. It is moved back with the clock now,
+  keeping what was left of it.
 
 ## [0.8.4] — 2026-10-27
 

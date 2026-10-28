@@ -152,6 +152,7 @@ private:
     bool             escalated_            = false;
     bool             requested_[kMaxLevelId + 1]          = {};
     uint64_t         requested_until_ns_[kMaxLevelId + 1] = {};
+    uint64_t         last_tick_ns_ = 0;   ///< the previous tick's time: a step back moves the requests
 
     AnomalyState       check_anomaly(const Sample& s) const;
     const CustomLevel* find_custom(Level lv) const;
