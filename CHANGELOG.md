@@ -88,6 +88,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the one left, and after a restart signed-in users had to sign in
   again. One save at a time now, and a file that could not be written
   whole (a full disk) does not replace the one there.
+- The TUI fetched the whole hot buffer every second to draw its newest
+  sample (250 KB at the default 300; at the most, 100 000, a second of
+  the HTTP thread each time). `/api/samples?last=N` returns the newest
+  N; the TUI and the dashboard's session check ask for one.
 
 ## [0.8.4] — 2026-10-27
 

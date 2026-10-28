@@ -785,7 +785,7 @@ async function start() {
     $("signOut").classList.toggle("hidden", h.auth !== true);
   } catch (_) {}
   // Probe auth via /api/samples so the path also covers token expiry.
-  const r = await fetch("api/samples", { credentials: "same-origin" });
+  const r = await fetch("api/samples?last=1", { credentials: "same-origin" });
   if (r.status === 401) return showLogin();
   if (!r.ok) {
     $("loginErr").textContent = "Server returned " + r.status;

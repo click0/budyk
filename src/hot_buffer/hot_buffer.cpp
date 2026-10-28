@@ -27,6 +27,16 @@ size_t HotBuffer::dump(Sample* out, size_t out_cap) const {
     return n;
 }
 
+size_t HotBuffer::dump_last(Sample* out, size_t n) const {
+    if (out == nullptr || n == 0 || count_ == 0) return 0;
+    if (n > count_) n = count_;
+    const size_t start = (head_ + capacity_ - n) % capacity_;
+    for (size_t i = 0; i < n; ++i) {
+        out[i] = ring_[(start + i) % capacity_];
+    }
+    return n;
+}
+
 void HotBuffer::reset() { head_ = 0; count_ = 0; }
 
 bool WarmGrace::should_reset(int clients, uint64_t now_ns) {

@@ -249,12 +249,18 @@ HttpHandler make_router(const RouterDeps& d) {
                     if (d.wake) d.wake();
                 }
             }
+            // ?last=N: the newest N only. The TUI, drawing one sample a
+            // second, took the whole buffer each time (250 KB at the
+            // default 300; at the most, 100 000, the HTTP thread's whole
+            // second).
+            const uint64_t last = query_u64(req.query, "last", 0);
             std::vector<budyk::Sample> snap;
             std::string detail;
             {
                 std::lock_guard<std::mutex> g(hot_mtx);
-                snap.resize(hot.size());
-                if (!snap.empty()) hot.dump(snap.data(), snap.size());
+                const size_t have = hot.size();
+                snap.resize(last > 0 && last < have ? static_cast<size_t>(last) : have);
+                if (!snap.empty()) hot.dump_last(snap.data(), snap.size());
                 if (d.latest_detail != nullptr) detail = *d.latest_detail;
             }
             budyk::HttpResponse r;
