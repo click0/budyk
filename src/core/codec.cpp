@@ -341,8 +341,20 @@ int sample_decode(const void* buf, size_t len, Sample* out) {
     out->cpu.irq_percent  = out->cpu.steal_percent  = out->cpu.idle_percent   = 0.0;
     out->icmp = IcmpStats{};
     if (version < kVersionV8) {
-        // Before v8 every group up to file_watch was always collected.
-        out->groups = kGroupsV7;
+        // Before v8 every group a record held was always collected, and
+        // what it holds is its version's: v1 cpu, mem, swap, load and
+        // uptime; v2 adds disk and net, v3 proc, v4 entropy, v5 self, v6
+        // thermal, v7 file_watch. Every one up to file_watch was claimed,
+        // and a v2 record's zeros (proc.total, self.rss) read as readings,
+        // in the rings it was converted to too.
+        uint32_t g = kGroupCpu | kGroupMem | kGroupSwap | kGroupLoad | kGroupUptime;
+        if (version >= kVersionV2) g |= kGroupDisk | kGroupNet;
+        if (version >= kVersionV3) g |= kGroupProc;
+        if (version >= kVersionV4) g |= kGroupEntropy;
+        if (version >= kVersionV5) g |= kGroupSelf;
+        if (version >= kVersionV6) g |= kGroupThermal;
+        if (version >= kVersionV7) g |= kGroupFileWatch;
+        out->groups = g;
         return 0;
     }
     out->cpu.user_percent   = get_f64(p);

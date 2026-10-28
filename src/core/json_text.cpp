@@ -7,6 +7,39 @@ namespace budyk {
 
 namespace {
 
+// The four hex digits at s[at], or 0xFFFD when they are not that.
+unsigned hex4(const std::string& s, size_t at) {
+    unsigned code = 0;
+    for (size_t k = 0; k < 4; ++k) {
+        const char h = s[at + k];
+        code <<= 4;
+        if      (h >= '0' && h <= '9') code |= static_cast<unsigned>(h - '0');
+        else if (h >= 'a' && h <= 'f') code |= static_cast<unsigned>(h - 'a' + 10);
+        else if (h >= 'A' && h <= 'F') code |= static_cast<unsigned>(h - 'A' + 10);
+        else return 0xFFFD;
+    }
+    return code;
+}
+
+// Code point `code` (at most U+10FFFF, no surrogate) as UTF-8.
+void append_utf8(std::string* out, unsigned code) {
+    if (code < 0x80) {
+        *out += static_cast<char>(code);
+    } else if (code < 0x800) {
+        *out += static_cast<char>(0xC0 | (code >> 6));
+        *out += static_cast<char>(0x80 | (code & 0x3F));
+    } else if (code < 0x10000) {
+        *out += static_cast<char>(0xE0 | (code >> 12));
+        *out += static_cast<char>(0x80 | ((code >> 6) & 0x3F));
+        *out += static_cast<char>(0x80 | (code & 0x3F));
+    } else {
+        *out += static_cast<char>(0xF0 | (code >> 18));
+        *out += static_cast<char>(0x80 | ((code >> 12) & 0x3F));
+        *out += static_cast<char>(0x80 | ((code >> 6) & 0x3F));
+        *out += static_cast<char>(0x80 | (code & 0x3F));
+    }
+}
+
 // The length of the well-formed UTF-8 sequence at s[i] (RFC 3629: no
 // overlong forms, no surrogates, nothing past U+10FFFF), or 0.
 size_t utf8_len(const std::string& s, size_t i) {
@@ -90,26 +123,26 @@ std::string json_unescape(const std::string& s) {
             case 't':  out += '\t'; i += 2; break;
             case 'u': {
                 if (i + 5 >= s.size()) { out += s[i++]; break; }
-                unsigned code = 0;
-                for (size_t k = 0; k < 4; ++k) {
-                    const char h = s[i + 2 + k];
-                    code <<= 4;
-                    if      (h >= '0' && h <= '9') code |= static_cast<unsigned>(h - '0');
-                    else if (h >= 'a' && h <= 'f') code |= static_cast<unsigned>(h - 'a' + 10);
-                    else if (h >= 'A' && h <= 'F') code |= static_cast<unsigned>(h - 'A' + 10);
-                    else { code = 0xFFFD; break; }
-                }
-                if (code < 0x80) {
-                    out += static_cast<char>(code);
-                } else if (code < 0x800) {
-                    out += static_cast<char>(0xC0 | (code >> 6));
-                    out += static_cast<char>(0x80 | (code & 0x3F));
-                } else {
-                    out += static_cast<char>(0xE0 | (code >> 12));
-                    out += static_cast<char>(0x80 | ((code >> 6) & 0x3F));
-                    out += static_cast<char>(0x80 | (code & 0x3F));
-                }
+                unsigned code = hex4(s, i + 2);
                 i += 6;
+                // Two surrogates, high then low, are one character past
+                // U+FFFF (an emoji): each was written as 3 bytes of its own
+                // (CESU-8, not UTF-8), and a password with one in it, sent
+                // escaped as Python's json.dumps sends it, never matched.
+                // A surrogate on its own is U+FFFD.
+                if (code >= 0xD800 && code <= 0xDBFF) {
+                    const unsigned lo = i + 5 < s.size() && s[i] == '\\' && s[i + 1] == 'u'
+                                      ? hex4(s, i + 2) : 0;
+                    if (lo >= 0xDC00 && lo <= 0xDFFF) {
+                        code = 0x10000 + ((code - 0xD800) << 10) + (lo - 0xDC00);
+                        i += 6;
+                    } else {
+                        code = 0xFFFD;
+                    }
+                } else if (code >= 0xDC00 && code <= 0xDFFF) {
+                    code = 0xFFFD;
+                }
+                append_utf8(&out, code);
                 break;
             }
             default:   out += c;    i += 2; break;

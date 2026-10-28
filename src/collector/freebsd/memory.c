@@ -52,10 +52,31 @@ int budyk_collect_memory_freebsd(budyk_sample_c* s) {
                                + (uint64_t)inact
                                + (uint64_t)cache
                                + (uint64_t)laundry;
-    s->mem.total             = (uint64_t)page_count * (uint64_t)page_size;
-    s->mem.available         = avail_pages         * (uint64_t)page_size;
-    s->mem.available_percent = page_count > 0
-        ? (double)avail_pages * 100.0 / (double)page_count
+    const uint64_t total = (uint64_t)page_count * (uint64_t)page_size;
+    uint64_t avail = avail_pages * (uint64_t)page_size;
+
+    /* The ZFS ARC is wired memory the kernel gives back under pressure,
+     * down to its minimum (c_min), and is counted in: a warm ARC holds
+     * most of the RAM of a ZFS host, available read under 10 % on a
+     * healthy machine, and the shipped memory_low rule fired. No ZFS, no
+     * such sysctl, nothing added. */
+    uint64_t arc_size = 0, arc_min = 0;
+    size_t sz = sizeof(arc_size);
+    if (sysctlbyname("kstat.zfs.misc.arcstats.size", &arc_size, &sz, NULL, 0) == 0 &&
+        sz == sizeof(arc_size)) {
+        sz = sizeof(arc_min);
+        if (sysctlbyname("kstat.zfs.misc.arcstats.c_min", &arc_min, &sz, NULL, 0) != 0 ||
+            sz != sizeof(arc_min)) {
+            arc_min = 0;
+        }
+        if (arc_size > arc_min) avail += arc_size - arc_min;
+    }
+    if (avail > total) avail = total;
+
+    s->mem.total             = total;
+    s->mem.available         = avail;
+    s->mem.available_percent = total > 0
+        ? (double)avail * 100.0 / (double)total
         : 0.0;
 
     /* Swap — soft-fail to zero if kvm is unavailable. */

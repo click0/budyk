@@ -233,6 +233,7 @@ std::string detail_to_json(const budyk_detail_c& d) {
         const budyk_core_c& c = d.cores[i];
         if (i > 0) out.push_back(',');
         out.push_back('{');
+        append_kv_uint  (&out, "id",             c.id);             out.push_back(',');
         append_kv_double(&out, "total_percent",  c.total_percent);  out.push_back(',');
         append_kv_double(&out, "user_percent",   c.user_percent);   out.push_back(',');
         append_kv_double(&out, "system_percent", c.system_percent); out.push_back(',');

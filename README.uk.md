@@ -516,7 +516,8 @@ watch("swap_under_load", {
 
 Усередині деяких із них — деталізація найновішої вибірки у вигляді
 колекцій лише для читання: `cpu.cores` (масив: `#cpu.cores`,
-`cpu.cores[1].iowait_percent`), `disk.devices["sda"]`
+`cpu.cores[1].iowait_percent`; `id` — номер CPU, що пропускає вимкнений),
+`disk.devices["sda"]`
 (`read_bytes_per_sec`, `write_bytes_per_sec`, `reads_per_sec`,
 `writes_per_sec`, `busy_percent`), `net.interfaces["eth0"]`
 (`rx/tx_bytes_per_sec`, `rx/tx_packets_per_sec`, `rx/tx_errors_per_sec`,

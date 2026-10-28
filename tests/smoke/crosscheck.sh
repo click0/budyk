@@ -118,6 +118,12 @@ if FREEBSD:
             return 0
     avail = (cnt("v_free_count") + cnt("v_inactive_count") +
              cnt("v_cache_count") + cnt("v_laundry_count")) * page
+    # The ZFS ARC above its minimum, which the kernel gives back.
+    try:
+        arc = int(sysctl("kstat.zfs.misc.arcstats.size")) - int(sysctl("kstat.zfs.misc.arcstats.c_min"))
+        avail = min(total, avail + max(0, arc))
+    except subprocess.CalledProcessError:
+        pass
     physmem = int(sysctl("hw.physmem"))
     if not 0.8 * physmem <= s["mem"]["total"] <= physmem:
         bad("memory total %d is not within 80-100 %% of hw.physmem %d"

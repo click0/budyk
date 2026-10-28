@@ -347,11 +347,14 @@ if grep -qE 'ERROR: (Address|Leak)Sanitizer|ThreadSanitizer|runtime error:' "$DI
 fi
 grep -q 'rules reloaded' "$DIR/log" || { echo "FAIL: SIGHUP reload not logged"; fail=1; }
 
-# A SIGTERM ends a daemon asleep at L1 (60 s here) within moments,
+# A SIGTERM ends a daemon asleep at L1 (120 s here) within moments,
 # whichever of its threads takes the signal, and one that comes while a
-# SIGHUP reload runs too. The HTTP thread, in accept(), took it in about
-# half the runs of `kill -HUP; kill -TERM`, and the main thread slept on;
-# a SIGTERM during a reload was left to wait out the sleep.
+# SIGHUP reload runs too, once the reload is done. The HTTP thread, in
+# accept(), took it in about half the runs of `kill -HUP; kill -TERM`, and
+# the main thread slept on; a SIGTERM during a reload was left to wait
+# out the sleep. The reload takes about half a second here and many
+# times that in an emulated arm64 VM: up to 60 s is allowed, half the
+# sleep that the bug waited out.
 cat > "$DIR/slow.lua" <<'EOF'
 local x = 0
 for i = 1, 20000000 do x = x + i end   -- a load that takes a while
@@ -362,7 +365,7 @@ data_dir: $DIR/sigdata
 listen: 127.0.0.1
 port: $PORT
 collection:
-  l1: { interval: 60 }
+  l1: { interval: 120 }
 rules:
   path: $DIR/slow.lua
   limits: { instructions: 1000000000 }
@@ -382,7 +385,7 @@ for run in 1 2 3 4 5 6; do
         kill -HUP "$PID"; sleep 0.1; kill -TERM "$PID"   # during the reload
     fi
     i=0
-    while kill -0 "$PID" 2>/dev/null && [ "$i" -lt 100 ]; do i=$((i + 1)); sleep 0.1; done
+    while kill -0 "$PID" 2>/dev/null && [ "$i" -lt 600 ]; do i=$((i + 1)); sleep 0.1; done
     if kill -0 "$PID" 2>/dev/null; then
         slow="$slow $run"; kill -KILL "$PID"
     fi

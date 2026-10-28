@@ -108,6 +108,13 @@ void collect_one(Sample* s, CollectContext* ctx, const MetricSet& set) {
         cut_short(kDetailMounts, c.fs.count > d->nmounts,
                   c.fs.count, d->nmounts, "filesystems", "fs.mounts lists");
     }
+    // Past BUDYK_MAX_TRACKED_PROCS a process has no CPU time kept, so no
+    // CPU rate: proc.top by CPU leaves it out. Said like the other caps
+    // (it was the one cut without a word).
+    if ((failed & kGroupProc) == 0 && wants(kGroupProc) && list(kDetailProcesses) != nullptr) {
+        cut_short(kDetailProcesses, c.proc.total > BUDYK_MAX_TRACKED_PROCS, c.proc.total,
+                  BUDYK_MAX_TRACKED_PROCS, "processes", "proc.top ranks by CPU");
+    }
     ctx->cut = (ctx->cut & ~checked) | cut;
 
     // Copy the C-shim back into the C++ Sample (same field names, scalar

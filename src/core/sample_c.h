@@ -195,6 +195,7 @@ typedef struct {
     double total_percent;
     double user_percent, system_percent, iowait_percent;
     double irq_percent, steal_percent, idle_percent;
+    uint32_t id;   /**< the CPU's number (cpuN): with one offline the list skips it */
 } budyk_core_c;
 
 typedef struct {

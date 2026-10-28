@@ -338,6 +338,7 @@ int main() {
         assert(out.proc.total               == 0);
         assert(out.entropy.available_bits   == 0);
         assert(out.entropy.present          == false);
+        assert(out.groups == (kGroupCpu | kGroupMem | kGroupSwap | kGroupLoad | kGroupUptime));
     }
 
     // 11b. v2 backward compat — a hand-rolled v2 record (176 bytes,
@@ -357,6 +358,10 @@ int main() {
         assert(out.entropy.present      == false);
         assert(out.disk.device_count    == in.disk.device_count);
         assert(out.net.interface_count  == in.net.interface_count);
+        // groups says what a v2 record held: proc, entropy and the rest
+        // were claimed, and their zeros read as readings.
+        assert(out.groups == (kGroupCpu | kGroupMem | kGroupSwap | kGroupLoad | kGroupUptime |
+                              kGroupDisk | kGroupNet));
     }
 
     // 11c. v3 backward compat — version=3, length 184. Proc parsed,
@@ -430,6 +435,7 @@ int main() {
         assert(out.file_watch.events_this_tick == 0);
         assert(out.file_watch.watched_count    == 0);
         assert(out.file_watch.present          == false);
+        assert(out.groups == (kGroupsV7 & ~uint32_t(kGroupFileWatch)));
     }
 
     // 11g. v7 backward compat (budyk 0.6) — version=7, length 256. The

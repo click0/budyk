@@ -641,7 +641,7 @@ function renderDetail(d) {
     div.className = "core";
     const n = document.createElement("span");
     n.className = "muted";
-    n.textContent = String(i);
+    n.textContent = String(c.id ?? i);   // the CPU's number: past an offline one, not i
     const v = document.createElement("span");
     v.className = "right";
     v.textContent = (c.total_percent ?? 0).toFixed(0) + "%";

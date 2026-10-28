@@ -666,6 +666,13 @@ int main() {
         assert(near(d->cores[0].user_percent, 100.0) && near(d->cores[0].total_percent, 100.0));
         assert(near(d->cores[1].idle_percent, 60.0) && near(d->cores[1].iowait_percent, 30.0));
         assert(near(d->cores[1].total_percent, 10.0));            // not idle, not iowait
+        assert(d->cores[0].id == 0 && d->cores[1].id == 1);
+        // cpu1 offline: the second entry is cpu2, and says so (its place
+        // in the list said 1).
+        fx.file("stat", "cpu  110 0 30 220 30 0 0 0 0 0\n"
+                        "cpu0 100 0 10 80 0 0 0 0 0 0\ncpu2 10 0 20 140 30 0 0 0 0 0\n");
+        assert(budyk_collect_cpu_linux_ex(&cctx, &s, d.get()) == 0);
+        assert(d->ncores == 2 && d->cores[1].id == 2);
 
         auto diskstats = [&](unsigned rs, unsigned ws, unsigned r, unsigned w, unsigned ticks,
                              bool with_sdb) {
@@ -703,6 +710,40 @@ int main() {
         assert(budyk_collect_disk_linux_ex(&dctx, &s, d.get()) == 0);
         assert(d->ndisks == 1 && d->ndisk_prev == 1);
         assert(s.disk.read_bytes_per_sec == 1000 * 512);               // sda's, not 0
+
+        // The partitions of a disk whose name ends in a digit are
+        // <disk>p<N> (zd0p1, a Proxmox VM's zvol partition; rbd0p1;
+        // pmem0p1), and a zvol, bcache or drbd device is counted again on
+        // the disks under it: each was a disk of its own in the totals.
+        // Where sysfs has the device, its `partition` file decides.
+        fx.file("sys/class/block/odd7/partition", "1\n");
+        fx.file("sys/class/block/sdc/size", "1\n");
+        auto many = [&](unsigned sectors) {
+            std::string b;
+            for (const char* n : {"sda", "zd0", "zd0p1", "rbd0", "rbd0p1", "pmem0", "pmem0p1",
+                                  "nvme0n1", "nvme0n1p2", "bcache0", "drbd1", "odd7", "sdc"}) {
+                char line[160];
+                std::snprintf(line, sizeof(line), "   1 0 %s 0 0 %u 0 0 0 0 0 0 0 0\n", n, sectors);
+                b += line;
+            }
+            fx.file("diskstats", b);
+        };
+        budyk_disk_ctx_c mctx;
+        std::memset(&mctx, 0, sizeof(mctx));
+        s.timestamp_nanos = 30'000'000'000ULL;
+        many(0);
+        assert(budyk_collect_disk_linux_ex(&mctx, &s, d.get()) == 0);
+        s.timestamp_nanos = 31'000'000'000ULL;
+        many(2048);                                // 1 MiB read on each, in 1 s
+        assert(budyk_collect_disk_linux_ex(&mctx, &s, d.get()) == 0);
+        std::string names;
+        for (uint32_t i = 0; i < d->ndisks; ++i) names += std::string(d->disks[i].name) + " ";
+        if (names != "sda rbd0 pmem0 nvme0n1 sdc ") {
+            std::fprintf(stderr, "disks: %s\n", names.c_str());
+            assert(false);
+        }
+        assert(s.disk.device_count == 5);
+        assert(s.disk.read_bytes_per_sec == 5ULL << 20);
 
         auto netdev = [&](unsigned rx, unsigned tx, unsigned rxerr) {
             char buf[1024];
