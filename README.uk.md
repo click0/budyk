@@ -180,7 +180,7 @@ sudo systemctl enable --now budyk                 # панель на http://127
 
 ```sh
 # FreeBSD (ncurses входить до базової системи)
-pkg install cmake pkgconf lua54 libyaml libargon2
+pkg install cmake-core pkgconf lua54 libyaml libargon2
 
 # Debian / Ubuntu
 apt install cmake g++ pkg-config liblua5.4-dev libyaml-dev libargon2-dev libncurses-dev

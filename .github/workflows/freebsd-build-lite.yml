@@ -38,7 +38,8 @@ jobs:
             set -ex
 
             echo "::group::Install dependencies"
-            sudo pkg install -y cmake pkgconf lua54 libyaml libargon2
+            # cmake-core: 15's packages have no cmake metaport.
+            sudo pkg install -y cmake-core pkgconf lua54 libyaml libargon2
             echo "::endgroup::"
 
             echo "::group::System info"

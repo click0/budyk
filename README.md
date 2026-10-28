@@ -173,7 +173,7 @@ Dependencies:
 
 ```sh
 # FreeBSD (ncurses is in base)
-pkg install cmake pkgconf lua54 libyaml libargon2
+pkg install cmake-core pkgconf lua54 libyaml libargon2
 
 # Debian / Ubuntu
 apt install cmake g++ pkg-config liblua5.4-dev libyaml-dev libargon2-dev libncurses-dev
