@@ -30,8 +30,10 @@ void prepare_child_and_exec(const char* const argv[], int timeout_seconds) {
     // The program starts with the default signal dispositions and none
     // blocked. The daemon ignores SIGPIPE (a client that hangs up), and an
     // ignored signal stays ignored across execve: a rule's script got
-    // EPIPE where `producer | head -1` ends the producer quietly.
+    // EPIPE where `producer | head -1` ends the producer quietly. SIGXFSZ
+    // likewise (budyk ignores it to see EFBIG).
     signal(SIGPIPE, SIG_DFL);
+    signal(SIGXFSZ, SIG_DFL);
     sigset_t none;
     sigemptyset(&none);
     sigprocmask(SIG_SETMASK, &none, nullptr);

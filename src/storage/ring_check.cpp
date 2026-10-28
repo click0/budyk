@@ -7,6 +7,7 @@
 #include <cerrno>
 #include <string>
 
+#include <fcntl.h>
 #include <unistd.h>
 
 namespace budyk {
@@ -15,6 +16,15 @@ namespace {
 
 constexpr uint64_t kDayNs = 86400ULL * 1000000000ULL;
 constexpr size_t   kMaxListedSlots = 8;
+
+// fsync(2) of the file or directory at `path`: 0 or -errno.
+int sync_path(const char* path) {
+    const int fd = ::open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return -errno;
+    const int rc = ::fsync(fd) != 0 ? -errno : 0;
+    ::close(fd);
+    return rc;
+}
 
 } // namespace
 
@@ -75,6 +85,7 @@ int convert_ring(const char* path, uint8_t tier, uint32_t record_size,
     RingFile out;
     if (out.open(tmp.c_str(), tier, record_size, capacity) != 0) {
         err = out.last_errno() != 0 ? out.last_errno() : EIO;
+        old.close();                          // no destructor does it
         return -err;
     }
 
@@ -92,8 +103,12 @@ int convert_ring(const char* path, uint8_t tier, uint32_t record_size,
             ++*dropped;
             continue;
         }
-        if (record_encode(s, enc, sizeof(enc), &len) != 0 || out.append(enc, len) != 0) {
+        if (record_encode(s, enc, sizeof(enc), &len) != 0) {
             rc = -EIO;
+            break;
+        }
+        if (out.append(enc, len) != 0) {      // why, as the write said (ENOSPC): it was EIO
+            rc = out.last_errno() != 0 ? -out.last_errno() : -EIO;
             break;
         }
         ++*kept;
@@ -101,8 +116,21 @@ int convert_ring(const char* path, uint8_t tier, uint32_t record_size,
     *dropped += skip;
     out.close();
     old.close();
+    // The converted ring on disk before it takes the old one's name, and
+    // the rename in the directory after: a power cut soon after the
+    // rename otherwise could find, on a filesystem that does not flush a
+    // file renamed over another (XFS), the name with no data in it and
+    // the old ring gone.
+    if (rc == 0) rc = sync_path(tmp.c_str());
     if (rc == 0 && ::rename(tmp.c_str(), path) != 0) rc = -errno;
-    if (rc != 0) ::unlink(tmp.c_str());
+    if (rc == 0) {
+        const std::string p = path;
+        const size_t slash = p.rfind('/');
+        const std::string dir = slash == std::string::npos ? "." : slash == 0 ? "/" : p.substr(0, slash);
+        rc = sync_path(dir.c_str());
+        return rc;                            // renamed: the old ring is gone either way
+    }
+    ::unlink(tmp.c_str());
     return rc;
 }
 

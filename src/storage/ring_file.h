@@ -47,8 +47,10 @@ public:
         uint64_t write_idx   = 0;
     };
     /// 0, or an open() code: -3 open failed / -4 fstat failed (errno in
-    /// *err), -13 shorter than a header, -8 bad magic, -9 version,
-    /// -6 file size does not match record size x capacity.
+    /// *err), -15 an empty file, -13 shorter than a header, -16 a header
+    /// of zero bytes, -8 bad magic, -9 version, -6 file size does not
+    /// match record size x capacity. open() makes the first two of those
+    /// anew (-16: and the records after it are counted in on start).
     static int read_header(const char* path, Header* out, int* err);
 
     /// Why the last open() failed. describe() turns an open() return

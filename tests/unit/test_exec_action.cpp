@@ -127,6 +127,13 @@ int main() {
         r = ExecResult{};
         assert(exec_command(term_argv, 5, &r) == 0);
         assert(r.signal == SIGTERM);
+        // SIGXFSZ, which budyk ignores (main.cpp) to see EFBIG, likewise.
+        ::signal(SIGXFSZ, SIG_IGN);
+        const char* xfsz_argv[] = {"/bin/sh", "-c", "kill -XFSZ $$; exit 3", nullptr};
+        r = ExecResult{};
+        assert(exec_command(xfsz_argv, 5, &r) == 0);
+        assert(r.signal == SIGXFSZ);
+        ::signal(SIGXFSZ, SIG_DFL);
         assert(pthread_sigmask(SIG_SETMASK, &old, nullptr) == 0);
         ::signal(SIGPIPE, SIG_DFL);
     }

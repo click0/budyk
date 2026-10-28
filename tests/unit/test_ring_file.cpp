@@ -296,6 +296,14 @@ int main() {
         assert(::truncate(path, 63) == 0);
         assert(RingFile::read_header(path, &h, &err) == -13);
         assert(std::string(RingFile::describe(-13)) == "file is shorter than a ring header");
+        // An empty file, and a header of zero bytes, are told apart from
+        // a damaged one: open() makes both anew (fsck said "move it aside",
+        // which threw away the records a blank header still has after it).
+        assert(::truncate(path, 0) == 0);
+        assert(RingFile::read_header(path, &h, &err) == -15);
+        assert(::truncate(path, 64 + (off_t)rsize * 4) == 0);    // sized, all zero
+        assert(RingFile::read_header(path, &h, &err) == -16);
+        assert(std::string(RingFile::describe(-16)) == "blank header (all zero bytes)");
         ::unlink(path);
 
         assert(rw.open(path, 1, (uint32_t)rsize, 4) == 0);

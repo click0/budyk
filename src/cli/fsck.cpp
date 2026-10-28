@@ -79,6 +79,22 @@ std::vector<std::string> ring_files(const char* dir) {
 // this run did not repair.
 bool report(const std::string& name, const RingCheck& c, bool repair) {
     const RingFile::Header& h = c.header;
+    // What to do about a header that cannot be read, by what it is: the
+    // advice was "move it aside" for all, for a ring it could not read
+    // (budyk's own, 0600), and for a blank header whose records budyk
+    // serve counts in on start, which that would have thrown away.
+    if (c.header_rc == -15 || c.header_rc == -16) {
+        std::printf("%s: %s: budyk serve writes the header anew on start%s\n",
+                    name.c_str(), RingFile::describe(c.header_rc),
+                    c.header_rc == -16 ? " and counts in the records after it" : "");
+        return false;
+    }
+    if ((c.header_rc == -3 || c.header_rc == -4) &&
+        (c.header_errno == EACCES || c.header_errno == EPERM)) {
+        std::printf("%s: %s: %s: not checked (run fsck as the user budyk runs as, or root)\n",
+                    name.c_str(), RingFile::describe(c.header_rc), std::strerror(c.header_errno));
+        return true;
+    }
     if (c.header_rc != 0) {
         std::printf("%s: %s%s%s: not checked; move it aside and budyk serve starts a new one\n",
                     name.c_str(), RingFile::describe(c.header_rc),

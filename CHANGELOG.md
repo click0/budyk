@@ -100,6 +100,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   path were missed. The path is checked again on such a change: Deleted,
   Created, and the new file watched. A name of a file with another one,
   removed, is Deleted too.
+- **`sudo budyk fsck --repair` could keep the service from starting.**
+  On a data directory with no `budyk.lock` yet (an upgrade from 0.6, a
+  restored backup) it made the lock file root's, 0600, and the service,
+  running as budyk, could not lock it. The lock file is the data
+  directory's owner's now, and one an earlier run left root's is given
+  back.
+- `budyk fsck` said "move it aside" for every ring whose header it could
+  not read: for a ring it was not allowed to read (budyk's own, 0600),
+  and for an empty file or a blank header, which `budyk serve` makes
+  anew, counting in the records after a blank one, which moving the file
+  would have thrown away. It says what each is now, and those two are
+  not problems (exit 0).
+- A file size limit (`ulimit -f`, `LimitFSIZE=`) under a ring's size
+  killed budyk with SIGXFSZ, nothing in its log. The write fails with
+  "File too large" and is reported, as any failed write is.
+- A ring conversion on start that failed for room said "Input/output
+  error"; it says "No space left on device". The converted ring is
+  synced to disk before it replaces the old one, and the directory after
+  (a power cut soon after could leave neither on some filesystems).
 
 ## [0.8.4] — 2026-10-27
 
