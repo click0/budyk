@@ -46,12 +46,28 @@ const char* scalar_at(yaml_document_t* d, const yaml_node_t* m, const char* key,
     return nullptr;
 }
 
+// The node under `key`, or nullptr when there is none or it is null (a
+// key with no value is as if it were not there).
+const yaml_node_t* value_at(yaml_document_t* d, const yaml_node_t* m, const char* key) {
+    const yaml_node_t* n = yaml_find_key(d, m, key);
+    return n == nullptr || yaml_null(n) ? nullptr : n;
+}
+
+// A value too long for dst is reported and the setting kept: it was cut
+// to fit, without a word (a data_dir of 256 bytes lost its last letter,
+// and the daemon wrote its rings in a directory of that name; a cut
+// password hash let no one log in).
 void apply_str(yaml_document_t* d, const yaml_node_t* m, const char* key,
                char* dst, size_t dst_cap, const char* path) {
     const char* v = scalar_at(d, m, key, path);
     if (v == nullptr) return;
-    std::strncpy(dst, v, dst_cap - 1);
-    dst[dst_cap - 1] = '\0';
+    const size_t len = std::strlen(v);
+    if (len >= dst_cap) {
+        std::fprintf(stderr, "budyk config: %s: %zu bytes, longer than the %zu it can hold; "
+                             "using '%s'\n", path, len, dst_cap - 1, dst);
+        return;
+    }
+    std::memcpy(dst, v, len + 1);
 }
 
 // The numbers are read whole: strtol() / strtod() stopped at the first
@@ -140,34 +156,52 @@ void apply_bool(yaml_document_t* d, const yaml_node_t* m, const char* key, bool*
     }
 }
 
+// An allowlist entry that matches nothing: no command is a relative path
+// and no process name (`comm`, at most 19 bytes) is this long. An
+// allowlist written wrong holds only this: it allows nothing.
+const char* const kMatchesNothing = "(no usable entry in the allowlist)";
+
 // A list of strings under `key` into dst, or one string as a list of one
 // (`allow: /usr/bin/systemctl` used to leave the exec allowlist empty,
 // and an empty one lets exec() run any absolute path). An empty list
 // clears dst: an admin's explicit reset. An item that is not a string is
 // reported and left out; a mapping is reported and dst kept.
+//
+// `allowlist` (rules.exec.allow, rules.freeze.allow): an empty one allows
+// everything, so one that was written but is left with nothing usable
+// (every item a mapping, `- path: /usr/bin/x`; a mapping for the list)
+// allows nothing instead, and says so. It allowed everything.
 void apply_str_list(yaml_document_t* d, const yaml_node_t* m, const char* key,
-                    std::vector<std::string>* dst, const char* path) {
+                    std::vector<std::string>* dst, const char* path, bool allowlist = false) {
     const yaml_node_t* seq = yaml_find_key(d, m, key);
     if (seq == nullptr || yaml_null(seq)) return;
     if (const char* one = yaml_scalar(seq)) {
         dst->assign(1, one);
         return;
     }
+    bool dropped = false;
     if (seq->type != YAML_SEQUENCE_NODE) {
         std::fprintf(stderr, "budyk config: %s: a mapping where a list belongs; ignored\n", path);
-        return;
-    }
-    dst->clear();
-    size_t index = 0;
-    for (auto* item = seq->data.sequence.items.start;
-         item     != seq->data.sequence.items.top; ++item, ++index) {
-        const yaml_node_t* n = yaml_document_get_node(d, *item);
-        const char* s = yaml_scalar(n);
-        if (s != nullptr) {
-            dst->emplace_back(s);
-        } else {
-            std::fprintf(stderr, "budyk config: %s[%zu]: not a string; left out\n", path, index);
+        dropped = true;
+    } else {
+        dst->clear();
+        size_t index = 0;
+        for (auto* item = seq->data.sequence.items.start;
+             item     != seq->data.sequence.items.top; ++item, ++index) {
+            const yaml_node_t* n = yaml_document_get_node(d, *item);
+            const char* s = yaml_scalar(n);
+            if (s != nullptr) {
+                dst->emplace_back(s);
+            } else {
+                std::fprintf(stderr, "budyk config: %s[%zu]: not a string; left out\n", path, index);
+                dropped = true;
+            }
         }
+    }
+    if (allowlist && dropped && dst->empty()) {
+        std::fprintf(stderr, "budyk config: %s: no usable entry; it allows nothing "
+                             "(an empty list, [], allows any)\n", path);
+        dst->assign(1, kMatchesNothing);
     }
 }
 
@@ -328,7 +362,7 @@ bool valid_level_name(const std::string& n) {
 // bad one is logged and the level keeps its default.
 void apply_metrics(yaml_document_t* d, const yaml_node_t* m, const char* where,
                    MetricSet* dst) {
-    const yaml_node_t* n = yaml_find_key(d, m, "metrics");
+    const yaml_node_t* n = value_at(d, m, "metrics");   // `metrics: ~` read as a set "~"
     if (n == nullptr) return;
     std::vector<std::string> names;
     if (const char* v = yaml_scalar(n)) {
@@ -405,9 +439,11 @@ void apply_custom_levels(yaml_document_t* d, const yaml_node_t* col,
         }
         lv.priority = static_cast<int>(prio);
 
-        if (const char* w = yaml_scalar(yaml_find_key(d, n, "when"))) lv.when = w;
+        // The optional fields left with no value (`hold:`, `~`) are as if
+        // not there: `hold: ~` dropped the level, `when: ~` was Lua `~`.
+        if (const char* w = yaml_scalar(value_at(d, n, "when"))) lv.when = w;
 
-        if (const yaml_node_t* h = yaml_find_key(d, n, "hold")) {
+        if (const yaml_node_t* h = value_at(d, n, "hold")) {
             double hold = 0;
             if (!parse_duration_full(yaml_scalar(h), &hold) || hold != std::floor(hold) ||
                 hold < 0 || hold > 86400) {
@@ -416,7 +452,7 @@ void apply_custom_levels(yaml_document_t* d, const yaml_node_t* col,
             }
             lv.hold_sec = static_cast<int>(hold);
         }
-        if (const yaml_node_t* s = yaml_find_key(d, n, "storage_mb")) {
+        if (const yaml_node_t* s = value_at(d, n, "storage_mb")) {
             long mb = 0;
             if (!parse_long_full(yaml_scalar(s), &mb) || mb < 1 || mb > 100000) {
                 reject("'storage_mb' must be an integer from 1 to 100000");
@@ -472,7 +508,7 @@ void clamp_numbers(Config* c) {
 void apply_collection(yaml_document_t* d, const yaml_node_t* col, Config* out) {
     if (col == nullptr) return;
 
-    if (const yaml_node_t* m = yaml_find_key(d, col, "mode")) {
+    if (const yaml_node_t* m = value_at(d, col, "mode")) {
         const char* v = yaml_scalar(m);
         if      (v != nullptr && std::strcmp(v, "adaptive")  == 0) out->scheduler.mode = CollectionMode::Adaptive;
         else if (v != nullptr && std::strcmp(v, "always")    == 0) out->scheduler.mode = CollectionMode::Always;
@@ -602,14 +638,16 @@ int parse_document(yaml_parser_t* parser, Config* out, std::string* error) {
         //         - /usr/bin/systemctl
         if (auto* exec = yaml_find_key(&doc, rules, "exec")) {
             apply_bool    (&doc, exec, "enabled", &out->rules_enable_exec, "rules.exec.enabled");
-            apply_str_list(&doc, exec, "allow",   &out->rules_exec_allow, "rules.exec.allow");
+            apply_str_list(&doc, exec, "allow",   &out->rules_exec_allow, "rules.exec.allow",
+                           /*allowlist*/ true);
         }
 
         // Nested `rules.freeze` block — gate + allowlist for
         // freeze() / unfreeze(). Format mirrors rules.exec.
         if (auto* fr = yaml_find_key(&doc, rules, "freeze")) {
             apply_bool    (&doc, fr, "enabled", &out->rules_enable_freeze, "rules.freeze.enabled");
-            apply_str_list(&doc, fr, "allow",   &out->rules_freeze_allow, "rules.freeze.allow");
+            apply_str_list(&doc, fr, "allow",   &out->rules_freeze_allow, "rules.freeze.allow",
+                           /*allowlist*/ true);
         }
 
         // Nested `rules.limits` block — how much a single call into Lua

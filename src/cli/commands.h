@@ -5,7 +5,7 @@
 namespace budyk {
 
 /// The one-shot subcommands. Each returns the process exit code.
-int cmd_hash_password();                         ///< budyk hash-password
+int cmd_hash_password(int argc, char* argv[]);   ///< budyk hash-password
 int cmd_suggest_rules(int argc, char* argv[]);   ///< budyk suggest-rules [...]
 int cmd_watch_files(int argc, char* argv[]);     ///< budyk watch-files [...]
 int cmd_tui(int argc, char* argv[]);             ///< budyk tui [--host H] [--port P]

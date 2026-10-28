@@ -136,10 +136,26 @@ check("swap total", s["swap"]["total"], sw_total, sw_total // 100 + (1 << 20))
 check("swap used", s["swap"]["used"], sw_used, sw_total // 50 + (16 << 20))
 
 # --- Load and uptime ---------------------------------------------------------
-m = re.search(r"load averages?: ([\d.]+),? ([\d.]+),? ([\d.]+)", run("uptime"))
-for name, got, want in zip(("1m", "5m", "15m"),
-                           (s["load"]["avg_1m"], s["load"]["avg_5m"], s["load"]["avg_15m"]),
-                           (float(x) for x in m.groups())):
+# The kernel recomputes the averages every 5 s, and on a busy host the
+# 1-minute one moves by more than the tolerance from one to the next
+# (0.59 against 0.78 on a CI runner): uptime is read just before and
+# just after a sample taken between the two, and budyk's average is held
+# to the nearer.
+def loadavg():
+    m = re.search(r"load averages?: ([\d.]+),? ([\d.]+),? ([\d.]+)", run("uptime"))
+    return [float(x) for x in m.groups()]
+before = loadavg()
+t_before = time.time()
+deadline = t_before + 5
+while True:
+    ls, _ = newest()
+    if ls["ts"] / 1e9 > t_before or time.time() > deadline:
+        break
+    time.sleep(0.1)
+after = loadavg()
+for i, (name, key) in enumerate((("1m", "avg_1m"), ("5m", "avg_5m"), ("15m", "avg_15m"))):
+    got = ls["load"][key]
+    want = min((before[i], after[i]), key=lambda w: abs(w - got))
     check("load " + name, got, want, max(0.15, want * 0.15))
 age = time.time() - s["ts"] / 1e9
 if FREEBSD:

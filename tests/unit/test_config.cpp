@@ -600,6 +600,74 @@ int main(int argc, char** argv) {
         assert(err.find("budyk config:") == err.rfind("budyk config:"));
     }
 
+    // An allowlist written but left with nothing usable allows nothing,
+    // and says so: every item a mapping (`- path: /usr/bin/x`), or a
+    // mapping for the list. It was left empty, and an empty exec
+    // allowlist lets exec() run any absolute path. The entry it holds is
+    // no absolute path and longer than any process name. `[]` still means
+    // any; one usable item is the list.
+    {
+        Config c;
+        std::string err = stderr_of(
+            "rules:\n"
+            "  exec: { allow: [ { path: /usr/local/bin/budyk-alerter } ] }\n"
+            "  freeze: { allow: { name: nginx } }\n", &c);
+        assert(c.rules_exec_allow.size() == 1 && c.rules_exec_allow[0][0] != '/');
+        assert(c.rules_freeze_allow.size() == 1 && c.rules_freeze_allow[0].size() > 19);
+        assert(has(err, "rules.exec.allow: no usable entry; it allows nothing"));
+        assert(has(err, "rules.freeze.allow: no usable entry; it allows nothing"));
+        Config m;
+        err = stderr_of("rules: { exec: { allow: [ /usr/bin/logger, { path: /x } ] } }\n", &m);
+        assert(m.rules_exec_allow.size() == 1 && m.rules_exec_allow[0] == "/usr/bin/logger");
+        assert(!has(err, "allows nothing"));
+        Config e;
+        assert(stderr_of("rules: { exec: { allow: [] } }\n", &e).empty() && e.rules_exec_allow.empty());
+        Config w;                                        // not an allowlist: left empty
+        err = stderr_of("security: { file_watch: { paths: [ { p: /etc } ] } }\n", &w);
+        assert(w.file_watch_paths.empty() && !has(err, "allows nothing"));
+    }
+
+    // A value longer than its field holds is reported and the setting
+    // kept: it was cut to fit without a word (a 256-byte data_dir lost its
+    // last letter and the rings went to a directory of that name; a cut
+    // password hash let no one in). One that fits exactly is taken.
+    {
+        Config c;
+        const std::string dir = "/" + std::string(299, 'd');
+        const std::string hash = "$argon2id$" + std::string(290, 'h');
+        const std::string y = "data_dir: " + dir + "\nweb: { auth: { password_hash: \"" + hash +
+                              "\" } }\n";
+        const std::string err = stderr_of(y.c_str(), &c);
+        assert(std::strcmp(c.data_dir, Config{}.data_dir) == 0);
+        assert(c.password_hash[0] == '\0');
+        assert(has(err, "data_dir: 300 bytes, longer than the 255 it can hold; using '/var/db/budyk'"));
+        assert(has(err, "web.auth.password_hash: 300 bytes, longer than the 255 it can hold"));
+        Config f;
+        const std::string fits = "/" + std::string(254, 'f');
+        assert(stderr_of(("data_dir: " + fits + "\n").c_str(), &f).empty());
+        assert(fits == f.data_dir);
+    }
+
+    // An optional field of a custom level, a level's metrics and the mode
+    // left with no value are as if not there: `hold: ~` dropped the level,
+    // `when: ~` was the Lua text `~`, `metrics: ~` an unknown set "~".
+    {
+        Config c;
+        const std::string err = stderr_of(
+            "collection:\n"
+            "  mode: ~\n"
+            "  l1: { metrics: ~ }\n"
+            "  levels:\n"
+            "    - { name: burst, interval: 1, priority: 40, when: ~, hold: ~, storage_mb: ~,"
+            " metrics: ~ }\n", &c);
+        if (!err.empty()) std::fprintf(stderr, "%s", err.c_str());
+        assert(err.empty());
+        assert(c.scheduler.mode == CollectionMode::Adaptive);
+        assert(c.scheduler.custom_levels.size() == 1);
+        const CustomLevel& lv = c.scheduler.custom_levels[0];
+        assert(lv.when.empty() && lv.hold_sec == 0 && lv.storage_mb == 50);
+    }
+
     // A key the loader does not read, one given twice, a section that is
     // not one and a value that is a list or a mapping are reported under
     // their full names (a typo such as `enable:` used to be ignored

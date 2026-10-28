@@ -50,7 +50,7 @@ int main(int argc, char* argv[]) {
     }
     if (std::strcmp(cmd, "serve") == 0)         return budyk::cmd_serve(argc, argv, BUDYK_VERSION);
     if (std::strcmp(cmd, "tui") == 0)           return budyk::cmd_tui(argc, argv);
-    if (std::strcmp(cmd, "hash-password") == 0) return budyk::cmd_hash_password();
+    if (std::strcmp(cmd, "hash-password") == 0) return budyk::cmd_hash_password(argc, argv);
     if (std::strcmp(cmd, "suggest-rules") == 0) return budyk::cmd_suggest_rules(argc, argv);
     if (std::strcmp(cmd, "watch-files") == 0)   return budyk::cmd_watch_files(argc, argv);
     if (std::strcmp(cmd, "fsck") == 0)          return budyk::cmd_fsck(argc, argv);

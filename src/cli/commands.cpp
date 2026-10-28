@@ -228,7 +228,12 @@ std::string read_password(const char* prompt) {
     return line;
 }
 
-int cmd_hash_password() {
+int cmd_hash_password(int argc, char* argv[]) {
+    if (argc > 2) {
+        std::fprintf(stderr, "budyk hash-password: unknown arg '%s' (it takes none: "
+                             "the password is read from the standard input)\n", argv[2]);
+        return 1;
+    }
     const std::string p1 = read_password("Password: ");
     if (p1.empty()) {
         std::fprintf(stderr, "budyk hash-password: empty password\n");
@@ -252,7 +257,13 @@ int cmd_hash_password() {
         return 1;
     }
 
-    std::printf("%s\n", encoded.c_str());
+    // A hash that could not be written is said so: `> /dev/full` (a full
+    // disk) wrote nothing and exited 0.
+    if (std::printf("%s\n", encoded.c_str()) < 0 || std::fflush(stdout) != 0) {
+        std::fprintf(stderr, "budyk hash-password: writing the standard output: %s\n",
+                     std::strerror(errno));
+        return 1;
+    }
     return 0;
 }
 
@@ -461,6 +472,12 @@ int cmd_watch_files(int argc, char* argv[]) {
                 "budyk watch-files: cannot watch '%s': %s\n",
                 p.c_str(), std::strerror(-rc));
         }
+    }
+    // Nothing to watch is a failure: it said "watching 0 file(s)", waited
+    // out the timeout (for ever with -1) and exited 0.
+    if (fw.count() == 0) {
+        std::fprintf(stderr, "budyk watch-files: none of the paths can be watched\n");
+        return 1;
     }
     std::printf("watching %zu file(s); timeout=%dms\n",
                 static_cast<std::size_t>(fw.count()), timeout_ms);
