@@ -347,6 +347,51 @@ if grep -qE 'ERROR: (Address|Leak)Sanitizer|ThreadSanitizer|runtime error:' "$DI
 fi
 grep -q 'rules reloaded' "$DIR/log" || { echo "FAIL: SIGHUP reload not logged"; fail=1; }
 
+# A SIGTERM ends a daemon asleep at L1 (60 s here) within moments,
+# whichever of its threads takes the signal, and one that comes while a
+# SIGHUP reload runs too. The HTTP thread, in accept(), took it in about
+# half the runs of `kill -HUP; kill -TERM`, and the main thread slept on;
+# a SIGTERM during a reload was left to wait out the sleep.
+cat > "$DIR/slow.lua" <<'EOF'
+local x = 0
+for i = 1, 20000000 do x = x + i end   -- a load that takes a while
+watch('noop', { when = function() return false end })
+EOF
+cat > "$DIR/sig.yaml" <<EOF
+data_dir: $DIR/sigdata
+listen: 127.0.0.1
+port: $PORT
+collection:
+  l1: { interval: 60 }
+rules:
+  path: $DIR/slow.lua
+  limits: { instructions: 1000000000 }
+EOF
+slow=
+for run in 1 2 3 4 5 6; do
+    "$BIN" serve --config "$DIR/sig.yaml" >> "$DIR/sig.log" 2>&1 &
+    PID=$!
+    i=0
+    until curl -s -o /dev/null "http://127.0.0.1:$PORT/api/health"; do
+        i=$((i + 1)); [ "$i" -lt 100 ] || break; sleep 0.1
+    done
+    sleep 0.5                              # into the L1 sleep
+    if [ "$run" -le 4 ]; then
+        kill -HUP "$PID"; kill -TERM "$PID"
+    else
+        kill -HUP "$PID"; sleep 0.1; kill -TERM "$PID"   # during the reload
+    fi
+    i=0
+    while kill -0 "$PID" 2>/dev/null && [ "$i" -lt 100 ]; do i=$((i + 1)); sleep 0.1; done
+    if kill -0 "$PID" 2>/dev/null; then
+        slow="$slow $run"; kill -KILL "$PID"
+    fi
+    wait "$PID" 2>/dev/null || true
+    PID=
+done
+if [ -z "$slow" ]; then echo "ok   SIGTERM ends an L1 sleep at once, during a reload too (6 runs)"
+else echo "FAIL: SIGTERM waited out the L1 sleep in run(s)$slow"; fail=1; fi
+
 if [ "$fail" -ne 0 ]; then
     echo "--- daemon log ---"; cat "$DIR/log"
     exit 1

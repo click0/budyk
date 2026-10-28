@@ -119,6 +119,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   error"; it says "No space left on device". The converted ring is
   synced to disk before it replaces the old one, and the directory after
   (a power cut soon after could leave neither on some filesystems).
+- **A SIGTERM could wait out the sleep, up to the L1 interval.** The
+  signal goes to any of the daemon's threads; taken by the HTTP thread
+  (about half the time after a `kill -HUP`), it left the collection loop
+  asleep, and so did one that came during a rules reload. With the L1
+  interval at 5 minutes, systemd's stop timeout ran out first and the
+  daemon was killed, its open fold windows and rule state not saved. A
+  signal wakes the sleep at once now, whichever thread takes it.
+- A level kept by `escalate()` or a custom level's `hold` stayed on for
+  as long as the clock stepped back (a day back: a day longer): its end
+  was a time on the wall clock. It is moved back with the clock now,
+  keeping what was left of it.
 
 ## [0.8.4] — 2026-10-27
 

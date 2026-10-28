@@ -21,6 +21,21 @@ Scheduler::Scheduler(const SchedulerConfig& cfg)
 Level Scheduler::tick(const Sample& current) {
     const uint64_t now = current.timestamp_nanos;
 
+    // The clock stepped back (an NTP correction, a VM restored): the
+    // requests' deadlines, instants on that clock, move back as far,
+    // keeping what was left of each. The other timers start afresh on a
+    // step back; a request made an hour before a step back of a day held
+    // its level (escalate(), a custom level's hold) for the day.
+    if (last_tick_ns_ != 0 && now < last_tick_ns_) {
+        const uint64_t back = last_tick_ns_ - now;
+        for (size_t id = 0; id <= kMaxLevelId; ++id) {
+            if (!requested_[id]) continue;
+            requested_until_ns_[id] = requested_until_ns_[id] > back
+                                    ? requested_until_ns_[id] - back : 0;
+        }
+    }
+    last_tick_ns_ = now;
+
     anomaly_ = check_anomaly(current);
     const uint64_t escalate_ns = static_cast<uint64_t>(cfg_.escalate_after_sec) * kNanosPerSec;
     const uint64_t grace_ns    = static_cast<uint64_t>(cfg_.grace_period_sec)   * kNanosPerSec;

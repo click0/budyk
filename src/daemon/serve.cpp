@@ -57,22 +57,32 @@
 static volatile std::sig_atomic_t g_stop   = 0;
 static volatile std::sig_atomic_t g_reload = 0;
 
+// Self-pipe that wakes the collection loop out of interruptible_sleep().
+// A dashboard or TUI that connects while the loop sleeps at L1 (up to
+// 5 min) must see L3 samples at once, not after the sleep ends. Written
+// from the HTTP server thread and from the signal handler; a non-blocking
+// write() on a pipe is thread-safe and async-signal-safe, and a full pipe
+// (EAGAIN) means a wake-up is pending anyway.
+static int g_wake_pipe[2] = {-1, -1};
+
+// The handler also wakes the sleep: a signal is delivered to any thread
+// that does not block it, and taken by the HTTP thread (in accept) it left
+// the main thread's poll() asleep; a SIGTERM then waited out the sleep
+// (up to the L1 interval, past systemd's stop timeout, then SIGKILL).
 extern "C" void budyk_serve_signal_handler(int sig) {
+    const int saved = errno;
     if (sig == SIGHUP) g_reload = 1;
     else               g_stop   = 1;
+    if (g_wake_pipe[1] >= 0) {
+        const char b = 0;
+        (void)!::write(g_wake_pipe[1], &b, 1);
+    }
+    errno = saved;
 }
 
 namespace budyk {
 
 namespace {
-
-
-// Self-pipe that wakes the collection loop out of interruptible_sleep().
-// A dashboard or TUI that connects while the loop sleeps at L1 (up to
-// 5 min) must see L3 samples at once, not after the sleep ends. Written
-// from the HTTP server thread; a non-blocking write() on a pipe is
-// thread-safe, and a full pipe (EAGAIN) means a wake-up is pending anyway.
-static int g_wake_pipe[2] = {-1, -1};
 
 void wake_collection_loop() {
     if (g_wake_pipe[1] < 0) return;
@@ -120,15 +130,17 @@ void warn_if_writable_by_others(const char* what, const char* path) {
 constexpr int kMinWakeGapMs = 250;
 
 // Sleep for at most `ms` milliseconds, returning early when:
-//   * a signal sets g_stop (shutdown);
+//   * a signal sets g_stop (shutdown), at once, whichever thread took it
+//     (the handler writes the wake pipe);
 //   * wake_collection_loop() is called (a client connected), but not
 //     before kMinWakeGapMs into the sleep: a wake-up earlier than that
 //     shortens the sleep to it.
 // A SIGHUP (g_reload) is applied here, through `reload`, and the sleep
 // goes on: it no longer waits out an L1 sleep, and no longer ends it
 // either (a tick right after the last one stored rates over a few ms).
-// poll() is interrupted by signals because the handlers are installed
-// without SA_RESTART. Safe to call with ms <= 0 (no-op).
+// g_stop is looked at again after every wake and every reload: a SIGTERM
+// taken during a reload was left to wait out the sleep. Safe to call with
+// ms <= 0 (no-op).
 void interruptible_sleep(int ms, const std::function<void()>& reload) {
     if (ms <= 0 || g_stop) return;
     struct timespec ts{};
@@ -140,6 +152,7 @@ void interruptible_sleep(int ms, const std::function<void()>& reload) {
             g_reload = 0;
             reload();
         }
+        if (g_stop) return;
         ::clock_gettime(CLOCK_MONOTONIC, &ts);
         const int64_t now_ms = static_cast<int64_t>(ts.tv_sec) * 1000 +
                                ts.tv_nsec / 1000000;
@@ -149,10 +162,20 @@ void interruptible_sleep(int ms, const std::function<void()>& reload) {
         const int rc = ::poll(&pfd, g_wake_pipe[0] >= 0 ? 1 : 0,
                               static_cast<int>(deadline_ms - now_ms));
         if (rc > 0) {
+            // A client's wake writes 1, the signal handler's 0: a signal
+            // is handled at the top of the loop, with no floor; a client
+            // wake keeps its floor (and a SIGHUP that came with it is the
+            // caller's to apply).
             char buf[64];
-            while (::read(g_wake_pipe[0], buf, sizeof(buf)) > 0) {}
-            if (now_ms - start_ms >= kMinWakeGapMs) return;
-            if (start_ms + kMinWakeGapMs < deadline_ms) deadline_ms = start_ms + kMinWakeGapMs;
+            bool client = false;
+            for (ssize_t n; (n = ::read(g_wake_pipe[0], buf, sizeof(buf))) > 0; ) {
+                for (ssize_t i = 0; i < n; ++i) client = client || buf[i] != 0;
+            }
+            if (g_stop) return;
+            if (client) {
+                if (now_ms - start_ms >= kMinWakeGapMs) return;
+                if (start_ms + kMinWakeGapMs < deadline_ms) deadline_ms = start_ms + kMinWakeGapMs;
+            }
             continue;
         }
         if (rc < 0 && errno != EINTR) return;

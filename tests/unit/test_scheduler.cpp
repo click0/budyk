@@ -220,6 +220,28 @@ int main() {
         assert(sch.current_level() == before);
     }
 
+    // 10b. The clock steps back a day with a request open: its deadline
+    //      moves back as far as the clock did since the last tick, which
+    //      had 50 s left of it, so it ends 50 s after that tick's time on
+    //      the new clock (it held on for a day and 50 s). A request made
+    //      after the step is as any other.
+    {
+        SchedulerConfig c = cfg;
+        CustomLevel deep; deep.id = 4; deep.name = "deep"; deep.interval_ms = 1800000; deep.priority = 5;
+        c.custom_levels = {deep};
+        Scheduler sch(c);
+        const uint64_t day = 86400;
+        assert(sch.tick(at(2 * day)) == Level::L1);
+        sch.request(static_cast<Level>(4), (2 * day + 60) * kSec);
+        assert(sch.tick(at(2 * day + 10)) == static_cast<Level>(4));
+        assert(sch.tick(at(day + 20)) == static_cast<Level>(4));      // stepped back: until day + 70
+        assert(sch.tick(at(day + 69)) == static_cast<Level>(4));
+        assert(sch.tick(at(day + 71)) == Level::L1);                  // not at 2 days + 60
+        sch.request(static_cast<Level>(4), (day + 90) * kSec);
+        assert(sch.tick(at(day + 80)) == static_cast<Level>(4));
+        assert(sch.tick(at(day + 91)) == Level::L1);
+    }
+
     // 11. A sustained anomaly escalates to L3 (spec §3.4.1). With
     //     escalate_after 100 s at the L2 cadence, ticks 0..90 stay L2 and
     //     the tick at 100 s goes L3. L3 then holds while the anomaly lasts
