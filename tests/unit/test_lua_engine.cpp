@@ -1663,6 +1663,57 @@ int main() {
         e.shutdown();
     }
 
+    // N+13b. Work in C under the default limit: each body stayed within
+    //        it in VM instructions and took from half a second to minutes
+    //        a tick (one instruction copies a string of any length; a
+    //        match under 1024 steps was never charged; a plain search
+    //        charged only where its first character turned up; insert
+    //        and sort loop in C). Each now ends at the limit, and the
+    //        tick takes no more than a fraction of a second for them all.
+    {
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        const char* heavy[] = {
+            "local s = string.rep('a', 2^21) for i = 1, 150000 do local t = s .. 'x' end",
+            "local s = string.rep('a', 2^22) for i = 1, 20000 do local t = s:upper() end",
+            "local s = string.rep('a', 330) for i = 1, 100000 do s:find('^a*b') end",
+            "local s = string.rep('a', 2^22) for i = 1, 20000 do s:find('b', 1, true) end",
+            "local t = {} for i = 1, 100000 do table.insert(t, 1, i) end",
+            "local t = {} for i = 1, 100000 do t[i] = -i end table.sort(t)",
+        };
+        std::string src;
+        int i = 0;
+        for (const char* body : heavy) {
+            src += "watch('h" + std::to_string(i++) + "', { cooldown = 0, when = function() " +
+                   body + " end })\n";
+        }
+        assert(e.load_string(src.c_str()) == 0);
+        const auto t0 = std::chrono::steady_clock::now();
+        assert(e.eval_tick(mk(0, 0, 0, 0)) == 0);
+        const double took = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        const int n = static_cast<int>(sizeof(heavy) / sizeof(heavy[0]));
+        for (int r = 0; r < n; ++r) {
+            const std::string& err = e.rules()[static_cast<size_t>(r)].last_error;
+            if (err.find("instruction limit of 1000000 exceeded") == std::string::npos) {
+                std::fprintf(stderr, "rule h%d: '%s'\n", r, err.c_str());
+                assert(false);
+            }
+        }
+        std::fprintf(stderr, "N+13b: %d heavy rules ended at the limit in %.3f s\n", n, took);
+        // Ordinary string building stays well inside it.
+        LuaEngine ok;
+        assert(ok.init(false) == 0);
+        assert(ok.load_string(
+            "watch('fine', { cooldown = 0, when = function()\n"
+            "  local parts = {}\n"
+            "  for i = 1, 2000 do parts[#parts + 1] = string.format('%d:%s', i, ('x'):rep(40)) end\n"
+            "  local t = {} for i = 1, 500 do table.insert(t, 1, i) end table.sort(t)\n"
+            "  return #table.concat(parts, ',') > 0 and string.find(table.concat(parts), '1999:', 1, true) ~= nil\n"
+            "end })\n") == 0);
+        assert(ok.eval_tick(mk(0, 0, 0, 0)) == 1);
+        assert(ok.rules()[0].last_error.empty());
+    }
+
     // N+14. What the limit does not need to stop still works as Lua's:
     //       patterns, rep, move, xpcall and the table functions on plain
     //       tables. rep("") is "" at once; a table with __len, __index or

@@ -134,6 +134,17 @@ static void count (MatchState *ms, size_t n) {
   }
 }
 
+/*
+** budyk: charge the steps still below a chunk, before a call returns:
+** a match of fewer than BUDYK_STEP_CHUNK steps was never charged, and
+** a rule ran 240 000 of them in one tick.
+*/
+static void count_flush (MatchState *ms) {
+  size_t s = ms->steps;
+  ms->steps = 0;
+  if (s > 0) budyk_lua_charge(ms->L, s);
+}
+
 
 #define L_ESC           '%'
 #define SPECIALS        "^$*+?.([%-"
@@ -446,7 +457,8 @@ static const char *lmemfind (MatchState *ms, const char *s1, size_t l1,
     l2--;  /* 1st char will be checked by 'memchr' */
     l1 = l1-l2;  /* 's2' cannot be found after that */
     while (l1 > 0 && (init = (const char *)memchr(s1, *s2, l1)) != NULL) {
-      count(ms, 1 + (l2 >> 4));  /* budyk */
+      /* budyk: the bytes memchr scanned, and the compare */
+      count(ms, 1 + ((size_t)(init - s1) >> 4) + (l2 >> 4));
       init++;   /* 1st char is already checked */
       if (memcmp(init, s2+1, l2) == 0)
         return init-1;
@@ -455,6 +467,7 @@ static const char *lmemfind (MatchState *ms, const char *s1, size_t l1,
         s1 = init;
       }
     }
+    count(ms, l1 >> 4);  /* budyk: a scan that found no first char */
     return NULL;  /* not found */
   }
 }
@@ -555,6 +568,7 @@ static int str_find_aux (lua_State *L, int find) {
     const char *s2;
     prepstate(&ms, L, s, ls, p, lp);
     s2 = lmemfind(&ms, s + init, ls - init, p, lp);
+    count_flush(&ms);  /* budyk */
     if (s2) {
       lua_pushinteger(L, (s2 - s) + 1);
       lua_pushinteger(L, (s2 - s) + lp);
@@ -573,6 +587,7 @@ static int str_find_aux (lua_State *L, int find) {
       const char *res;
       reprepstate(&ms);
       if ((res=match(&ms, s1, p)) != NULL) {
+        count_flush(&ms);  /* budyk */
         if (find) {
           lua_pushinteger(L, (s1 - s) + 1);  /* start */
           lua_pushinteger(L, res - s);   /* end */
@@ -582,6 +597,7 @@ static int str_find_aux (lua_State *L, int find) {
           return push_captures(&ms, s1, res);
       }
     } while (s1++ < ms.src_end && !anchor);
+    count_flush(&ms);  /* budyk */
   }
   luaL_pushfail(L);  /* not found */
   return 1;
@@ -616,9 +632,11 @@ static int gmatch_aux (lua_State *L) {
     reprepstate(&gm->ms);
     if ((e = match(&gm->ms, src, gm->p)) != NULL && e != gm->lastmatch) {
       gm->src = gm->lastmatch = e;
+      count_flush(&gm->ms);  /* budyk */
       return push_captures(&gm->ms, src, e);
     }
   }
+  count_flush(&gm->ms);  /* budyk */
   return 0;  /* not found */
 }
 
@@ -744,6 +762,7 @@ int budyk_lua_str_gsub (lua_State *L) {
     else break;  /* end of subject */
     if (anchor) break;
   }
+  count_flush(&ms);  /* budyk */
   if (!changed)  /* no changes? */
     lua_pushvalue(L, 1);  /* return original string */
   else {  /* something changed */

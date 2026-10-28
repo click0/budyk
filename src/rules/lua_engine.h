@@ -148,8 +148,11 @@ public:
     /// VM instructions, and the whole Lua state may hold at most
     /// `memory_bytes`. An overrun raises a Lua error in that call, which
     /// the call site logs like any other rule error; the other rules and
-    /// the next tick are unaffected. A C function such as string.rep is
-    /// one instruction, which is what the memory limit is for.
+    /// the next tick are unaffected. Work a library function does in C
+    /// is charged too: every 64 bytes the state is handed count as an
+    /// instruction (one instruction copies a string of any length), and
+    /// pattern matching, table.move, insert, remove, sort and concat
+    /// charge what they visit.
     ///
     /// Instructions are counted rather than time so the limit means the
     /// same on a slow machine, under a sanitizer, or in a test. Takes
@@ -248,6 +251,7 @@ private:
     lua_State*               L_               = nullptr;
     uint64_t                 instruction_limit_ = kDefaultInstructionLimit;
     uint64_t                 instructions_used_ = 0;
+    size_t                   alloc_bytes_       = 0;   ///< allocated, not yet charged
     size_t                   memory_limit_      = kDefaultMemoryLimit;
     size_t                   memory_used_       = 0;
     std::vector<LuaRule>     rules_;

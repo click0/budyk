@@ -54,6 +54,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   first one** (a netrc file splits on them; a Gmail app password as Google
   shows it, `abcd efgh ijkl mnop`): the user and password go to curl in
   its config file, quoted, as the URL does.
+- **A rule under the instruction limit could still hold the tick for
+  seconds or minutes.** One VM instruction copies a string of any length
+  (`s .. "x"` with `s` of 2 MiB, `s:upper()`): such a loop took 25 s a
+  tick, and a SIGTERM waited for it. A pattern match of fewer than 1024
+  steps was never charged, a plain `find` only where its first
+  character turned up, and `table.insert(t, 1, v)` and `table.sort` loop
+  in C. Every 64 bytes the rules allocate count as an instruction now,
+  every match is charged in full, and insert, remove, sort and concat
+  are charged by the elements they move, compare or read.
 
 ## [0.8.4] — 2026-10-27
 
