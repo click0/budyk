@@ -153,6 +153,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when the browser or a script sent it escaped (`\ud83d\ude00`, as
   Python's `json.dumps` does): each half of the pair was decoded on its
   own. A pair is one character now, and a lone half U+FFFD.
+- With a CPU offline (`chcpu -d`, SMT off), the dashboard's cores and
+  the rules' `cpu.cores` were numbered by their place in the list, so
+  every core after it had the wrong number. Each entry has its CPU's
+  `id` now, and the dashboard shows it.
 
 ## [0.8.4] — 2026-10-27
 

@@ -666,6 +666,13 @@ int main() {
         assert(near(d->cores[0].user_percent, 100.0) && near(d->cores[0].total_percent, 100.0));
         assert(near(d->cores[1].idle_percent, 60.0) && near(d->cores[1].iowait_percent, 30.0));
         assert(near(d->cores[1].total_percent, 10.0));            // not idle, not iowait
+        assert(d->cores[0].id == 0 && d->cores[1].id == 1);
+        // cpu1 offline: the second entry is cpu2, and says so (its place
+        // in the list said 1).
+        fx.file("stat", "cpu  110 0 30 220 30 0 0 0 0 0\n"
+                        "cpu0 100 0 10 80 0 0 0 0 0 0\ncpu2 10 0 20 140 30 0 0 0 0 0\n");
+        assert(budyk_collect_cpu_linux_ex(&cctx, &s, d.get()) == 0);
+        assert(d->ncores == 2 && d->cores[1].id == 2);
 
         auto diskstats = [&](unsigned rs, unsigned ws, unsigned r, unsigned w, unsigned ticks,
                              bool with_sdb) {

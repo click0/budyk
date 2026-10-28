@@ -256,6 +256,7 @@ int main() {
         std::unique_ptr<budyk_detail_c> d(new budyk_detail_c());
         d->ncores = 1;
         d->cores[0].user_percent = 12.5;
+        d->cores[0].id = 2;                       // cpu2: the one before it offline
         d->ndisks = 1;
         std::snprintf(d->disks[0].name, sizeof(d->disks[0].name), "sda");
         d->disks[0].busy_percent = 40.0;
@@ -268,7 +269,7 @@ int main() {
         d->mounts[0].total_bytes = 1000;
         const std::string j = detail_to_json(*d);
         assert(j.front() == '{' && j.back() == '}');
-        assert(contains(j, "\"cores\":[{\"total_percent\":0,\"user_percent\":12.5,"));
+        assert(contains(j, "\"cores\":[{\"id\":2,\"total_percent\":0,\"user_percent\":12.5,"));
         assert(contains(j, "\"disks\":[{\"name\":\"sda\","));
         assert(contains(j, "\"busy_percent\":40}"));
         assert(contains(j, "\"interfaces\":[{\"name\":\"eth0\",") && contains(j, "\"up\":true}"));

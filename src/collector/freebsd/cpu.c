@@ -46,6 +46,7 @@ static void collect_cores(budyk_detail_c* d) {
         if (now[6] == 0) continue;                    /* no such CPU */
         budyk_core_c* out = &d->cores[d->ncores++];
         memset(out, 0, sizeof(*out));
+        out->id = (uint32_t)id;
         const uint64_t* prev = d->core_prev[id];
         const uint64_t  dt   = now[6] >= prev[6] ? now[6] - prev[6] : 0;
         if (d->core_has_prev[id] && dt > 0) {

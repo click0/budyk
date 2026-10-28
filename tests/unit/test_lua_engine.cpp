@@ -1122,7 +1122,8 @@ int main() {
             "watch('cores', { when = function()\n"
             "  local n = 0\n"
             "  for i, c in ipairs(cpu.cores) do n = n + 1 end\n"
-            "  return #cpu.cores == 2 and n == 2 and cpu.cores[2].iowait_percent == 30\n"
+            "  return #cpu.cores == 2 and n == 2 and cpu.cores[2].iowait_percent == 30 and\n"
+            "         cpu.cores[2].id == 3\n"
             "end, cooldown = 0 })\n"
             "watch('disk', { when = function()\n"
             "  return disk.devices.sda ~= nil and disk.devices.sda.busy_percent > 50\n"
@@ -1143,6 +1144,7 @@ int main() {
         d->collected = kDetailAll;
         d->ncores = 2;
         d->cores[1].iowait_percent = 30.0;
+        d->cores[1].id = 3;                      // cpu3: cpu1 and cpu2 offline
         d->ndisks = 1;
         std::snprintf(d->disks[0].name, sizeof(d->disks[0].name), "sda");
         d->disks[0].busy_percent = 75.0;

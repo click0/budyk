@@ -374,6 +374,7 @@ void bind_cores(lua_State* L, int cpu_idx, const budyk_detail_c* d) {
         const budyk_core_c& c = d->cores[i];
         lua_pushinteger(L, static_cast<lua_Integer>(i) + 1);
         push_item(L, items, data, "cpu.cores");
+        set_integer(L, "id",            static_cast<lua_Integer>(c.id));
         set_number(L, "total_percent",  c.total_percent);
         set_number(L, "user_percent",   c.user_percent);
         set_number(L, "system_percent", c.system_percent);

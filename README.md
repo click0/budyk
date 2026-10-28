@@ -509,7 +509,8 @@ Metrics are refreshed every tick as globals:
 | `files` | `files["/path"].modifies`, `.deletes`, `.tampered` (with `security.file_watch` on) |
 
 Inside some of them, the newest sample's per-entity detail as read-only
-collections: `cpu.cores` (an array: `#cpu.cores`, `cpu.cores[1].iowait_percent`),
+collections: `cpu.cores` (an array: `#cpu.cores`, `cpu.cores[1].iowait_percent`;
+`id`, the CPU's number, which skips an offline one),
 `disk.devices["sda"]` (`read_bytes_per_sec`, `write_bytes_per_sec`,
 `reads_per_sec`, `writes_per_sec`, `busy_percent`),
 `net.interfaces["eth0"]` (`rx/tx_bytes_per_sec`, `rx/tx_packets_per_sec`,

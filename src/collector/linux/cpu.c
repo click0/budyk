@@ -77,8 +77,9 @@ int budyk_collect_cpu_linux_ex(budyk_cpu_ctx_c* ctx, budyk_sample_c* s, budyk_de
                 id < BUDYK_MAX_CORES && d->ncores < BUDYK_MAX_CORES) {
                 const uint64_t now[7] = { u + n, sy, io, iq + sq, st, id_,
                                           u + n + sy + io + iq + sq + st + id_ };
-                core_percent(now, d->core_prev[id], d->core_has_prev[id],
-                             &d->cores[d->ncores++]);
+                budyk_core_c* core = &d->cores[d->ncores++];
+                core_percent(now, d->core_prev[id], d->core_has_prev[id], core);
+                core->id = id;   /* the list's index is not the number past an offline core */
                 memcpy(d->core_prev[id], now, sizeof(now));
                 d->core_has_prev[id] = 1;
             }
