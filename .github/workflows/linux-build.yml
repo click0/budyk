@@ -114,7 +114,11 @@ jobs:
   # FreeBSD workflow runs the amd64 binary on FreeBSD 15.1; the aarch64
   # binary and unit tests run here, in an emulated arm64 FreeBSD 14.4.
   freebsd-cross:
-    runs-on: ubuntu-latest
+    # clang-tidy stays on 24.04 (LLVM 18): ubuntu-latest's (26.04, LLVM 21)
+    # adds portability-avoid-pragma-once, which every header here trips, and
+    # new clang-analyzer findings (unix.Stream, security.ArrayBound,
+    # unix.BlockInCriticalSection). Moving to it is a change of its own.
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -396,7 +400,11 @@ jobs:
   # The whitespace rules from .editorconfig are checked here too, and
   # the Doxygen API reference is built (no warnings) and kept.
   static-analysis:
-    runs-on: ubuntu-latest
+    # clang-tidy stays on 24.04 (LLVM 18): ubuntu-latest's (26.04, LLVM 21)
+    # adds portability-avoid-pragma-once, which every header here trips, and
+    # new clang-analyzer findings (unix.Stream, security.ArrayBound,
+    # unix.BlockInCriticalSection). Moving to it is a change of its own.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     name: Linux cppcheck + clang-tidy
     steps:
