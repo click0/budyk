@@ -12,7 +12,6 @@ extern "C" {
 
 #include <cstring>
 #include <string>
-#include <utility>
 
 namespace {
 
@@ -178,17 +177,22 @@ void add_handlers(lua_State* L, int entry_idx, const char* name) {
         lua_setfield(L, -2, k);
     }
     lua_rawseti(L, entry_idx, 5 + kReadable);             // proxy, mt
-    for (const auto& h : { std::make_pair(kUncollected, &uncollected),
-                           std::make_pair(kBaseline,    &baseline) }) {
+    // A plain array, not a braced list of std::pair: GCC 15's
+    // -Wdangling-reference reads the loop variable as a reference into the
+    // list's temporaries, and -Werror stops the build on it.
+    struct Handler { ProxyState state; lua_CFunction fn; };
+    constexpr Handler kHandlers[] = { { kUncollected, &uncollected },
+                                      { kBaseline,    &baseline } };
+    for (const Handler& h : kHandlers) {
         lua_createtable(L, 0, 3);                         // proxy, mt, handlers
         lua_pushstring(L, name);
-        lua_pushcclosure(L, h.second, 1);
+        lua_pushcclosure(L, h.fn, 1);
         for (const char* k : kHandlerKeys) {
             lua_pushvalue(L, -1);
             lua_setfield(L, -3, k);
         }
         lua_pop(L, 1);
-        lua_rawseti(L, entry_idx, 5 + static_cast<int>(h.first));
+        lua_rawseti(L, entry_idx, 5 + static_cast<int>(h.state));
     }
     lua_rawseti(L, entry_idx, 4);                         // proxy
     lua_pop(L, 1);
@@ -617,10 +621,13 @@ void budyk_lua_bind_sample(lua_State* L, const budyk::Sample& s, const budyk_det
 
 int budyk_lua_uncollected(lua_State* L, int idx) {
     idx = lua_absindex(L, idx);
+    // A plain array for GCC 15's -Wdangling-reference, as in add_handlers().
+    struct Marker { const void* key; int which; };
+    const Marker markers[] = { { kUncollectedKey, 1 }, { kBaselineKey, 2 } };
     int which = 0;
-    for (const auto& k : { std::make_pair(kUncollectedKey, 1), std::make_pair(kBaselineKey, 2) }) {
-        lua_rawgetp(L, LUA_REGISTRYINDEX, k.first);
-        if (lua_type(L, -1) == LUA_TSTRING && lua_rawequal(L, -1, idx) != 0) which = k.second;
+    for (const Marker& m : markers) {
+        lua_rawgetp(L, LUA_REGISTRYINDEX, m.key);
+        if (lua_type(L, -1) == LUA_TSTRING && lua_rawequal(L, -1, idx) != 0) which = m.which;
         lua_pop(L, 1);
     }
     return which;

@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **budyk did not build with GCC 15** (Ubuntu 26.04, which `ubuntu-latest`
+  runners now are, release builds included). Two loops over a braced list
+  of `std::pair` read to GCC 15's `-Wdangling-reference` as references
+  into destroyed temporaries, and `-Werror` stopped the build; they run
+  over plain arrays now. The Linux CI jobs are back on `ubuntu-latest`,
+  so the compiler the release is built with is the one CI checks.
 - **The rules `budyk suggest-rules` wrote did not load on almost any
   host.** Each disk and network rule had its threshold in words as a
   comment after the condition (`> 52428800  -- 50.0 MiB/s end,`), which
