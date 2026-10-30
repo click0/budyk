@@ -134,43 +134,43 @@
 
 ```
 budyk/
-├── CMakeLists.txt          # top level; the platform is CMAKE_SYSTEM_NAME (host or toolchain)
+├── CMakeLists.txt          # верхній рівень; платформа — CMAKE_SYSTEM_NAME (хост або toolchain)
 ├── cmake/
-│   ├── platform.cmake      # BUDYK_FREEBSD / BUDYK_LINUX, warnings, static linking
-│   ├── docs.cmake          # the `docs` target: Doxygen over the headers in src/
-│   └── toolchains/         # cross-compiling for FreeBSD on Linux: freebsd-sysroot.sh,
+│   ├── platform.cmake      # BUDYK_FREEBSD / BUDYK_LINUX, попередження, статичне лінкування
+│   ├── docs.cmake          # ціль `docs`: Doxygen по заголовках у src/
+│   └── toolchains/         # крос-компіляція під FreeBSD на Linux: freebsd-sysroot.sh,
 │                           # freebsd-{amd64,aarch64}.cmake
 ├── src/
-│   ├── core/               # Sample, codec, metric_set, json_text, endian.h, clock.h (C++, no I/O)
-│   ├── util/               # the data_dir lock, private temp files, libyaml DOM lookups
-│   ├── collector/          # platform metric collection (plain C)
+│   ├── core/               # Sample, кодек, metric_set, json_text, endian.h, clock.h (C++, без I/O)
+│   ├── util/               # блокування data_dir, приватні тимчасові файли, пошук у DOM libyaml
+│   ├── collector/          # збір метрик під платформу (plain C)
 │   │   ├── freebsd/        # sysctl, devstat, kvm, getifaddrs
-│   │   └── linux/          # /proc, /sys parsers
-│   ├── scheduler/          # L1↔L2↔L3 (+ custom levels) tick scheduler, anomaly detection
-│   ├── hot_buffer/         # in-memory ring for WS catch-up (RAM-only)
-│   ├── storage/            # ring files (mmap'd header, pwrite, CRC32C), TierManager,
-│   │                       # TierAggregator (the L2/L1 folds), ring_check (fsck, recovery)
-│   ├── rules/              # Lua 5.4 engine, sandbox, bindings, alerts, exec, freeze, Worker,
-│   │                       # lua_pattern.c (Lua's own string patterns, step-counted)
-│   ├── security/           # file watcher (inotify / kqueue) feeding the `files` Lua global
-│   ├── ai/                 # rule suggestions (Tier A: local stats; Tier B: LLM via curl)
-│   ├── web/                # HTTP/1.1 + WebSocket server, auth (Argon2id), sessions,
-│   │                       # login throttle, JSON, the SPA (a string literal in spa.cpp)
-│   ├── tui/                # ncurses terminal UI
-│   ├── config/             # YAML config loader (libyaml)
-│   ├── daemon/             # serve.cpp (loop, signals, reload, shutdown), router.cpp
-│   │                       # (HTTP routes), collect.cpp (C collectors → Sample)
-│   ├── cli/                # one-shot commands: hash-password, suggest-rules, watch-files, tui, fsck
-│   └── main.cpp            # dispatch only
+│   │   └── linux/          # парсери /proc, /sys
+│   ├── scheduler/          # планувальник тіків L1↔L2↔L3 (+ власні рівні), виявлення аномалій
+│   ├── hot_buffer/         # кільце в пам'яті для WS catch-up (лише RAM)
+│   ├── storage/            # файли кілець (заголовок через mmap, pwrite, CRC32C), TierManager,
+│   │                       # TierAggregator (згортки в L2/L1), ring_check (fsck, відновлення)
+│   ├── rules/              # рушій Lua 5.4, sandbox, біндинги, алерти, exec, freeze, Worker,
+│   │                       # lua_pattern.c (власні шаблони рядків Lua з лічильником кроків)
+│   ├── security/           # спостерігач файлів (inotify / kqueue) для глобальної `files` у Lua
+│   ├── ai/                 # пропозиції правил (Tier A: локальна статистика; Tier B: LLM через curl)
+│   ├── web/                # сервер HTTP/1.1 + WebSocket, автентифікація (Argon2id), сесії,
+│   │                       # обмеження входів, JSON, SPA (рядковий літерал у spa.cpp)
+│   ├── tui/                # термінальний UI на ncurses
+│   ├── config/             # завантажувач YAML-конфігу (libyaml)
+│   ├── daemon/             # serve.cpp (цикл, сигнали, перечитування, зупинка), router.cpp
+│   │                       # (HTTP-маршрути), collect.cpp (C-колектори → Sample)
+│   ├── cli/                # разові команди: hash-password, suggest-rules, watch-files, tui, fsck
+│   └── main.cpp            # лише диспетчеризація
 ├── rules/                  # examples.lua, freebsd-defaults.lua
 ├── tests/
-│   ├── unit/               # one assert()-based executable per module (ctest)
-│   └── smoke/              # daemon-level scripts: serve, crash, fsck, upgrade, resources, ...
+│   ├── unit/               # один виконуваний файл на assert() на модуль (ctest)
+│   └── smoke/              # скрипти рівня демона: serve, crash, fsck, upgrade, resources, ...
 ├── addons/
-│   ├── freebsd/            # the port, rc.d script, test-port.sh
-│   ├── linux/              # systemd unit, the .deb and .rpm (mkpkg.sh, test-packages.sh)
+│   ├── freebsd/            # порт, rc.d-скрипт, test-port.sh
+│   ├── linux/              # systemd unit, .deb і .rpm (mkpkg.sh, test-packages.sh)
 │   └── docker/
-├── docs/                   # this specification (en/uk), budyk.8
+├── docs/                   # ця специфікація (en/uk), budyk.8
 └── config.example.yaml
 ```
 
@@ -310,24 +310,24 @@ collection:
 Усі поля little-endian.
 
 ```
-[ File header 64 B ]
+[ Заголовок файлу 64 B ]
   +0   magic:       "BDYKRB\0\x01"     8 B
-  +8   version:     u32                 format version, 1
-  +12  tier:        u8                  1|2|3; 0x80 for a custom level's ring
+  +8   version:     u32                 версія формату, 1
+  +12  tier:        u8                  1|2|3; 0x80 для кільця власного рівня
   +13  _pad:        u8[3]
-  +16  record_size: u32                 fixed size of a record
-  +20  capacity:    u64                 number of slots
-  +28  write_idx:   u64                 records written (see below)
+  +16  record_size: u32                 фіксований розмір запису
+  +20  capacity:    u64                 кількість слотів
+  +28  write_idx:   u64                 записано записів (див. нижче)
   +36  _reserved:   u8[28]
 
 [ Record 0 ] [ Record 1 ] ... [ Record N-1 ]
 
-Record (14-byte header + payload):
-  timestamp_nanos: u64                  absolute (not a delta)
+Запис (14-байтовий заголовок + payload):
+  timestamp_nanos: u64                  абсолютний (не дельта)
   level:           u8                   1=L1, 2=L2, 3=L3
-  flags:           u8                   bit 0: folded (§3.4.1); padding, always 0, before 0.7.0
-  crc32c:          u32                  covers everything but these four bytes
-  payload:         u8[record_size - 14] the Sample, own codec (§3.2)
+  flags:           u8                   біт 0: згорнутий (§3.4.1); до 0.7.0 — вирівнювання, завжди 0
+  crc32c:          u32                  покриває все, крім цих чотирьох байтів
+  payload:         u8[record_size - 14] Sample, власний кодек (§3.2)
 ```
 
 Запис пишеться `pwrite(2)` у свій слот, а `write_idx` просувається лише
