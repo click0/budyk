@@ -126,101 +126,87 @@
 
 ## 3. Фаза 3 — Архітектура (C/C++)
 
-### 3.1. Структура проєкту
+### 3.1. Структура проєкту (як реалізовано)
+
+Структуру, запропоновану тут спочатку, замінено, коли код виріс. Нижче —
+дерево таким, яким воно є; `CLAUDE.md` у репозиторії має мапу до рівня
+файлів.
 
 ```
 budyk/
-├── CMakeLists.txt                  # top-level, підключає всі модулі
+├── CMakeLists.txt          # верхній рівень; платформа — CMAKE_SYSTEM_NAME (хост або toolchain)
 ├── cmake/
-│   ├── platform.cmake              # detect OS, set platform-specific flags
-│   └── embed_resources.cmake       # вбудовування SPA в бінарник (xxd / incbin)
+│   ├── platform.cmake      # BUDYK_FREEBSD / BUDYK_LINUX, попередження, статичне лінкування
+│   ├── docs.cmake          # ціль `docs`: Doxygen по заголовках у src/
+│   └── toolchains/         # крос-компіляція під FreeBSD на Linux: freebsd-sysroot.sh,
+│                           # freebsd-{amd64,aarch64}.cmake
 ├── src/
-│   ├── core/                       # Sample, інтерфейси, кодек (C++17)
-│   │   ├── sample.h                # struct Sample { CpuStats, MemStats, ... }
-│   │   ├── metric_source.h         # abstract class MetricSource
-│   │   ├── collection_level.h      # enum class Level { L1, L2, L3 }
-│   │   └── codec.h / codec.cpp     # бінарний кодек (msgpack або custom)
-│   ├── collector/
-│   │   ├── collector.h             # спільний інтерфейс
-│   │   ├── linux/                  # реалізація через /proc, /sys (C)
-│   │   │   ├── cpu.c
-│   │   │   ├── memory.c
-│   │   │   ├── network.c
-│   │   │   ├── disk.c
-│   │   │   └── system.c
-│   │   └── freebsd/                # реалізація через sysctl, devstat, kvm (C)
-│   │       ├── cpu.c
-│   │       ├── memory.c
-│   │       ├── network.c
-│   │       ├── disk.c
-│   │       └── system.c
-│   ├── scheduler/                  # tick scheduler: L1↔L2↔L3, anomaly-detector (C++)
-│   ├── hot_buffer/                 # lock-free circular buffer для WS catch-up (C++)
-│   ├── storage/                    # tiered ring-buffer, mmap, level-маркери (C++)
-│   │   ├── ring_file.h / .cpp      # single ring-buffer file
-│   │   ├── tier_manager.h / .cpp   # multi-tier coordinator + aggregation
-│   │   └── codec.h / .cpp          # on-disk binary format
-│   ├── web/                        # HTTP/WebSocket server (C++)
-│   │   ├── server.h / .cpp         # routes, API handlers
-│   │   ├── ws_hub.h / .cpp         # broadcast hub, client management
-│   │   ├── auth.h / .cpp           # Argon2id + sessions
-│   │   └── static/                 # вбудований SPA (html/js/css)
-│   ├── tui/                        # terminal UI (C++)
-│   ├── rules/                      # Lua-based rule engine (C++ + Lua C API)
-│   │   ├── lua_engine.h / .cpp     # Lua VM lifecycle, sandbox setup, per-tick eval
-│   │   ├── lua_bindings.h / .cpp   # expose Sample fields як read-only Lua таблиці
-│   │   ├── lua_stdlib.h / .cpp     # watch(), alert(), exec(), escalate() builtins
-│   │   └── yaml_compat.h / .cpp    # опціональний YAML-to-Lua транспілер для простих правил
-│   ├── ai/                         # AI-асистована генерація правил (C++)
-│   │   ├── baseline.h / .cpp       # статистичний baseline з історії
-│   │   ├── suggest.h / .cpp        # engine пропозицій правил (локальні евристики)
-│   │   └── llm_client.h / .cpp     # опціонально: LLM API клієнт для розширених пропозицій
-│   ├── config/                     # YAML config loader (C++)
-│   └── main.cpp                    # CLI entry point (serve, tui, hash-password, suggest-rules)
-├── third_party/                    # vendored або submodule залежності
-├── rules/                          # бібліотека правил за замовчуванням
-│   ├── examples.lua                # приклади правил з коментарями
-│   └── freebsd-defaults.lua        # FreeBSD-специфічні розумні дефолти
-├── tests/                          # unit + integration tests
+│   ├── core/               # Sample, кодек, metric_set, json_text, endian.h, clock.h (C++, без I/O)
+│   ├── util/               # блокування data_dir, приватні тимчасові файли, пошук у DOM libyaml
+│   ├── collector/          # збір метрик під платформу (plain C)
+│   │   ├── freebsd/        # sysctl, devstat, kvm, getifaddrs
+│   │   └── linux/          # парсери /proc, /sys
+│   ├── scheduler/          # планувальник тіків L1↔L2↔L3 (+ власні рівні), виявлення аномалій
+│   ├── hot_buffer/         # кільце в пам'яті для WS catch-up (лише RAM)
+│   ├── storage/            # файли кілець (заголовок через mmap, pwrite, CRC32C), TierManager,
+│   │                       # TierAggregator (згортки в L2/L1), ring_check (fsck, відновлення)
+│   ├── rules/              # рушій Lua 5.4, sandbox, біндинги, алерти, exec, freeze, Worker,
+│   │                       # lua_pattern.c (власні шаблони рядків Lua з лічильником кроків)
+│   ├── security/           # спостерігач файлів (inotify / kqueue) для глобальної `files` у Lua
+│   ├── ai/                 # пропозиції правил (Tier A: локальна статистика; Tier B: LLM через curl)
+│   ├── web/                # сервер HTTP/1.1 + WebSocket, автентифікація (Argon2id), сесії,
+│   │                       # обмеження входів, JSON, SPA (рядковий літерал у spa.cpp)
+│   ├── tui/                # термінальний UI на ncurses
+│   ├── config/             # завантажувач YAML-конфігу (libyaml)
+│   ├── daemon/             # serve.cpp (цикл, сигнали, перечитування, зупинка), router.cpp
+│   │                       # (HTTP-маршрути), collect.cpp (C-колектори → Sample)
+│   ├── cli/                # разові команди: hash-password, suggest-rules, watch-files, tui, fsck
+│   └── main.cpp            # лише диспетчеризація
+├── rules/                  # examples.lua, freebsd-defaults.lua
+├── tests/
+│   ├── unit/               # один виконуваний файл на assert() на модуль (ctest)
+│   └── smoke/              # скрипти рівня демона: serve, crash, fsck, upgrade, resources, ...
 ├── addons/
-│   ├── freebsd/                    # rc.d script, pkg-plist, Makefile для ports
-│   ├── linux/                      # systemd unit, deb rules
+│   ├── freebsd/            # порт, rc.d-скрипт, test-port.sh
+│   ├── linux/              # systemd unit, .deb і .rpm (mkpkg.sh, test-packages.sh)
 │   └── docker/
-├── docs/
-│   └── budyk.8                     # man page
+├── docs/                   # ця специфікація (en/uk), budyk.8
 └── config.example.yaml
 ```
 
-### 3.2. Ключові залежності
+### 3.2. Ключові залежності (як реалізовано)
 
-| Підсистема | Бібліотека | Обґрунтування |
-|------------|-----------|---------------|
-| Event loop | **libuv** (або raw `kqueue`/`epoll`) | Крос-платформний async I/O, активно використовується на FreeBSD. Альтернатива: `libevent`. |
-| HTTP + WebSocket | **mongoose** (embedded, MIT) або **libwebsockets** | mongoose — single-header, ідеально для embedded-сервера. libwebsockets — важче, але потужніше. |
-| YAML config | **libyaml** (C) або **yaml-cpp** (C++) | libyaml — мінімалістичніше, yaml-cpp — зручніше з C++ |
-| JSON (API responses) | **cJSON** (C, MIT) або **nlohmann/json** (C++, MIT) | cJSON — мінімалізм; nlohmann — зручність |
-| Binary codec (storage) | **msgpack-c** або **custom** | msgpack — стандартизований, швидкий. Custom — якщо потрібен повний контроль розміру запису |
-| Argon2 | **libargon2** (reference impl, CC0/Apache-2.0) | де-факто стандарт |
-| Rule engine | **Lua 5.4** (MIT) | ~200 KB, вбудовуваний, FreeBSD використовує Lua в bootloader з версії 12.0. Замінює кастомний DSL-парсер |
-| TUI | **ncurses** (BSD base) або **notcurses** (modern) | ncurses є в base FreeBSD. notcurses — гарніше, але залежність |
-| CLI parsing | **getopt_long** (base) або **argtable3** (vendored, BSD) | getopt_long — zero-dependency, в base |
-| Logging | **syslog(3)** + custom structured logger | В base FreeBSD, zero-dependency |
-| Hashing (CRC32C) | **SSE4.2 intrinsics** або `<zlib.h>` crc32 | Для ring-buffer записів |
-| SPA embedding | **xxd** або **incbin** (compile-time embed) | Еквівалент `go:embed` |
-| Тестування | **cmocka** (C, Apache-2.0) або **Google Test** (C++, BSD) | cmocka — для C-модулів колекторів; gtest — для C++ |
+| Підсистема | Як зроблено | Що пропонував план |
+|------------|-------------|--------------------|
+| Event loop | немає: головний потік, HTTP-потік і Worker-потоки (§3.3) | libuv, raw `kqueue`/`epoll` |
+| HTTP + WebSocket | власний сервер HTTP/1.1 і RFC 6455, `src/web` | mongoose, libwebsockets |
+| YAML config | **libyaml** (C) | libyaml або yaml-cpp |
+| JSON | власний writer і невеликий reader ключів (`src/web/json.cpp`, `src/core/json_text.cpp`) | cJSON, nlohmann/json |
+| Binary codec (storage) | власний версійований little-endian кодек (`src/core/codec.cpp`, версія 9); старіші кільця конвертуються під час старту | msgpack-c або custom |
+| Argon2 | **libargon2** | libargon2 |
+| Rule engine | **Lua 5.4** | Lua 5.4 |
+| TUI | **ncurses**, широка бібліотека (ncursesw) | ncurses або notcurses |
+| CLI parsing | власний диспетчер (`src/main.cpp`, `src/cli/`) | getopt_long, argtable3 |
+| Logging | stderr, його збирають rc.d, systemd або Docker | syslog(3) |
+| CRC32C | табличний, таблиця рахується під час компіляції (`src/storage/codec.cpp`) | SSE4.2, zlib |
+| SPA embedding | сирий рядковий літерал C++ у `src/web/spa.cpp` | xxd, incbin |
+| Доставка алертів | `curl(1)` як дочірній процес із Worker-потоку (ntfy, Discord, Telegram, SMTP, Twilio) | — |
+| Тестування | виконувані файли на `assert()` під ctest і скрипти `tests/smoke/` | cmocka, Google Test |
 
-**Принцип: мінімум залежностей.** FreeBSD base system вже містить: libc, libm, libkvm, libdevstat, libutil, ncurses, zlib, libcrypto. Ідеальний варіант — залежати лише від base + mongoose (vendored) + libyaml (ports) + libargon2 (ports).
+**Що лінкує бінарник:** libyaml, Lua 5.4, libargon2 і ncursesw, а на
+FreeBSD ще libdevstat і libkvm (і libelf для статичного лінкування); з
+`STATIC_LINK=ON`, що за замовчуванням, усе це входить в один бінарник.
 
-### 3.3. Ключові архітектурні інваріанти
+### 3.3. Ключові архітектурні інваріанти (як реалізовано)
 
-1. **Separation of concerns**: `core/` — чисті структури та інтерфейси, без I/O, без алокацій з heap де можливо. Колектори — plain C, компілюються як `.o` файли, лінкуються умовно через `#ifdef __FreeBSD__` / `#ifdef __linux__`.
-2. **`class MetricSource`** (абстрактний) — єдина точка розширення під ОС. Compile-time вибір через `cmake -DPLATFORM=freebsd`.
-3. **Storage не знає про колектор** — приймає `struct Sample*` і пише байти. Формат зберігання — власний, бінарний, little-endian, версійований.
-4. **WS-hub — один fd-backed broadcast**: `pipe(2)` або custom lock-free SPMC ring. Slow-consumer disconnect.
-5. **Конфіг незмінний після старту** (за винятком перечитування по `SIGHUP` — опціонально, v2).
-6. **Весь I/O — неблокуючий** через event loop (libuv/kqueue). Важкі `sysctl`/`devstat` виклики — в окремому thread, результат передається через pipe в event loop.
-7. **Без винятків C++**. Компіляція з `-fno-exceptions -fno-rtti` для мінімального footprint. Помилки — через return codes / `std::expected` (C++23) або власна `Result<T,E>`.
-8. **Static linking за замовчуванням** (`-static` або `-static-libstdc++`) — один бінарник без runtime залежностей.
+1. **Separation of concerns**: `core/` — чисті структури і кодек, без I/O. Колектори — plain C; платформа обирається на етапі конфігурації з `CMAKE_SYSTEM_NAME`, а код розгалужується лише через `BUDYK_FREEBSD` / `BUDYK_LINUX`.
+2. **`MetricSource` не на шляху збору.** `collect_one()` викликає C-колектори напряму і пропускає ті, яких не просить `MetricSet` рівня. `MetricSource` і `create_collector()` збережено, невикористаними, на пізніший етап.
+3. **Storage не знає про колектор** — приймає `Sample` і пише байти. Формат власний, бінарний, little-endian, версійований (§3.5).
+4. **WS-hub — неблокуючі fd клієнтів, повільні споживачі відкидаються.** Надсилання, яке заблокувалося б або записало частину кадру, відкидає клієнта; головний потік обслуговує hub раз на тік (ping, close-кадри, клієнти, що відвалилися); щонайбільше 64 клієнти.
+5. **Конфіг незмінний після старту.** `SIGHUP` перечитує лише файл правил, спершу в окремий рушій: файл, що не завантажився, лишає правила такими, як були.
+6. **Без event loop; тік колектора ніколи не блокується.** Головний потік виконує тік (collect → store → hot buffer → правила → WebSocket broadcast) і спить у `poll()` на wake-pipe до наступного. HTTP-потік — один блокуючий цикл accept-handle-close, кожне з'єднання обмежене тайм-аутом і мінімальною швидкістю відправлення. Повільна робота (доставка алертів, `exec()`) іде у Worker-потоки з обмеженими чергами на 256 завдань.
+7. **Без винятків C++ і RTTI** (`-fno-exceptions -fno-rtti`). Помилки — коди повернення: `-errno` або невеликі від'ємні порядкові номери з `describe()`, що називає причину.
+8. **Static linking за замовчуванням** (`STATIC_LINK=ON`) — один бінарник без runtime-залежностей.
 
 ### 3.4. Адаптивна модель збору даних
 
@@ -319,30 +305,41 @@ collection:
 | 1 клієнт, 1 година | 3 600 записів, ~7 MB | 3 600 записів (L3) + 288 (L1), ~7 MB |
 | Idle, 0 клієнтів, 30 днів | ~4.8 GB Tier 1 (кільце перезаписане) | ~1.6 MB (L1) |
 
-### 3.5. Формат зберігання (пропозиція)
+### 3.5. Формат зберігання (як реалізовано)
+
+Усі поля little-endian.
 
 ```
-[ File Header 64 B ]
-  magic:       "KULA\0RB\x02"        // 8 B (v2 — з підтримкою level-маркерів)
-  version:     uint32_t              // 4 B
-  tier:        uint8_t (1|2|3)       // 1 B
-  _pad:        uint8_t[3]
-  record_size: uint32_t              // 4 B — фікс. розмір запису
-  capacity:    uint64_t              // 8 B — кількість слотів
-  write_idx:   uint64_t              // 8 B — атомарно оновлюється
-  _reserved:   uint8_t[28]
+[ Заголовок файлу 64 B ]
+  +0   magic:       "BDYKRB\0\x01"     8 B
+  +8   version:     u32                 версія формату, 1
+  +12  tier:        u8                  1|2|3; 0x80 для кільця власного рівня
+  +13  _pad:        u8[3]
+  +16  record_size: u32                 фіксований розмір запису
+  +20  capacity:    u64                 кількість слотів
+  +28  write_idx:   u64                 записано записів (див. нижче)
+  +36  _reserved:   u8[28]
 
 [ Record 0 ] [ Record 1 ] ... [ Record N-1 ]
 
-Запис:
-  timestamp_unix_nanos: uint64_t     // абсолютний (не дельта!)
-  level:               uint8_t      // 1=L1, 2=L2, 3=L3
-  _pad:                uint8_t[1]
-  crc32c:              uint32_t
-  payload:             uint8_t[record_size - 14]  // msgpack-serialized Sample
+Запис (14-байтовий заголовок + payload):
+  timestamp_nanos: u64                  абсолютний (не дельта)
+  level:           u8                   1=L1, 2=L2, 3=L3
+  flags:           u8                   біт 0: згорнутий (§3.4.1); до 0.7.0 — вирівнювання, завжди 0
+  crc32c:          u32                  покриває все, крім цих чотирьох байтів
+  payload:         u8[record_size - 14] Sample, власний кодек (§3.2)
 ```
 
-Запис — `pwrite(2)` за розрахованим offset; `write_idx` оновлюється через `__atomic_fetch_add` у `mmap`-регіоні. При краші втрачається не більше одного запису.
+Запис пишеться `pwrite(2)` у свій слот, а `write_idx` просувається лише
+після `pwrite`. Заголовок відображено через `mmap`, але поле `write_idx`
+лежить на +28 і не вирівняне на 8 байтів: атомарна операція там падає на
+arm64 (SIGBUS). Тож індекс — це `std::atomic` у `RingFile`, який записувач
+копіює в заголовок після кожного `pwrite`. Заголовок нового кільця
+пишеться через `pwrite` ще до відображення файлу (запис через
+відображення в дірку розрідженого файлу — SIGBUS на повному диску). Під
+час старту запис, що потрапив у слот, але не в індекс, зараховується,
+тож краш не губить жодного збереженого запису; кільце старішої версії
+кодека конвертується під час старту.
 
 ### 3.6. Rule Engine (на базі Lua)
 
@@ -394,13 +391,13 @@ end
 
 Опціонально, тонкий шар YAML-сумісності транспілює прості YAML-правила у Lua `watch()` виклики при завантаженні — для користувачів, які вважають за краще YAML для базових випадків. Внутрішньо engine завжди Lua.
 
-#### 3.6.3. Sandboxing
+#### 3.6.3. Sandboxing (як реалізовано)
 
 Lua-правила запускаються в обмеженому sandbox'і:
-- Немає `io`, `os`, `loadfile`, `dofile`, `require` — лише чиста логіка.
-- `exec()` — це C-функція під нашим контролем (timeout, `setrlimit`, прапорець `--enable-exec`).
-- Поля `Sample` expose'яться як read-only Lua-таблиці (`cpu`, `mem`, `net`, `disk`, `load`, `swap`).
-- Час виконання обмежений через `lua_sethook` — максимум 10ms на тік, скрипт вбивається при перевищенні.
+- Відкрито лише бібліотеки `base`, `math`, `string` і `table`; з `base` прибрано `dofile`, `loadfile`, `load`, `loadstring` і `require`. Немає `io`, `os`, `debug` і `package`.
+- `exec()` — C-функція під нашим контролем: вмикається `--enable-exec` або `rules.exec.enabled` разом зі списком дозволених команд, запускається з тайм-аутом, rlimits і у власній групі процесів.
+- Поля `Sample` expose'яться як read-only proxy-таблиці, створені один раз і оновлювані на місці.
+- Замість ліміту часу кожен виклик у Lua обмежено `rules.limits.instructions` (за замовчуванням 1 000 000), які рахує count-хук `lua_sethook`, а весь рушій — `rules.limits.memory_mb` (за замовчуванням 16). Робота бібліотек на C теж рахується в інструкції: шаблони рядків проходять через копію матчера Lua з лічильником кроків (`lua_pattern.c`), а байти, які виділяє стан, рахуються як інструкції. Після перевищення хук кидає помилку на кожній інструкції, тож жоден `pcall` не продовжить. Правило, що вийшло з-під контролю, отримує помилку, а не демон.
 - Без доступу до файлової системи, без мережевого доступу, без FFI.
 
 #### 3.6.4. Конвеєр оцінки (Evaluation Pipeline)

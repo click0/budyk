@@ -15,16 +15,9 @@ same section numbers): the adaptive L1/L2/L3 model (§3.4.1), the hot buffer
 nil skips a tick (§3.6), AI suggestions (§3.7), the resource figures (§5).
 Read it there; this file does not repeat it.
 
-The spec was written before the code. Where they differ, the code wins, and
-this file says how it is actually built. The spec's proposals that were
-**not** followed: the project layout (§3.1; see the tree below), libuv /
-kqueue / epoll, mongoose / libwebsockets, msgpack, cJSON (§3.2), an event
-loop with all I/O non-blocking (§3.3 item 6; see Threads and I/O),
-`MetricSource` as the extension point (§3.3 item 2; kept unused, see the
-end), `__FreeBSD__` / `__linux__` branching (§3.3 item 1; `BUDYK_FREEBSD` /
-`BUDYK_LINUX`), `write_idx` updated atomically in the mmap'd header (§3.5;
-SIGBUS on arm64, see Shared state), and a 10 ms time limit per rule (§3.6.3;
-an instruction count, see the rules decision).
+The spec was written before the code. §3.1–§3.3, §3.5 and §3.6.3 now
+describe the code as built (marked "as implemented"); where the spec and
+the code still differ, the code wins and this file says how.
 
 ## Architecture: beyond the spec
 

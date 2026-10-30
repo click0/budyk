@@ -32,7 +32,10 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest became 26.04 (GCC 15), whose -Wdangling-reference
+    # stops the -Werror build at src/rules/lua_bindings.cpp. Moving to 26.04
+    # is a change of its own (compiler, sanitizers, static libraries).
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -114,7 +117,7 @@ jobs:
   # FreeBSD workflow runs the amd64 binary on FreeBSD 15.1; the aarch64
   # binary and unit tests run here, in an emulated arm64 FreeBSD 14.4.
   freebsd-cross:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -229,7 +232,7 @@ jobs:
   # at most one record lost). Any report aborts the process, so it fails
   # the job.
   sanitizers:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     name: Linux ASan + UBSan
     steps:
@@ -354,7 +357,7 @@ jobs:
   # share the hot buffer, the rings, the hub and the session store. Every
   # unit test plus the serve smoke test; any report fails the job.
   tsan:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     name: Linux TSan
     steps:
@@ -396,7 +399,7 @@ jobs:
   # The whitespace rules from .editorconfig are checked here too, and
   # the Doxygen API reference is built (no warnings) and kept.
   static-analysis:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     name: Linux cppcheck + clang-tidy
     steps:
@@ -452,7 +455,7 @@ jobs:
   # (its port, not the example config's 8080), load the rules and
   # collect, and the image must have curl for the alerts.
   docker:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     name: Docker image (compose)
     steps:
@@ -493,7 +496,7 @@ jobs:
   # storage/ must stay at >= 85%; the job fails below that. The per-module
   # table goes to the job summary; coverage.info is kept as an artifact.
   coverage:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     name: Linux coverage
     steps:

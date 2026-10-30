@@ -126,101 +126,86 @@ This is the critical phase. FreeBSD has **no** `/proc` by default and will **nev
 
 ## 3. Phase 3 — Architecture (C/C++)
 
-### 3.1. Project Layout
+### 3.1. Project Layout (as implemented)
+
+The layout first proposed here was replaced as the code grew. This is the
+tree as built; `CLAUDE.md` in the repository keeps a file-level map.
 
 ```
 budyk/
-├── CMakeLists.txt                  # top-level, includes all modules
+├── CMakeLists.txt          # top level; the platform is CMAKE_SYSTEM_NAME (host or toolchain)
 ├── cmake/
-│   ├── platform.cmake              # detect OS, set platform-specific flags
-│   └── embed_resources.cmake       # embed SPA into binary (xxd / incbin)
+│   ├── platform.cmake      # BUDYK_FREEBSD / BUDYK_LINUX, warnings, static linking
+│   ├── docs.cmake          # the `docs` target: Doxygen over the headers in src/
+│   └── toolchains/         # cross-compiling for FreeBSD on Linux: freebsd-sysroot.sh,
+│                           # freebsd-{amd64,aarch64}.cmake
 ├── src/
-│   ├── core/                       # Sample, interfaces, codec (C++17)
-│   │   ├── sample.h                # struct Sample { CpuStats, MemStats, ... }
-│   │   ├── metric_source.h         # abstract class MetricSource
-│   │   ├── collection_level.h      # enum class Level { L1, L2, L3 }
-│   │   └── codec.h / codec.cpp     # binary codec (msgpack or custom)
-│   ├── collector/
-│   │   ├── collector.h             # common interface
-│   │   ├── linux/                  # implementation via /proc, /sys (C)
-│   │   │   ├── cpu.c
-│   │   │   ├── memory.c
-│   │   │   ├── network.c
-│   │   │   ├── disk.c
-│   │   │   └── system.c
-│   │   └── freebsd/                # implementation via sysctl, devstat, kvm (C)
-│   │       ├── cpu.c
-│   │       ├── memory.c
-│   │       ├── network.c
-│   │       ├── disk.c
-│   │       └── system.c
-│   ├── scheduler/                  # tick scheduler: L1↔L2↔L3, anomaly-detector (C++)
-│   ├── hot_buffer/                 # lock-free circular buffer for WS catch-up (C++)
-│   ├── storage/                    # tiered ring-buffer, mmap, level markers (C++)
-│   │   ├── ring_file.h / .cpp      # single ring-buffer file
-│   │   ├── tier_manager.h / .cpp   # multi-tier coordinator + aggregation
-│   │   └── codec.h / .cpp          # on-disk binary format
-│   ├── web/                        # HTTP/WebSocket server (C++)
-│   │   ├── server.h / .cpp         # routes, API handlers
-│   │   ├── ws_hub.h / .cpp         # broadcast hub, client management
-│   │   ├── auth.h / .cpp           # Argon2id + sessions
-│   │   └── static/                 # embedded SPA (html/js/css)
-│   ├── tui/                        # terminal UI (C++)
-│   ├── rules/                      # Lua-based rule engine (C++ + Lua C API)
-│   │   ├── lua_engine.h / .cpp     # Lua VM lifecycle, sandbox setup, per-tick eval
-│   │   ├── lua_bindings.h / .cpp   # expose Sample fields as read-only Lua tables
-│   │   ├── lua_stdlib.h / .cpp     # watch(), alert(), exec(), escalate() builtins
-│   │   └── yaml_compat.h / .cpp    # optional YAML-to-Lua transpiler for simple rules
-│   ├── ai/                         # AI-assisted rule generation (C++)
-│   │   ├── baseline.h / .cpp       # statistical baseline from history
-│   │   ├── suggest.h / .cpp        # rule suggestion engine (local heuristics)
-│   │   └── llm_client.h / .cpp     # optional: LLM API client for advanced suggestions
-│   ├── config/                     # YAML config loader (C++)
-│   └── main.cpp                    # CLI entry point (serve, tui, hash-password, suggest-rules)
-├── third_party/                    # vendored or submodule dependencies
-├── rules/                          # default rule library
-│   ├── examples.lua                # example rules with comments
-│   └── freebsd-defaults.lua        # FreeBSD-specific sensible defaults
-├── tests/                          # unit + integration tests
+│   ├── core/               # Sample, codec, metric_set, json_text, endian.h, clock.h (C++, no I/O)
+│   ├── util/               # the data_dir lock, private temp files, libyaml DOM lookups
+│   ├── collector/          # platform metric collection (plain C)
+│   │   ├── freebsd/        # sysctl, devstat, kvm, getifaddrs
+│   │   └── linux/          # /proc, /sys parsers
+│   ├── scheduler/          # L1↔L2↔L3 (+ custom levels) tick scheduler, anomaly detection
+│   ├── hot_buffer/         # in-memory ring for WS catch-up (RAM-only)
+│   ├── storage/            # ring files (mmap'd header, pwrite, CRC32C), TierManager,
+│   │                       # TierAggregator (the L2/L1 folds), ring_check (fsck, recovery)
+│   ├── rules/              # Lua 5.4 engine, sandbox, bindings, alerts, exec, freeze, Worker,
+│   │                       # lua_pattern.c (Lua's own string patterns, step-counted)
+│   ├── security/           # file watcher (inotify / kqueue) feeding the `files` Lua global
+│   ├── ai/                 # rule suggestions (Tier A: local stats; Tier B: LLM via curl)
+│   ├── web/                # HTTP/1.1 + WebSocket server, auth (Argon2id), sessions,
+│   │                       # login throttle, JSON, the SPA (a string literal in spa.cpp)
+│   ├── tui/                # ncurses terminal UI
+│   ├── config/             # YAML config loader (libyaml)
+│   ├── daemon/             # serve.cpp (loop, signals, reload, shutdown), router.cpp
+│   │                       # (HTTP routes), collect.cpp (C collectors → Sample)
+│   ├── cli/                # one-shot commands: hash-password, suggest-rules, watch-files, tui, fsck
+│   └── main.cpp            # dispatch only
+├── rules/                  # examples.lua, freebsd-defaults.lua
+├── tests/
+│   ├── unit/               # one assert()-based executable per module (ctest)
+│   └── smoke/              # daemon-level scripts: serve, crash, fsck, upgrade, resources, ...
 ├── addons/
-│   ├── freebsd/                    # rc.d script, pkg-plist, Makefile for ports
-│   ├── linux/                      # systemd unit, deb rules
+│   ├── freebsd/            # the port, rc.d script, test-port.sh
+│   ├── linux/              # systemd unit, the .deb and .rpm (mkpkg.sh, test-packages.sh)
 │   └── docker/
-├── docs/
-│   └── budyk.8                     # man page
+├── docs/                   # this specification (en/uk), budyk.8
 └── config.example.yaml
 ```
 
-### 3.2. Key Dependencies
+### 3.2. Key Dependencies (as implemented)
 
-| Subsystem | Library | Rationale |
-|-----------|---------|-----------|
-| Event loop | **libuv** (or raw `kqueue`/`epoll`) | Cross-platform async I/O, actively used on FreeBSD. Alternative: `libevent`. |
-| HTTP + WebSocket | **mongoose** (embedded, MIT) or **libwebsockets** | mongoose — single-header, ideal for embedded server. libwebsockets — heavier but more powerful. |
-| YAML config | **libyaml** (C) or **yaml-cpp** (C++) | libyaml — more minimal; yaml-cpp — more convenient from C++ |
-| JSON (API responses) | **cJSON** (C, MIT) or **nlohmann/json** (C++, MIT) | cJSON for minimalism; nlohmann for convenience |
-| Binary codec (storage) | **msgpack-c** or **custom** | msgpack — standardized, fast. Custom — if full record size control is needed |
-| Argon2 | **libargon2** (reference impl, CC0/Apache-2.0) | de facto standard |
-| Rule engine | **Lua 5.4** (MIT) | ~200 KB, embeddable, FreeBSD uses Lua in bootloader since 12.0. Replaces custom DSL parser |
-| TUI | **ncurses** (BSD base) or **notcurses** (modern) | ncurses ships in FreeBSD base. notcurses — nicer but adds a dependency |
-| CLI parsing | **getopt_long** (base) or **argtable3** (vendored, BSD) | getopt_long — zero-dependency, in base |
-| Logging | **syslog(3)** + custom structured logger | In FreeBSD base, zero-dependency |
-| Hashing (CRC32C) | **SSE4.2 intrinsics** or `<zlib.h>` crc32 | For ring-buffer records |
-| SPA embedding | **xxd** or **incbin** (compile-time embed) | Equivalent of `go:embed` |
-| Testing | **cmocka** (C, Apache-2.0) or **Google Test** (C++, BSD) | cmocka — for C collector modules; gtest — for C++ |
+| Subsystem | As built | The plan proposed |
+|-----------|----------|-------------------|
+| Event loop | none: a main thread, an HTTP thread and Worker threads (§3.3) | libuv, raw `kqueue`/`epoll` |
+| HTTP + WebSocket | hand-written HTTP/1.1 and RFC 6455 server, `src/web` | mongoose, libwebsockets |
+| YAML config | **libyaml** (C) | libyaml or yaml-cpp |
+| JSON | hand-written writer and a small key reader (`src/web/json.cpp`, `src/core/json_text.cpp`) | cJSON, nlohmann/json |
+| Binary codec (storage) | own versioned little-endian codec (`src/core/codec.cpp`, version 9); older rings are converted on start | msgpack-c or custom |
+| Argon2 | **libargon2** | libargon2 |
+| Rule engine | **Lua 5.4** | Lua 5.4 |
+| TUI | **ncurses**, the wide library (ncursesw) | ncurses or notcurses |
+| CLI parsing | hand-written dispatch (`src/main.cpp`, `src/cli/`) | getopt_long, argtable3 |
+| Logging | stderr, collected by rc.d, systemd or Docker | syslog(3) |
+| CRC32C | table-driven, computed at compile time (`src/storage/codec.cpp`) | SSE4.2, zlib |
+| SPA embedding | a C++ raw string literal in `src/web/spa.cpp` | xxd, incbin |
+| Alert delivery | `curl(1)` run as a child from a Worker thread (ntfy, Discord, Telegram, SMTP, Twilio) | — |
+| Testing | `assert()`-based executables under ctest, and `tests/smoke/` scripts | cmocka, Google Test |
 
-**Principle: minimum dependencies.** FreeBSD base already contains: libc, libm, libkvm, libdevstat, libutil, ncurses, zlib, libcrypto. Ideal case — depend only on base + mongoose (vendored) + libyaml (ports) + libargon2 (ports).
+**What the binary links:** libyaml, Lua 5.4, libargon2 and ncursesw, plus
+libdevstat and libkvm (and libelf for a static link) on FreeBSD; with
+`STATIC_LINK=ON`, the default, all of them go into the one binary.
 
-### 3.3. Key Architectural Invariants
+### 3.3. Key Architectural Invariants (as implemented)
 
-1. **Separation of concerns**: `core/` — pure structs and interfaces, no I/O, no heap allocation where possible. Collectors — plain C, compiled as `.o` files, linked conditionally via `#ifdef __FreeBSD__` / `#ifdef __linux__`.
-2. **`class MetricSource`** (abstract) — the sole OS extension point. Compile-time selection via `cmake -DPLATFORM=freebsd`.
-3. **Storage knows nothing about the collector** — accepts `struct Sample*` and writes bytes. Storage format — custom, binary, little-endian, versioned.
-4. **WS hub — one fd-backed broadcast**: `pipe(2)` or custom lock-free SPMC ring. Slow-consumer disconnect.
-5. **Config is immutable after startup** (except optional reload on `SIGHUP` — v2).
-6. **All I/O is non-blocking** via event loop (libuv/kqueue). Heavy `sysctl`/`devstat` calls — in a separate thread, result piped into the event loop.
-7. **No C++ exceptions.** Compiled with `-fno-exceptions -fno-rtti` for minimal footprint. Errors — via return codes / `std::expected` (C++23) or a custom `Result<T,E>`.
-8. **Static linking by default** (`-static` or `-static-libstdc++`) — a single binary with no runtime dependencies.
+1. **Separation of concerns**: `core/` — pure structs and the codec, no I/O. Collectors are plain C; the platform is chosen at configure time from `CMAKE_SYSTEM_NAME`, and code branches only on `BUDYK_FREEBSD` / `BUDYK_LINUX`.
+2. **No `MetricSource` in the collection path.** `collect_one()` calls the C collectors directly and leaves out the ones a level's `MetricSet` does not ask for. `MetricSource` and `create_collector()` are kept, unused, for a later milestone.
+3. **Storage knows nothing about the collector** — accepts a `Sample` and writes bytes. The format is our own, binary, little-endian and versioned (§3.5).
+4. **WS hub — non-blocking client fds, slow consumers dropped.** A send that would block, or writes a partial frame, drops the client; the main thread services the hub once per tick (pings, close frames, hung-up clients); at most 64 clients.
+5. **Config is immutable after startup.** `SIGHUP` reloads the rules file only, into a scratch engine first: one that does not load leaves the rules as they were.
+6. **No event loop; the collector tick is never blocked.** The main thread runs the tick (collect → store → hot buffer → rules → WebSocket broadcast) and sleeps in `poll()` on a wake pipe until the next one. The HTTP thread is one blocking accept-handle-close loop, every connection bounded by a timeout and a minimum send rate. Slow work (alert delivery, `exec()`) goes to Worker threads with bounded queues of 256 jobs.
+7. **No C++ exceptions, no RTTI** (`-fno-exceptions -fno-rtti`). Errors are return codes: `-errno`, or small negative ordinals with a `describe()` that names the reason.
+8. **Static linking by default** (`STATIC_LINK=ON`) — a single binary with no runtime dependencies.
 
 ### 3.4. Adaptive Collection Model
 
@@ -319,30 +304,41 @@ In `always` mode — behavior identical to kula/Netdata (L3 always). In `on-dema
 | 1 client, 1 hour | 3,600 records, ~7 MB | 3,600 records (L3) + 288 (L1), ~7 MB |
 | Idle, 0 clients, 30 days | ~4.8 GB Tier 1 (ring overwritten) | ~1.6 MB (L1) |
 
-### 3.5. Storage Format (proposal)
+### 3.5. Storage Format (as implemented)
+
+All fields little-endian.
 
 ```
-[ File Header 64 B ]
-  magic:       "KULA\0RB\x02"        // 8 B (v2 — with level marker support)
-  version:     uint32_t              // 4 B
-  tier:        uint8_t (1|2|3)       // 1 B
-  _pad:        uint8_t[3]
-  record_size: uint32_t              // 4 B — fixed record size
-  capacity:    uint64_t              // 8 B — number of slots
-  write_idx:   uint64_t              // 8 B — atomically updated
-  _reserved:   uint8_t[28]
+[ File header 64 B ]
+  +0   magic:       "BDYKRB\0\x01"     8 B
+  +8   version:     u32                 format version, 1
+  +12  tier:        u8                  1|2|3; 0x80 for a custom level's ring
+  +13  _pad:        u8[3]
+  +16  record_size: u32                 fixed size of a record
+  +20  capacity:    u64                 number of slots
+  +28  write_idx:   u64                 records written (see below)
+  +36  _reserved:   u8[28]
 
 [ Record 0 ] [ Record 1 ] ... [ Record N-1 ]
 
-Record:
-  timestamp_unix_nanos: uint64_t     // absolute (not a delta!)
-  level:               uint8_t      // 1=L1, 2=L2, 3=L3
-  _pad:                uint8_t[1]
-  crc32c:              uint32_t
-  payload:             uint8_t[record_size - 14]  // msgpack-serialized Sample
+Record (14-byte header + payload):
+  timestamp_nanos: u64                  absolute (not a delta)
+  level:           u8                   1=L1, 2=L2, 3=L3
+  flags:           u8                   bit 0: folded (§3.4.1); padding, always 0, before 0.7.0
+  crc32c:          u32                  covers everything but these four bytes
+  payload:         u8[record_size - 14] the Sample, own codec (§3.2)
 ```
 
-Record written via `pwrite(2)` at a calculated offset; `write_idx` updated via `__atomic_fetch_add` in the `mmap` region. On crash, at most one record is lost.
+A record is written with `pwrite(2)` at its slot, and `write_idx` is
+advanced only after the `pwrite`. The header is `mmap`'d, but its
+`write_idx` field sits at +28 and is not 8-byte aligned: an atomic there
+faults on arm64 (SIGBUS). So the index is a `std::atomic` in `RingFile`,
+which the writer copies into the header after each `pwrite`. A new ring's
+header goes in with `pwrite` before the file is mapped (a store through
+the mapping into a sparse file's hole is SIGBUS on a full disk). On start
+a record that reached its slot but not the index is counted in, so a
+crash loses no stored record; a ring of an older codec version is
+converted on start.
 
 ### 3.6. Rule Engine (Lua-based)
 
@@ -394,13 +390,13 @@ end
 
 Optionally, a thin YAML compatibility layer transpiles simple YAML rules into Lua `watch()` calls at load time — for users who prefer YAML for basic cases. Internally, the engine is always Lua.
 
-#### 3.6.3. Sandboxing
+#### 3.6.3. Sandboxing (as implemented)
 
 Lua rules run in a restricted sandbox:
-- No `io`, `os`, `loadfile`, `dofile`, `require` — pure logic only.
-- `exec()` is a C function under our control (timeout, `setrlimit`, `--enable-exec` flag).
-- `Sample` fields exposed as read-only Lua tables (`cpu`, `mem`, `net`, `disk`, `load`, `swap`).
-- Execution time limited via `lua_sethook` — 10ms max per tick, script killed on timeout.
+- Only the `base`, `math`, `string` and `table` libraries are opened; `dofile`, `loadfile`, `load`, `loadstring` and `require` are removed from `base`. No `io`, `os`, `debug` or `package`.
+- `exec()` is a C function under our control: gated by `--enable-exec` or `rules.exec.enabled` plus an allowlist, run with a timeout, rlimits and its own process group.
+- `Sample` fields are exposed as read-only proxy tables, created once and updated in place.
+- Instead of a time limit, every call into Lua is limited to `rules.limits.instructions` (default 1 000 000), counted by a `lua_sethook` count hook, and the whole engine to `rules.limits.memory_mb` (default 16). Library work in C is charged to the instruction count too: string patterns run through a step-counted copy of Lua's matcher (`lua_pattern.c`), and bytes the state allocates count as instructions. Past the limit the hook raises on every instruction, so no `pcall` carries on. A runaway rule gets an error, not the daemon.
 - No filesystem access, no network access, no FFI.
 
 #### 3.6.4. Evaluation Pipeline
