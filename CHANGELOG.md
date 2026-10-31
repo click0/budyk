@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.5] — 2026-10-31
+
+budyk builds with GCC 15 again (Ubuntu 26.04, which the release runners
+now are). Three fixes close holes in the rules: a NUL byte in `exec()`'s
+command no longer passes the allowlist as another program, an allowlist
+written as mappings no longer allows everything, and `watch()` called
+from a rule is an error instead of a crash; a rule under the
+instruction limit can no longer hold the tick for seconds with long
+strings, patterns or table work. `suggest-rules` writes rules that load,
+fire after 5 ticks in a row, and refuses an LLM reply that does not
+load; Ctrl-C during `--ai` no longer leaves the API key in `$TMPDIR`.
+A SIGTERM ends the sleep at once, whichever thread takes it, and
+`sudo budyk fsck --repair` no longer leaves a lock file the service
+cannot open. Some readings change: on Linux a host with zvols, rbd,
+pmem, bcache or drbd reads lower disk totals (that I/O was counted
+twice), and on FreeBSD a ZFS host reads more available memory (the ARC
+above its minimum). Also fixed: ntfy line breaks and SMTP or Twilio
+passwords with blanks, the saved sessions after a restart, a watched
+file replaced by rename on Linux, `cpu.cores` with a CPU offline, and
+the TUI's fetch each second. The record format does not change: the
+rings of 0.8.4 are used as they are.
+
 ### Fixed
 
 - **budyk did not build with GCC 15** (Ubuntu 26.04, which `ubuntu-latest`
@@ -1446,6 +1468,7 @@ it turned up two untested storage paths, which are now covered.
   opened, and init with the original size works again. tier_manager.cpp
   coverage went from 84.3% to 94.4%.
 
+[0.8.5]: https://github.com/click0/budyk/releases/tag/v0.8.5
 [0.8.4]: https://github.com/click0/budyk/releases/tag/v0.8.4
 [0.8.3]: https://github.com/click0/budyk/releases/tag/v0.8.3
 [0.8.2]: https://github.com/click0/budyk/releases/tag/v0.8.2
