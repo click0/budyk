@@ -86,16 +86,91 @@ int main() {
         assert(lua == "X");
     }
 
-    // 6. Bad severity falls back to warning (silent).
+    // 6. A severity that is none of info / warning / critical is an error
+    //    naming the rule (it became warning without a word: a critical
+    //    rule written `Critical` went out as a warning); any case is taken
+    //    as watch() takes it. The same for an action not alert / log /
+    //    escalate (anything but `log` was an alert: `escalate` escalated
+    //    nothing).
     {
         const char* y =
             "- name: bogus_sev\n"
             "  when: \"true\"\n"
             "  severity: not-a-thing\n";
+        std::string lua, err;
+        assert(yaml_rules_to_lua(y, &lua, &err) != 0);
+        assert(err == "rule 'bogus_sev': severity 'not-a-thing' is not info, warning or critical");
+        assert(lua.empty());
+
+        const char* cased =
+            "- name: loud\n"
+            "  when: \"true\"\n"
+            "  severity: Critical\n"
+            "- name: quiet\n"
+            "  when: \"true\"\n"
+            "  severity: INFO\n";
+        assert(yaml_rules_to_lua(cased, &lua, &err) == 0 && err.empty());
+        assert(contains(lua, "alert(\"loud\", \"critical\", \"loud\")"));
+        assert(contains(lua, "alert(\"quiet\", \"info\", \"quiet\")"));
+
+        const char* act =
+            "- name: odd\n"
+            "  when: \"true\"\n"
+            "  action: notify\n";
+        lua.clear();
+        assert(yaml_rules_to_lua(act, &lua, &err) != 0);
+        assert(err == "rule 'odd': action 'notify' is not alert, log or escalate");
+    }
+
+    // 6b. action: escalate is the spec's { alert, escalate }: the alert
+    //     goes out and the level is requested.
+    {
+        const char* y =
+            "- name: storm\n"
+            "  when: \"true\"\n"
+            "  severity: critical\n"
+            "  action: escalate\n"
+            "  message: look now\n";
         std::string lua;
         assert(yaml_rules_to_lua(y, &lua) == 0);
-        assert(contains(lua, "\"warning\""));
-        assert(!contains(lua, "not-a-thing"));
+        assert(contains(lua, "action = { function() alert(\"storm\", \"critical\", \"look now\") end, \"escalate\" },"));
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        assert(e.load_string(lua.c_str()) == 0);
+        Sample s{};
+        s.groups = kGroupsAll;
+        assert(e.eval_tick(s) == 1);
+        assert(e.take_escalations().size() == 1);
+        const auto alerts = e.take_alerts();
+        assert(alerts.size() == 1 && alerts[0].message == "look now" &&
+               std::string(alerts[0].severity) == "critical");
+        e.shutdown();
+    }
+
+    // 6c. What is wrong, and where, in `error`: every failure used to
+    //     reach the operator as "YAML parse error".
+    {
+        std::string lua, err;
+        assert(yaml_rules_to_lua("- when: \"true\"\n", &lua, &err) != 0);
+        assert(err == "rule 1: no 'name'");
+        assert(yaml_rules_to_lua("- name: a\n  when: \"true\"\n- name: b\n", &lua, &err) != 0);
+        assert(err == "rule 'b': no 'when'");
+        assert(yaml_rules_to_lua("- name: n\n  when: \"true\"\n  for_ticks: 5s\n", &lua, &err) != 0);
+        assert(err == "rule 'n': for_ticks '5s' is not a whole number of ticks");
+        assert(yaml_rules_to_lua("- name: n\n  when: |\n    1\n    2\n", &lua, &err) != 0);
+        assert(contains(err, "rule 'n': 'when' must be one line"));
+        assert(yaml_rules_to_lua("- 7\n", &lua, &err) != 0);
+        assert(err == "rule 1 is not a mapping (name:, when:, ...)");
+        assert(yaml_rules_to_lua("- name: [unterminated\n", &lua, &err) != 0);
+        assert(contains(err, "YAML: ") && contains(err, " at line "));
+        assert(yaml_rules_to_lua("other: 1\n", &lua, &err) != 0);
+        assert(err == "no 'rules:' list in the document");
+        assert(yaml_rules_to_lua("rules: 3\n", &lua, &err) != 0);
+        assert(err == "'rules:' is not a list");
+        assert(yaml_rules_to_lua("just a string\n", &lua, &err) != 0);
+        assert(contains(err, "neither a list"));
+        assert(yaml_rules_to_lua_file("/tmp/budyk_yaml_does_not_exist_zz", &lua, &err) < 0);
+        assert(contains(err, "cannot read: No such file"));
     }
 
     // 7. Missing required field → error, no partial output.

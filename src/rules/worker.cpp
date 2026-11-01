@@ -3,6 +3,7 @@
 
 #include <chrono>
 #include <cstdio>
+#include <cstring>
 #include <utility>
 
 namespace budyk {
@@ -26,10 +27,29 @@ bool Worker::post(Job job) {
         }
         return false;
     }
+    if (!started_) {
+        // A thread that cannot be made is a dropped job, not the end of
+        // the daemon (std::thread's constructor throws then; see post()).
+        const int rc = ::pthread_create(&thread_, nullptr, &Worker::run_thread, this);
+        if (rc != 0) {
+            ++dropped_;
+            if (dropped_ == 1 || dropped_ % 100 == 0) {
+                std::fprintf(stderr, "budyk %s: cannot start its thread: %s, dropping job "
+                             "(%llu dropped so far)\n", name_, std::strerror(rc),
+                             static_cast<unsigned long long>(dropped_));
+            }
+            return false;
+        }
+        started_ = true;
+    }
     queue_.push_back(std::move(job));
-    if (!thread_.joinable()) thread_ = std::thread([this] { run(); });
     cv_.notify_one();
     return true;
+}
+
+void* Worker::run_thread(void* self) {
+    static_cast<Worker*>(self)->run();
+    return nullptr;
 }
 
 bool Worker::wait_idle(int timeout_ms) {
@@ -41,7 +61,7 @@ bool Worker::wait_idle(int timeout_ms) {
 void Worker::stop(int grace_ms) {
     {
         std::lock_guard<std::mutex> g(mtx_);
-        if (!thread_.joinable()) {               // never started: nothing to drain
+        if (!started_) {                         // never started: nothing to drain
             stopping_ = true;
             return;
         }
@@ -56,7 +76,7 @@ void Worker::stop(int grace_ms) {
         if (left > 0) cancel_.store(true);
     }
     cv_.notify_all();
-    thread_.join();
+    ::pthread_join(thread_, nullptr);
     if (left > 0) {
         std::fprintf(stderr, "budyk %s: stopped with %zu job(s) unfinished\n", name_, left);
     }

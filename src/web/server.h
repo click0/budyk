@@ -2,11 +2,12 @@
 #pragma once
 #include <sys/types.h>
 
+#include <pthread.h>
+
 #include <atomic>
 #include <cstddef>
 #include <functional>
 #include <string>
-#include <thread>
 #include <utility>
 #include <vector>
 
@@ -86,8 +87,11 @@ public:
     int  bound_port() const;
 
     /// Why start() failed: describe() names the step (-3 socket, -4 bad
-    /// address, -5 bind, -6 listen), last_errno() is that step's errno
-    /// (0 for -1/-2/-4). "bind: Address already in use" beats "rc=-5".
+    /// address, -5 bind, -6 listen, -7 the thread), last_errno() is that
+    /// step's errno (0 for -1/-2/-4). "bind: Address already in use"
+    /// beats "rc=-5". The thread is made with pthread_create(), not
+    /// std::thread: with exceptions off, the std::system_error that one
+    /// throws when it cannot (EAGAIN) ended the daemon.
     static const char* describe(int rc);
     int  last_errno() const;
 
@@ -115,11 +119,13 @@ private:
     size_t                 min_send_rate_ = 256 * 1024;
     int                    last_errno_    = 0;
     int                    last_accept_errno_ = 0;   ///< logged once, until an accept succeeds
-    std::thread            loop_;
+    pthread_t              loop_{};
+    bool                   loop_started_ = false;    ///< loop_ runs, or waits to be joined
     std::atomic<bool>      running_{false};
     HttpHandler            handler_;
 
     void run_loop();
+    static void* run_thread(void* self);
     /// Returns true if the handler set HttpResponse::hijack and the fd
     /// ownership has moved out — the run loop must NOT close it.
     bool handle_client(int client_fd, const char* peer);

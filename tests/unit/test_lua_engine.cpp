@@ -1789,6 +1789,67 @@ int main() {
     }
     ::alarm(0);
 
+    // 38. freeze(): a pid past INT_MAX is refused, not taken as the int it
+    //     truncates to (2^32 + n was n); budyk's own pid and init are
+    //     refused before kill() whatever the allowlist (a rule over
+    //     proc.top with budyk at the top SIGSTOPped the daemon, and
+    //     nothing ever sent SIGCONT).
+    {
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        e.set_freeze_enabled(true);
+        char buf[160];
+        std::snprintf(buf, sizeof(buf), "freeze(%lld)\n",
+                      4294967296LL + static_cast<long long>(::getpid()));
+        assert(e.load_string(buf) != 0);
+        assert(e.last_error().find("pid must be a positive integer") != std::string::npos);
+        std::snprintf(buf, sizeof(buf), "freeze(%d)\n", static_cast<int>(::getpid()));
+        assert(e.load_string(buf) != 0);                  // we are still running
+        assert(e.last_error().find("budyk itself") != std::string::npos);
+        assert(e.load_string("unfreeze(1)\n") != 0);
+        assert(e.last_error().find("refusing pid 1 (init)") != std::string::npos);
+        e.shutdown();
+    }
+
+    // 39. alert() with a message that is not a string (a comparison's
+    //     boolean, a table) is an error, not an empty message sent without
+    //     a word; a number reads as its text.
+    {
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        assert(e.load_string("alert('r', 'warning', cpu == nil)\n") != 0);
+        assert(e.last_error().find("'message' must be a string, not boolean") != std::string::npos);
+        assert(e.load_string("alert('r', 'warning', {})\n") != 0);
+        assert(e.last_error().find("not table") != std::string::npos);
+        assert(e.load_string("alert('r', 'warning', 42)\n") == 0);
+        const auto alerts = e.take_alerts();
+        assert(alerts.size() == 1 && alerts[0].message == "42");
+        e.shutdown();
+    }
+
+    // 40. exec() with a timeout of 0, a negative one or a fraction is an
+    //     error (each meant the default 30 s, without a word); a table
+    //     without one keeps the default.
+    {
+        LuaEngine e;
+        assert(e.init(/*enable_exec*/ true) == 0);
+        assert(e.load_string(
+            "ok, err = pcall(exec, '/bin/true', 0)\n"
+            "bad0 = (ok == false and tostring(err):find('timeout') ~= nil)\n"
+            "ok, err = pcall(exec, '/bin/true', -5)\n"
+            "badneg = (ok == false and tostring(err):find('whole number') ~= nil)\n"
+            "ok, err = pcall(exec, '/bin/true', 0.5)\n"
+            "badfrac = (ok == false and tostring(err):find('timeout') ~= nil)\n"
+            "ok, err = pcall(exec, '/bin/true', { timeout = 0 })\n"
+            "badtbl = (ok == false and tostring(err):find('timeout') ~= nil)\n"
+            "ok, err = pcall(exec, '/bin/true', { wait = false })\n"
+            "fine = (ok == true)\n"
+            "watch('t', { when = function() return bad0 and badneg and badfrac and badtbl and fine end })\n")
+            == 0);
+        assert(e.eval_tick(mk(0, 0, 0, 0)) == 1);
+        e.shutdown();
+    }
+
     std::printf("test_lua_engine: PASS\n");
     return 0;
 }

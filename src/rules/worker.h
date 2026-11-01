@@ -7,7 +7,8 @@
 #include <deque>
 #include <functional>
 #include <mutex>
-#include <thread>
+
+#include <pthread.h>
 
 namespace budyk {
 
@@ -36,8 +37,13 @@ public:
     Worker(const Worker&)            = delete;
     Worker& operator=(const Worker&) = delete;
 
-    /// Queue a job. False when the queue is full or the worker has been
-    /// stopped; the job is dropped either way (see dropped()).
+    /// Queue a job. False when the queue is full, the worker has been
+    /// stopped, or its thread cannot be started (EAGAIN: RLIMIT_NPROC, a
+    /// cgroup's pids.max); the job is dropped either way (see dropped()).
+    /// The thread is made with pthread_create(), not std::thread: with
+    /// exceptions off, the std::system_error that one throws when
+    /// pthread_create fails ended the daemon on its first alert, the
+    /// moment a "too many processes" rule fired.
     bool     post(Job job);
 
     /// Block until every queued job has finished, or timeout_ms passed.
@@ -56,6 +62,7 @@ public:
 
 private:
     void run();
+    static void* run_thread(void* self);
 
     const char*                   name_;
     const size_t                  capacity_;
@@ -65,7 +72,8 @@ private:
     std::deque<Job>               queue_;
     bool                          busy_     = false;
     bool                          stopping_ = false;
-    std::thread                   thread_;
+    pthread_t                     thread_{};
+    bool                          started_  = false;   ///< thread_ is running (or joinable)
     std::atomic<bool>             cancel_{false};
     uint64_t                      completed_ = 0;
     uint64_t                      dropped_   = 0;

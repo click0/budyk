@@ -575,11 +575,14 @@ For simple threshold rules:
   for_ticks: 3
   cooldown: 60
   severity: critical        # info | warning | critical
-  action: alert             # alert | log
+  action: alert             # alert | log | escalate (the alert, and L3 for a minute)
   message: "Disk writes above 200 MB/s"
 ```
 
-Each entry is converted to a `watch()` call when the file is loaded.
+Each entry is converted to a `watch()` call when the file is loaded. A
+severity or an action that is none of those, or a `for_ticks` that is
+not a whole number, is an error naming the rule, and the file is not
+loaded.
 
 ### Suggested rules
 

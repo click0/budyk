@@ -332,21 +332,38 @@ int HttpServer::start(const char* listen_addr, int port, HttpHandler handler) {
     handler_    = std::move(handler);
     running_.store(true);
 
-    loop_ = std::thread([this] { run_loop(); });
+    // pthread_create(), not std::thread: with exceptions off, the
+    // std::system_error thrown when a thread cannot be made (EAGAIN:
+    // RLIMIT_NPROC, a cgroup's pids.max) ended the daemon at start.
+    const int trc = ::pthread_create(&loop_, nullptr, &HttpServer::run_thread, this);
+    if (trc != 0) {
+        last_errno_ = trc;
+        running_.store(false);
+        ::close(fd);
+        listen_fd_ = -1;
+        return -7;
+    }
+    loop_started_ = true;
     return 0;
 }
 
+void* HttpServer::run_thread(void* self) {
+    static_cast<HttpServer*>(self)->run_loop();
+    return nullptr;
+}
+
 void HttpServer::stop() {
-    if (!running_.exchange(false)) {
-        if (loop_.joinable()) loop_.join();
-        return;
+    if (running_.exchange(false)) {
+        if (listen_fd_ >= 0) {
+            ::shutdown(listen_fd_, SHUT_RDWR);
+            ::close(listen_fd_);
+            listen_fd_ = -1;
+        }
     }
-    if (listen_fd_ >= 0) {
-        ::shutdown(listen_fd_, SHUT_RDWR);
-        ::close(listen_fd_);
-        listen_fd_ = -1;
+    if (loop_started_) {
+        ::pthread_join(loop_, nullptr);
+        loop_started_ = false;
     }
-    if (loop_.joinable()) loop_.join();
 }
 
 int HttpServer::bound_port() const { return bound_port_; }
@@ -362,6 +379,7 @@ const char* HttpServer::describe(int rc) {
         case -4: return "not an IPv4 address";
         case -5: return "bind";
         case -6: return "listen";
+        case -7: return "thread";
         default: return "unknown error";
     }
 }
