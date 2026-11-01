@@ -160,6 +160,23 @@ int main() {
         assert(contains(j, "\"uptime_seconds\":0"));
     }
 
+    // 4b. A double from a million up is written whole, or with 15 digits
+    //     when it has a fraction: %.6g wrote an uptime of 17280042 s as
+    //     1.728e+07, 42 s short, and past 115 days the minute the clients
+    //     showed could be off by one. Small values keep their 6 digits.
+    {
+        Sample s{};
+        s.level          = Level::L1;
+        s.uptime_seconds = 17280042.0;
+        assert(contains(sample_to_json(s), "\"uptime_seconds\":17280042}"));
+        s.uptime_seconds = 100000059.5;
+        assert(contains(sample_to_json(s), "\"uptime_seconds\":100000059.5}"));
+        s.uptime_seconds = 7200.5;
+        assert(contains(sample_to_json(s), "\"uptime_seconds\":7200.5}"));
+        s.uptime_seconds = 1.0 / 3.0;
+        assert(contains(sample_to_json(s), "\"uptime_seconds\":0.333333}"));
+    }
+
     // 5. json_unescape: every escape JSON.stringify can emit, \u in
     //    all three UTF-8 widths, and the lenient cases (unknown escape,
     //    trailing backslash, short \u, bad hex digit).

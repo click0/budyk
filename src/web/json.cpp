@@ -14,9 +14,12 @@ namespace budyk {
 namespace {
 
 // Append a number to `out`. Doubles are formatted with %.6g (round-trip
-// for the precision metrics carry); NaN / Inf collapse to 0 because
-// JSON has no representation for them and the daemon never produces
-// them in well-formed metric paths anyway.
+// for the precision metrics carry) up to a million; from there a whole
+// number is written whole and the rest with 15 digits: %.6g wrote an
+// uptime of 17280042 s as 1.728e+07, 42 s short, and past 115 days the
+// minute the clients showed could be off by one. NaN / Inf collapse to
+// 0 because JSON has no representation for them and the daemon never
+// produces them in well-formed metric paths anyway.
 void append_uint(std::string* out, uint64_t v) {
     char buf[32];
     int n = std::snprintf(buf, sizeof(buf), "%llu",
@@ -32,7 +35,14 @@ void append_int(std::string* out, int64_t v) {
 void append_double(std::string* out, double v) {
     if (!std::isfinite(v)) v = 0.0;
     char buf[40];
-    int n = std::snprintf(buf, sizeof(buf), "%.6g", v);
+    int n;
+    if (std::fabs(v) < 1e6) {
+        n = std::snprintf(buf, sizeof(buf), "%.6g", v);
+    } else if (v == std::floor(v) && std::fabs(v) < 1e15) {
+        n = std::snprintf(buf, sizeof(buf), "%.0f", v);
+    } else {
+        n = std::snprintf(buf, sizeof(buf), "%.15g", v);
+    }
     if (n > 0) out->append(buf, static_cast<size_t>(n));
 }
 

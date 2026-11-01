@@ -479,6 +479,7 @@ async function fetchRange(sinceNs) {
 
 let histTimer = null;
 let histSamples = [];     // the last window fetched: a metric drawn from it
+let histSeq = 0;          // the newest request: an older reply is not drawn
 async function loadHistory() {
   const r = RANGES[histRange];
   if (!r) return;
@@ -487,11 +488,19 @@ async function loadHistory() {
   const nowMs = Math.round(Date.now() + serverSkewMs);
   const sinceNs = (BigInt(nowMs) - BigInt(r.ms)) * 1000000n;
   $("histInfo").textContent = "loading…";
+  // A range click, the minute timer and a tab coming back each fetch;
+  // the reply that arrived last was drawn, so 7d clicked and then 1h
+  // showed the slower 7d window under the 1h button until the next
+  // refresh. Only the newest request's reply is drawn.
+  const seq = ++histSeq;
   try {
-    histSamples = await fetchRange(sinceNs.toString());
+    const got = await fetchRange(sinceNs.toString());
+    if (seq !== histSeq) return;
+    histSamples = got;
     drawChart(histSamples);
     $("histInfo").textContent = histSamples.length ? `${histSamples.length} pts` : "no data";
   } catch (e) {
+    if (seq !== histSeq) return;
     histSamples = [];
     $("histInfo").textContent = "error";
     drawChart([]);
