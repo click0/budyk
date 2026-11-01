@@ -20,25 +20,20 @@ namespace {
 
 constexpr const char kWsMagic[] = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
-// Write a whole frame to a non-blocking socket. Anything short of the
-// whole frame — EAGAIN, a partial write, an error — returns -1 and the
-// caller drops the client: a half-sent frame cannot be resumed later
-// without corrupting the stream, and a full socket buffer means the
-// peer has not read for a long time (frames are a few hundred bytes a
-// second; the buffer holds minutes of them).
-ssize_t send_frame(int fd, const void* data, size_t len) {
-    const char* p = static_cast<const char*>(data);
-    size_t total = 0;
-    while (total < len) {
-        ssize_t n = ::send(fd, p + total, len - total, MSG_NOSIGNAL | MSG_DONTWAIT);
-        if (n < 0) {
-            if (errno == EINTR) continue;
-            return -1;
-        }
-        if (n == 0) return -1;
-        total += static_cast<size_t>(n);
+// send(2) what a non-blocking socket takes now: the bytes written (0
+// when it would block), -1 when the peer is gone or the socket failed.
+// The caller keeps the rest for later (queue_out): a partial write used
+// to drop the client, and a frame larger than a fresh socket's buffer
+// (the first tick's detail block on a host with hundreds of interfaces)
+// dropped the dashboard on every reconnect.
+ssize_t send_some(int fd, const void* data, size_t len) {
+    for (;;) {
+        const ssize_t n = ::send(fd, data, len, MSG_NOSIGNAL | MSG_DONTWAIT);
+        if (n >= 0) return n;
+        if (errno == EINTR) continue;
+        if (errno == EAGAIN || errno == EWOULDBLOCK) return 0;
+        return -1;
     }
-    return static_cast<ssize_t>(total);
 }
 
 // A control frame from the server: FIN=1, opcode, no mask, payload of
@@ -125,7 +120,7 @@ void WebSocketHub::add(int fd, std::string session) {
     const int flags = ::fcntl(fd, F_GETFL, 0);
     if (flags >= 0) ::fcntl(fd, F_SETFL, flags | O_NONBLOCK);
     std::lock_guard<std::mutex> g(mtx_);
-    clients_.push_back(Client{fd, std::string(), 0, std::move(session)});
+    clients_.push_back(Client{fd, std::string(), 0, std::move(session), std::string()});
 }
 
 size_t WebSocketHub::drop_sessions(const std::function<bool(const std::string&)>& valid) {
@@ -145,10 +140,11 @@ size_t WebSocketHub::drop_sessions(const std::function<bool(const std::string&)>
     std::lock_guard<std::mutex> g(mtx_);
     for (auto it = clients_.begin(); it != clients_.end(); ) {
         if (std::find(gone.begin(), gone.end(), it->fd) != gone.end()) {
-            // A close frame first (1008, policy violation): the page can
-            // tell a session that ended from a dropped connection.
+            // A close frame first (1008, policy violation), as far as the
+            // socket takes it: the page can tell a session that ended
+            // from a dropped connection.
             const std::string frame = ws_control_frame(kOpClose, std::string("\x03\xf0", 2));
-            send_frame(it->fd, frame.data(), frame.size());
+            send_some(it->fd, frame.data(), frame.size());
             ::close(it->fd);
             it = clients_.erase(it);
             ++dropped;
@@ -159,12 +155,34 @@ size_t WebSocketHub::drop_sessions(const std::function<bool(const std::string&)>
     return dropped;
 }
 
+bool WebSocketHub::flush_out(Client* c) {
+    while (!c->outbuf.empty()) {
+        const ssize_t n = send_some(c->fd, c->outbuf.data(), c->outbuf.size());
+        if (n < 0) return false;
+        if (n == 0) break;                           // no room now: next time
+        c->outbuf.erase(0, static_cast<size_t>(n));
+    }
+    return true;
+}
+
+bool WebSocketHub::queue_out(Client* c, const std::string& frame) {
+    if (!flush_out(c)) return false;
+    size_t sent = 0;
+    if (c->outbuf.empty()) {                         // in order: nothing owed first
+        const ssize_t n = send_some(c->fd, frame.data(), frame.size());
+        if (n < 0) return false;
+        sent = static_cast<size_t>(n);
+    }
+    if (sent < frame.size()) c->outbuf.append(frame, sent, std::string::npos);
+    return c->outbuf.size() <= kMaxBacklog;
+}
+
 void WebSocketHub::broadcast(const std::string& payload) {
     const std::string frame = ws_text_frame(payload);
     std::lock_guard<std::mutex> g(mtx_);
     auto it = clients_.begin();
     while (it != clients_.end()) {
-        if (send_frame(it->fd, frame.data(), frame.size()) < 0) {
+        if (!queue_out(&*it, frame)) {
             ::close(it->fd);
             it = clients_.erase(it);
         } else {
@@ -230,12 +248,11 @@ bool WebSocketHub::consume_frames(Client* c) {
                 // let the peer see the close before the fd goes.
                 const std::string reply = ws_control_frame(
                     kOpClose, payload.size() >= 2 ? payload.substr(0, 2) : std::string());
-                send_frame(c->fd, reply.data(), reply.size());
+                send_some(c->fd, reply.data(), reply.size());
                 return false;
             }
             if (opcode == kOpPing) {
-                const std::string pong = ws_control_frame(0xA, payload);
-                if (send_frame(c->fd, pong.data(), pong.size()) < 0) return false;
+                if (!queue_out(c, ws_control_frame(0xA, payload))) return false;
             }
             // A pong needs no answer.
             continue;
@@ -253,11 +270,14 @@ size_t WebSocketHub::service() {
     size_t dropped = 0;
     auto it = clients_.begin();
     while (it != clients_.end()) {
-        bool keep = true;
-        char tmp[512];
-        for (;;) {
-            const ssize_t n = ::recv(it->fd, tmp, sizeof(tmp), MSG_DONTWAIT);
+        bool   keep   = flush_out(&*it);             // what it is owed since the last tick
+        size_t budget = kServiceReadBudget;
+        char   tmp[512];
+        while (keep && budget > 0) {
+            const size_t  want = budget < sizeof(tmp) ? budget : sizeof(tmp);
+            const ssize_t n    = ::recv(it->fd, tmp, want, MSG_DONTWAIT);
             if (n > 0) {
+                budget -= static_cast<size_t>(n);
                 it->inbuf.append(tmp, static_cast<size_t>(n));
                 if (!consume_frames(&*it) || it->inbuf.size() > kMaxInbuf) {
                     keep = false;

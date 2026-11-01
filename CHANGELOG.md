@@ -56,6 +56,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a table where the string was meant) sent an empty message; it is an
   error. `exec()` with a timeout of 0, a negative one or a fraction ran
   with the default 30 s; it is an error.
+- **A WebSocket client could hold the collector tick for as long as it
+  sent.** The hub read everything a client had sent before moving on,
+  and a client that kept sending (a data frame declared a terabyte long,
+  bytes from a few threads) kept it reading: no samples, no rules, no
+  alerts, SIGTERM waiting, until the flood stopped. It reads at most
+  4 KiB from each client per tick now; the rest waits in the socket,
+  where TCP holds the sender back.
+- **A dashboard could be dropped on its first frame, on every
+  reconnect.** A frame a client's socket did not take whole was a
+  partial write, and a partial write dropped the client. The first
+  tick's frame after the hot buffer was emptied carries the whole
+  detail block, 60 KB on a host with hundreds of interfaces or mounts,
+  more than a fresh connection's buffer takes at once on a real link.
+  What the socket does not take is kept and sent as the peer reads
+  now; a client more than 1 MiB behind is dropped, as a slow one was.
+- One connection could hold the HTTP thread for twice the I/O timeout,
+  not "at most this long": a read that began just inside the request's
+  deadline ran the socket's own timeout out on its own. The wait is
+  bounded by the deadline now.
+- The login throttle's windows were on the wall clock: a clock stepped
+  back by an hour kept every blocked address blocked an hour longer
+  (`Retry-After` said so), one stepped forward unblocked them all. They
+  are on the monotonic clock.
 
 - **A session ended 24 hours after the login however much it was used**:
   the dashboard, or the TUI polling each second, got the login screen in

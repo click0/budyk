@@ -14,4 +14,14 @@ inline uint64_t now_realtime_ns() {
            static_cast<uint64_t>(ts.tv_nsec);
 }
 
+/// A clock that a step of the wall clock does not move, in nanoseconds
+/// from an arbitrary point: for windows and timeouts measured from now
+/// (the login throttle's), not for timestamps.
+inline uint64_t now_monotonic_ns() {
+    struct timespec ts{};
+    ::clock_gettime(CLOCK_MONOTONIC, &ts);
+    return static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL +
+           static_cast<uint64_t>(ts.tv_nsec);
+}
+
 } // namespace budyk
