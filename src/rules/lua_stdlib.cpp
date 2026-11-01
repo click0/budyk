@@ -436,10 +436,11 @@ int exec_impl(lua_State* L, budyk::LuaEngine* eng, ExecOutcome* out, char* err,
         // wait for it, and its outcome goes to the log. Lua gets
         // { queued = true } — or { queued = false, error = "..." } when
         // the queue is full.
-        std::string what = cmd;
+        // For the log, on one line: an argument holds anyone's bytes.
+        std::string what = budyk::header_value(cmd);
         for (size_t i = 1; i < argv_storage.size(); ++i) {
             what += ' ';
-            what += argv_storage[i];
+            what += budyk::header_value(argv_storage[i]);
         }
         const bool queued = eng->exec_worker().post(
             [argv = std::move(argv_storage), what, timeout_s]
