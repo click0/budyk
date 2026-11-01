@@ -72,16 +72,21 @@ int budyk_collect_proc_freebsd(budyk_sample_c* s) {
     return budyk_collect_proc_freebsd_ex(s, NULL);
 }
 
-/* A process's state as ps(1) shows it. */
-static char state_letter(int stat) {
+/* A process's state as ps(1) shows it (bin/ps/print.c): a sleep a
+ * signal cannot end (TDF_SINTR clear: biowait, wdrain, an NFS server
+ * that stopped answering) is D, as on Linux; an interruptible one S; a
+ * process being created (SIDL) R. Every SSLEEP was S and SIDL was I
+ * (ps's "idle for 20 s or more"), and proc.blocked counted SLOCK only,
+ * so the one condition the metric is for never showed. */
+char budyk_freebsd_proc_state(int stat, long tdflags) {
     switch (stat) {
-        case SRUN:   return 'R';
-        case SSLEEP: return 'S';
+        case SRUN:
+        case SIDL:   return 'R';
+        case SSLEEP: return (tdflags & TDF_SINTR) != 0 ? 'S' : 'D';
         case SWAIT:  return 'W';
         case SLOCK:  return 'L';
         case SSTOP:  return 'T';
         case SZOMB:  return 'Z';
-        case SIDL:   return 'I';
         default:     return '?';
     }
 }
@@ -92,6 +97,17 @@ static char state_letter(int stat) {
 int budyk_collect_proc_freebsd_ex(budyk_sample_c* s, budyk_detail_c* d) {
     if (s == NULL) return -EINVAL;
     memset(&s->proc, 0, sizeof(s->proc));
+
+    /* ki_start is p_start plus the boot time, on the wall clock: a clock
+     * step (ntpd -g at boot, date(1)) moved every process's start, the
+     * tracker matched none of them for a tick, and proc.top by CPU was
+     * empty. Taken from the boot time read now, as Linux's starttime
+     * is, it does not move. */
+    struct timeval bt;
+    size_t bt_len = sizeof(bt);
+    if (sysctlbyname("kern.boottime", &bt, &bt_len, NULL, 0) != 0) bt_len = 0;
+    const uint64_t boot_us = bt_len == sizeof(bt)
+        ? (uint64_t)bt.tv_sec * 1000000u + (uint64_t)bt.tv_usec : 0;
 
     struct kinfo_proc* procs = NULL;
     size_t bytes = 0;
@@ -115,24 +131,27 @@ int budyk_collect_proc_freebsd_ex(budyk_sample_c* s, budyk_detail_c* d) {
     if (d != NULL) budyk_procs_begin(d, s->timestamp_nanos);
     for (size_t i = 0; i < n; ++i) {
         const struct kinfo_proc* kp = &procs[i];
-        switch (kp->ki_stat) {
-            case SRUN:                         ++s->proc.running;  break;
-            case SSLEEP: case SWAIT: case SIDL: ++s->proc.sleeping; break;
-            case SLOCK:                        ++s->proc.blocked;  break;
-            case SSTOP:                        ++s->proc.stopped;  break;
-            case SZOMB:                        ++s->proc.zombie;   break;
-            default:                           break;
+        const char state = budyk_freebsd_proc_state(kp->ki_stat, kp->ki_tdflags);
+        switch (state) {
+            case 'R':           ++s->proc.running;  break;
+            case 'S': case 'W': ++s->proc.sleeping; break;
+            case 'D': case 'L': ++s->proc.blocked;  break;
+            case 'T':           ++s->proc.stopped;  break;
+            case 'Z':           ++s->proc.zombie;   break;
+            default:            break;
         }
         s->proc.threads += (uint32_t)kp->ki_numthreads;
         if (d == NULL || (kp->ki_flag & P_SYSTEM) != 0) continue;
         budyk_proc_read_c r;
         memset(&r, 0, sizeof(r));
+        const uint64_t start_us = (uint64_t)kp->ki_start.tv_sec * 1000000u +
+                                  (uint64_t)kp->ki_start.tv_usec;
         r.pid       = (int32_t)kp->ki_pid;
-        r.start     = (uint64_t)kp->ki_start.tv_sec * 1000000u + (uint64_t)kp->ki_start.tv_usec;
+        r.start     = start_us > boot_us ? start_us - boot_us : 0;
         r.cpu       = (uint64_t)kp->ki_runtime;
         r.rss_bytes = (uint64_t)kp->ki_rssize * page;
         r.threads   = (uint32_t)kp->ki_numthreads;
-        r.state     = state_letter(kp->ki_stat);
+        r.state     = state;
         snprintf(r.name, sizeof(r.name), "%s", kp->ki_comm);
         budyk_procs_add(d, &r, 1.0e6);
     }
@@ -220,10 +239,12 @@ int budyk_collect_self_freebsd(budyk_sample_c* s) {
     return 0;
 }
 
-/* Thermal — walk the dev.cpu.<N>.temperature sysctl chain.
- * Each value is reported as Kelvin × 10 (e.g. 3151 = 42.0°C).
- * Stop on the first sysctl that fails; that's how many cores have
- * thermal monitoring exposed on this host.
+/* Thermal — the dev.cpu.<N>.temperature sysctls (coretemp(4),
+ * amdtemp(4)), then the ACPI thermal zones' hw.acpi.thermal.tz<N>.temperature
+ * (acpi_thermal(4); spec §2.1). Each value is deci-Kelvin (3151 = 42.0 °C).
+ * Each chain ends at the first sysctl that is not there. A server with
+ * neither coretemp nor amdtemp loaded (neither is by default) read as
+ * having no sensor, though `sysctl hw.acpi.thermal` showed its zones.
  *
  * Many guests (jails, virt without ACPI/IPMI passthrough) won't
  * expose any temperature sysctls — the collector reports
@@ -231,6 +252,18 @@ int budyk_collect_self_freebsd(budyk_sample_c* s) {
  */
 #include <stdio.h>
 #include <string.h>
+
+/* One deci-Kelvin sysctl into the hottest / count tally; 0 when it is
+ * there. */
+static int note_temperature(const char* mib, double* hottest, uint32_t* count) {
+    int    raw = 0;
+    size_t sz  = sizeof(raw);
+    if (sysctlbyname(mib, &raw, &sz, NULL, 0) != 0) return -1;
+    const double celsius = (double)raw / 10.0 - 273.15;
+    if (celsius > *hottest) *hottest = celsius;
+    ++*count;
+    return 0;
+}
 
 int budyk_collect_thermal_freebsd(budyk_sample_c* s) {
     if (s == NULL) return -EINVAL;
@@ -246,14 +279,13 @@ int budyk_collect_thermal_freebsd(budyk_sample_c* s) {
         char mib[48];
         int  m = snprintf(mib, sizeof(mib), "dev.cpu.%d.temperature", n);
         if (m <= 0 || (size_t)m >= sizeof(mib)) break;
-
-        int    raw = 0;
-        size_t sz  = sizeof(raw);
-        if (sysctlbyname(mib, &raw, &sz, NULL, 0) != 0) break;
-
-        const double celsius = (double)raw / 10.0 - 273.15;
-        if (celsius > hottest) hottest = celsius;
-        ++count;
+        if (note_temperature(mib, &hottest, &count) != 0) break;
+    }
+    for (int n = 0; n < 64; ++n) {
+        char mib[64];
+        int  m = snprintf(mib, sizeof(mib), "hw.acpi.thermal.tz%d.temperature", n);
+        if (m <= 0 || (size_t)m >= sizeof(mib)) break;
+        if (note_temperature(mib, &hottest, &count) != 0) break;
     }
 
     if (count > 0) {

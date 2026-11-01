@@ -45,8 +45,13 @@ int budyk_collect_fs_freebsd_ex(budyk_sample_c* s, budyk_detail_c* d) {
     for (int i = 0; i < n; ++i) {
         if ((mounts[i].f_flags & MNT_RDONLY) != 0) continue;
         if (skipped_type(mounts[i].f_fstypename)) continue;
+        /* A mount point the daemon cannot reach (EACCES: a dataset or a
+         * jail's root under a 0700 directory, and budyk is not root) was
+         * left out without a word; the list's own numbers, as of
+         * getmntinfo(), stand in for it. */
         struct statfs v;
-        if (statfs(mounts[i].f_mntonname, &v) != 0 || v.f_blocks == 0) continue;
+        if (statfs(mounts[i].f_mntonname, &v) != 0) v = mounts[i];
+        if (v.f_blocks == 0) continue;
         /* As df(1): used / (used + available to unprivileged users);
          * f_bavail goes negative inside the root reserve. */
         const double used  = (double)(v.f_blocks - v.f_bfree);

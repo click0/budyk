@@ -33,17 +33,18 @@ int budyk_collect_network_freebsd(budyk_net_ctx_c* ctx, budyk_sample_c* s) {
     return budyk_collect_network_freebsd_ex(ctx, s, NULL);
 }
 
-/* A device's interface (em0, vtnet0) is Ethernet or 802.11 and not one
- * a cloner made: the bridge, lagg, vlan, tun, gif and wg types are not,
- * and an epair, tap or vxlan is Ethernet but its driver (the letters
- * before the unit) is a cloner's, as is ng_eiface's ngeth, which
- * netgraph makes. wlan is a cloner too, but its traffic is the radio's.
- * `driver` is the kernel's name for it, which a rename leaves: jib and
- * Bastille rename a jail's epair0a to e0a_<jail>, iocage to vnet0.<jid>,
- * and lan0 may be em0. */
+/* A device's interface (em0, vtnet0, ib0) is Ethernet, 802.11 or
+ * InfiniBand (IPoIB: a storage node's ib0 at 3 GB/s was left out
+ * whenever an Ethernet one existed) and not one a cloner made: the
+ * bridge, lagg, vlan, tun, gif and wg types are not, and an epair, tap
+ * or vxlan is Ethernet but its driver (the letters before the unit) is
+ * a cloner's, as is ng_eiface's ngeth, which netgraph makes. wlan is a
+ * cloner too, but its traffic is the radio's. `driver` is the kernel's
+ * name for it, which a rename leaves: jib and Bastille rename a jail's
+ * epair0a to e0a_<jail>, iocage to vnet0.<jid>, and lan0 may be em0. */
 int budyk_freebsd_iface_physical(const char* driver, unsigned int type,
                                  const char* cloners, uint32_t ncloners) {
-    if (type != IFT_ETHER && type != IFT_IEEE80211) return 0;
+    if (type != IFT_ETHER && type != IFT_IEEE80211 && type != IFT_INFINIBAND) return 0;
     size_t n = 0;
     while (driver[n] >= 'a' && driver[n] <= 'z') ++n;
     if (n == 4 && strncmp(driver, "wlan", 4) == 0) return 1;

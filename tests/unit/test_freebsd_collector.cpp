@@ -19,6 +19,8 @@
 #include <vector>
 
 #include <sys/types.h>
+#include <sys/param.h>
+#include <sys/proc.h>       // SSLEEP, TDF_SINTR
 #include <sys/socket.h>
 #include <sys/sysctl.h>
 #include <sys/user.h>
@@ -150,6 +152,35 @@ int main() {
         assert(!phys("em0.100", IFT_L2VLAN) && !phys("tun0", IFT_PROPVIRTUAL) && !phys("gif0", IFT_GIF));
         assert(phys("epairx0", IFT_ETHER));                   // not "epair": another driver
         assert(budyk_freebsd_iface_physical("epair0a", IFT_ETHER, cl, 0) == 1);   // no cloners read
+        // An IPoIB interface is a device's: ib0 was left out of the
+        // totals whenever an Ethernet interface existed.
+        assert(phys("ib0", IFT_INFINIBAND) && !phys("ib0", IFT_PROPVIRTUAL));
+    }
+
+    // 5d. Which devstat entries the disk totals count: md(4) memory
+    //     disks (tmpmfs; a vnode-backed image, counted on the disk under
+    //     it) and CTL's block-backend LUNs (cbb, an iSCSI target's) are
+    //     DEVSTAT_TYPE_DIRECT too, and were counted as disks.
+    {
+        for (const char* disk : {"ada", "da", "nda", "nvd", "vtbd", "mmcsd", "xbd"}) {
+            assert(budyk_freebsd_disk_counted(disk) != 0);
+        }
+        assert(budyk_freebsd_disk_counted("md") == 0 && budyk_freebsd_disk_counted("cbb") == 0);
+        assert(budyk_freebsd_disk_counted("mdx") != 0);       // another driver
+    }
+
+    // 5e. A process's state as ps(1) prints it: a sleep a signal cannot
+    //     end (TDF_SINTR clear: biowait, an NFS server gone) is D and
+    //     counts as blocked, as on Linux; an interruptible one S; a
+    //     process being created R. Every SSLEEP was S, SIDL was I, and
+    //     proc.blocked counted SLOCK only.
+    {
+        assert(budyk_freebsd_proc_state(SSLEEP, TDF_SINTR) == 'S');
+        assert(budyk_freebsd_proc_state(SSLEEP, TDF_SINTR | 0x100) == 'S');
+        assert(budyk_freebsd_proc_state(SSLEEP, 0) == 'D');
+        assert(budyk_freebsd_proc_state(SRUN, 0) == 'R' && budyk_freebsd_proc_state(SIDL, 0) == 'R');
+        assert(budyk_freebsd_proc_state(SLOCK, 0) == 'L' && budyk_freebsd_proc_state(SSTOP, 0) == 'T');
+        assert(budyk_freebsd_proc_state(SZOMB, 0) == 'Z' && budyk_freebsd_proc_state(SWAIT, 0) == 'W');
     }
 
     // 5c. On this host, the cloners read from the kernel: the collector

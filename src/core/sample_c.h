@@ -60,7 +60,8 @@ typedef struct {
     uint32_t total;      /**< processes */
     uint32_t running;
     uint32_t sleeping;
-    uint32_t blocked;    /**< uninterruptible wait (Linux D, FreeBSD SLOCK) */
+    uint32_t blocked;    /**< uninterruptible wait: Linux D; FreeBSD a sleep a signal
+                              cannot end (ps's D) or SLOCK */
     uint32_t stopped;
     uint32_t zombie;
     uint32_t threads;    /**< across all processes */
@@ -432,6 +433,15 @@ int budyk_collect_network_freebsd_ex(budyk_net_ctx_c*  ctx, budyk_sample_c* s, b
  *  them) but wlan, and not netgraph's ngeth. */
 int budyk_freebsd_iface_physical(const char* driver, unsigned int type,
                                  const char* cloners, uint32_t ncloners);
+/** Whether a devstat entry of type DIRECT named `device_name` (without
+ *  the unit: "ada", "md") is a disk whose I/O the totals count: not an
+ *  md(4) memory disk nor a CTL block-backend LUN (cbb), whose I/O is a
+ *  disk's under them or no disk's at all. */
+int budyk_freebsd_disk_counted(const char* device_name);
+/** A process's state letter as ps(1) prints it from `ki_stat` and
+ *  `ki_tdflags` (a long): R, S, D (a sleep a signal cannot end: TDF_SINTR clear),
+ *  W, L, T, Z. D and L count as blocked. */
+char budyk_freebsd_proc_state(int stat, long tdflags);
 int budyk_collect_proc_freebsd   (budyk_sample_c* s);
 int budyk_collect_proc_freebsd_ex(budyk_sample_c* s, budyk_detail_c* d);
 int budyk_collect_entropy_freebsd(budyk_sample_c* s);

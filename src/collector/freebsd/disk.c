@@ -26,6 +26,15 @@ int budyk_collect_disk_freebsd(budyk_disk_ctx_c* ctx, budyk_sample_c* s) {
     return budyk_collect_disk_freebsd_ex(ctx, s, NULL);
 }
 
+/* md(4) memory disks register as DEVSTAT_TYPE_DIRECT too (tmpmfs: a
+ * swap-backed /tmp wrote 500 MB/s of "disk" I/O; a vnode-backed image,
+ * whose I/O the disk under it counts already, as Linux's loop), and so
+ * do CTL's block-backend LUNs (cbb: an iSCSI target's, whose I/O the
+ * file's disk counts again). Neither is a disk here. */
+int budyk_freebsd_disk_counted(const char* device_name) {
+    return strcmp(device_name, "md") != 0 && strcmp(device_name, "cbb") != 0;
+}
+
 /* Per device (name = device_name + unit_number, as iostat): counters
  * c[] = bytes read, bytes written, reads, writes, microseconds busy
  * (busy_time, a bintime). */
@@ -64,6 +73,7 @@ int budyk_collect_disk_freebsd_ex(budyk_disk_ctx_c* ctx, budyk_sample_c* s, budy
         if ((d->device_type & DEVSTAT_TYPE_MASK) != DEVSTAT_TYPE_DIRECT) continue;
         if (d->device_type & DEVSTAT_TYPE_PASS) continue;
         if (d->device_name[0] == '\0') continue;
+        if (!budyk_freebsd_disk_counted(d->device_name)) continue;
         char name[32];
         snprintf(name, sizeof(name), "%.20s%d", d->device_name, d->unit_number);
         budyk_counted_add(ctx->dev, ctx->ndev, &counted_pos, counted, &ncounted, name,
