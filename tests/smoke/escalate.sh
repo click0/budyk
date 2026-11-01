@@ -26,7 +26,9 @@ collection:
   l2:
     interval: 1
     escalate_after: 3
-    escalation_thresholds: { cpu_percent: -1 }
+    # Any load is over -1. (The CPU rate is a baseline on the first tick,
+    # not a reading, and a reading that is missing says nothing.)
+    escalation_thresholds: { load_1m: -1 }
   l3: { interval: 1, grace_period: 2 }
 EOF
 

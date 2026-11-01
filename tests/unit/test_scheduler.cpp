@@ -14,6 +14,7 @@ static Sample at(uint64_t ts_sec) {
     Sample s{};
     s.timestamp_nanos = ts_sec * kSec;
     s.level           = Level::L1;
+    s.groups          = kGroupsAll;      // every reading present, as a collected sample's are
     return s;
 }
 
@@ -242,6 +243,50 @@ int main() {
         assert(sch.tick(at(day + 91)) == Level::L1);
     }
 
+    // 10c. A request made on the new clock already (a custom level's
+    //      `when` on the very sample the step back is seen on: the serve
+    //      loop requests before it ticks) stays where it is. Moved back
+    //      a day with the rest, it had ended before it began, and the
+    //      level was missed for that tick (an L1 sleep of 5 minutes).
+    {
+        SchedulerConfig c = cfg;
+        CustomLevel burst; burst.id = 4; burst.name = "burst"; burst.interval_ms = 500; burst.priority = 40;
+        c.custom_levels = {burst};
+        Scheduler sch(c);
+        const uint64_t day = 86400;
+        assert(sch.tick(at(2 * day)) == Level::L1);
+        sch.request(static_cast<Level>(4), (day + 20 + 30) * kSec, (day + 20) * kSec);   // `when` held at day+20
+        assert(sch.tick(at(day + 20)) == static_cast<Level>(4));      // the step back is seen here
+        assert(sch.tick(at(day + 49)) == static_cast<Level>(4));
+        assert(sch.tick(at(day + 51)) == Level::L1);
+    }
+
+    // 10d. The client grace and the L2 hysteresis move back with the
+    //      clock as the requests do. Left where they were, each replayed
+    //      its window a day later, when the clock reached the old stamp:
+    //      60 s of L3 with nobody connected, 5 min of L2 with no anomaly.
+    {
+        Scheduler sch(cfg);
+        const uint64_t day = 86400;
+        sch.client_connected();
+        assert(sch.tick(at(2 * day)) == Level::L3);
+        sch.client_disconnected();
+        assert(sch.tick(at(2 * day + 10)) == Level::L3);              // 10 s into the grace (from 2 days)
+        assert(sch.tick(at(day + 20)) == Level::L3);                  // stepped back a day - 10: 10 s in
+        assert(sch.tick(at(day + 69)) == Level::L3);                  // the grace ends on the new clock
+        assert(sch.tick(at(day + 71)) == Level::L1);
+        assert(sch.tick(at(2 * day + 30)) == Level::L1);              // the old stamp: no replay
+
+        Scheduler h(cfg);
+        Sample hot = at(2 * day); hot.cpu.total_percent = 90.0;
+        assert(h.tick(hot) == Level::L2);
+        assert(h.tick(at(2 * day + 10)) == Level::L2);                // hysteresis: 10 s in
+        assert(h.tick(at(day + 20)) == Level::L2);                    // stepped back a day - 10: 10 s in
+        assert(h.tick(at(day + 309)) == Level::L2);
+        assert(h.tick(at(day + 311)) == Level::L1);
+        assert(h.tick(at(2 * day + 30)) == Level::L1);                // the old stamp: no replay
+    }
+
     // 11. A sustained anomaly escalates to L3 (spec §3.4.1). With
     //     escalate_after 100 s at the L2 cadence, ticks 0..90 stay L2 and
     //     the tick at 100 s goes L3. L3 then holds while the anomaly lasts
@@ -283,13 +328,64 @@ int main() {
         for (uint64_t t = 0; t <= 3600; t += 30) assert(z.tick(hot(t)) == Level::L2);
         assert(!z.escalated());
 
-        // A clock step back restarts the run rather than escalating at once.
+        // A clock step back moves the run's start back as far rather
+        // than escalating at once.
         c.escalate_after_sec = 100;
         Scheduler k(c);
         assert(k.tick(hot(1000)) == Level::L2);
         assert(k.tick(hot(10))   == Level::L2 && !k.escalated());
         assert(k.tick(hot(109))  == Level::L2);
         assert(k.tick(hot(110))  == Level::L3);
+    }
+
+    // 11b. grace_period 0, a value the config accepts: the escalation
+    //      reaches L3 and ends on the first tick the anomaly is gone. The
+    //      tick that set escalated_ cleared it again (0 >= 0), so L3 was
+    //      never reached however long the anomaly held.
+    {
+        SchedulerConfig c = cfg;
+        c.escalate_after_sec = 100;
+        c.grace_period_sec   = 0;
+        auto hot = [](uint64_t t) { Sample x = at(t); x.cpu.total_percent = 90.0; return x; };
+        Scheduler sch(c);
+        for (uint64_t t = 0; t < 100; t += 30) assert(sch.tick(hot(t)) == Level::L2);
+        assert(sch.tick(hot(100)) == Level::L3 && sch.escalated());
+        assert(sch.tick(hot(130)) == Level::L3 && sch.escalated());
+        assert(sch.select(131 * kSec) == Level::L3);                  // between ticks too
+        assert(sch.tick(at(160))  == Level::L2 && !sch.escalated());  // gone: over at once
+    }
+
+    // 11c. A tick without the CPU group (the collector failed, or the
+    //      baseline tick after it came back) does not break the run: 0 %
+    //      read as NORMAL did. A reading that is missing cannot say the
+    //      anomaly is gone, so the state stays as it was when the rest
+    //      is in bounds; one that is there and over a threshold still
+    //      says so.
+    {
+        SchedulerConfig c = cfg;
+        c.escalate_after_sec = 100;
+        auto hot = [](uint64_t t) { Sample x = at(t); x.cpu.total_percent = 90.0; return x; };
+        Scheduler sch(c);
+        assert(sch.tick(hot(0))  == Level::L2);
+        assert(sch.tick(hot(30)) == Level::L2);
+        assert(sch.tick(hot(60)) == Level::L2);
+        Sample blind = at(90);
+        blind.groups &= ~static_cast<uint32_t>(kGroupCpu);           // cpu.total_percent is 0 here
+        assert(sch.tick(blind) == Level::L2);
+        assert(sch.tick(hot(100)) == Level::L3 && sch.escalated());  // the run from 0 held
+
+        Scheduler n(cfg);
+        Sample none = at(0);
+        none.groups = 0;
+        assert(n.tick(none) == Level::L1 && n.current_anomaly() == AnomalyState::NORMAL);
+        assert(n.tick(hot(30)) == Level::L2 && n.current_anomaly() == AnomalyState::ELEVATED);
+        none = at(60); none.groups = 0;
+        assert(n.tick(none) == Level::L2 && n.current_anomaly() == AnomalyState::ELEVATED);
+        Sample swapped = at(90);
+        swapped.groups &= ~static_cast<uint32_t>(kGroupCpu);
+        swapped.swap.used_percent = 90.0;                             // over, and there
+        assert(n.tick(swapped) == Level::L2 && n.current_anomaly() == AnomalyState::CRITICAL);
+        assert(n.tick(at(120)) == Level::L2 && n.current_anomaly() == AnomalyState::NORMAL);
     }
 
     // 12. collection.mode. always: L3 with no client, an anomaly or not,

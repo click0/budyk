@@ -79,6 +79,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   back by an hour kept every blocked address blocked an hour longer
   (`Retry-After` said so), one stepped forward unblocked them all. They
   are on the monotonic clock.
+- **`collection.l3.grace_period: 0` turned the escalation to L3 off.**
+  The tick that found the anomaly held for `escalate_after` ended the
+  escalation again on the spot (the anomaly's last tick was that one,
+  and 0 is not less than 0), so with a grace of 0, a value the config
+  accepts, the level never went above L2 however long the anomaly
+  held. The escalation ends only once the anomaly is gone.
+- A sample without a reading (its collector failed, or the baseline tick
+  after it came back) read as 0 % CPU, load 0 and no swap: NORMAL, which
+  broke an anomaly run before it escalated and started the hysteresis.
+  The anomaly check reads what the sample has: a reading over a
+  threshold says so, a missing one cannot say the anomaly is gone, so
+  with one missing and the rest in bounds the state stays as it was.
+- After a clock step back, the client grace and the L2 hysteresis were
+  left on the old clock and replayed a day later, when the clock reached
+  the old stamp again: 60 s of L3 with nobody connected, 5 minutes of
+  L2 with no anomaly. They move back with the clock, as the requests do
+  since 0.8.5. A custom level's `when` that held on the very sample the
+  step was seen on was moved back too, and the level missed for a tick
+  (an L1 sleep of 5 minutes): a request already on the new clock stays.
+- A custom level with a `priority` below L1's 0, or at 0 with an
+  interval no shorter than L1's, can never be entered and was accepted
+  without a word; the config says so now (the level is kept).
+- **`budyk tui` with stdin at its end flooded the daemon.** Run as
+  `budyk tui < /dev/null`, from a script, or with the password piped in
+  (`echo "$PW" | budyk tui`), the key read returned at once instead of
+  after a second, and the TUI fetched as fast as the daemon answered:
+  about 700 requests a second on its one HTTP thread, and `q` could
+  never arrive. It asks once a second whatever stdin is.
+- **The TUI could lock its address out of the login.** When its session
+  ended and the stored password was no longer accepted (the daemon
+  restarted with a new hash), or the login was throttled, it posted the
+  password again every second for ever: with the daemon's 5 failures a
+  minute, its address, a reverse proxy's address meaning everyone, was
+  refused the login for as long as it ran, and the screen said only
+  "login required or expired". It tries once and says why.
 
 - **A session ended 24 hours after the login however much it was used**:
   the dashboard, or the TUI polling each second, got the login screen in

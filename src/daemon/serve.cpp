@@ -739,7 +739,7 @@ int cmd_serve(int argc, char* argv[], const char* version) {
         engine.eval_level_conditions(s, &level_hits, collect_ctx.detail.get());
         for (uint8_t id : level_hits) {
             sched.request(static_cast<budyk::Level>(id),
-                          s.timestamp_nanos + level_hold_ns[id]);
+                          s.timestamp_nanos + level_hold_ns[id], s.timestamp_nanos);
         }
         s.level = sched.tick(s);
         if (sched.escalated() != escalated) {
@@ -780,8 +780,8 @@ int cmd_serve(int argc, char* argv[], const char* version) {
 
         engine.eval_tick(s, collect_ctx.detail.get());
         for (const auto& e : engine.take_escalations()) {
-            sched.request_by_name(e.level, now_realtime_ns() +
-                static_cast<uint64_t>(e.seconds) * kNsPerSec);
+            const uint64_t from = now_realtime_ns();
+            sched.request_by_name(e.level, from + static_cast<uint64_t>(e.seconds) * kNsPerSec, from);
         }
         // Alerts go to the dashboards as they happen (spec §3.6.4) and
         // stay for /api/alerts.

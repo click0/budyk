@@ -549,15 +549,28 @@ int tui_run(const char* host, int port, std::string (*ask_password)()) {
     bool quit = false;
     int  tick = 0;
     int  levels_fetched_at = 0;
+    // The stored password was refused when the session had to be renewed
+    // (the daemon restarted with a new hash, or throttles logins): posted
+    // once a second for ever, it locked the address out of the login
+    // (5 failures a minute; behind a reverse proxy, everyone's address)
+    // while the screen said only "login required or expired".
+    bool login_refused = false;
+    int  login_status  = 0;
 
     while (!quit) {
+        struct timespec t0{};
+        ::clock_gettime(CLOCK_MONOTONIC, &t0);
         tui_detail::HttpReply r;
         int rc = http_request(host, port, "GET", "/api/samples?last=1", cookie_header, "", &r);
-        if (rc == 0 && r.status == 401 && !password.empty()) {
-            std::string cookie;                       // session expired: renew
-            if (login(host, port, password, &cookie) == 200) {
+        if (rc == 0 && r.status == 401 && !password.empty() && !login_refused) {
+            std::string cookie;                       // session expired: renew, once
+            const int st = login(host, port, password, &cookie);
+            if (st == 200) {
                 cookie_header = "Cookie: " + cookie + "\r\n";
                 rc = http_request(host, port, "GET", "/api/samples?last=1", cookie_header, "", &r);
+            } else {
+                login_refused = true;
+                login_status  = st;
             }
         }
 
@@ -568,6 +581,12 @@ int tui_run(const char* host, int port, std::string (*ask_password)()) {
 
         if (rc != 0) {
             ::mvprintw(2, 0, "connection error (%s) — retrying in 1s", http_error(rc).c_str());
+        } else if (r.status == 401 && login_refused) {
+            const std::string why = login_status == 429 ? std::string("HTTP 429, logins throttled")
+                                  : login_status > 0   ? "HTTP " + std::to_string(login_status)
+                                                       : http_error(login_status);
+            ::mvprintw(2, 0, "session ended and the password is no longer accepted (login: %s) "
+                             "— q to quit, then start again", why.c_str());
         } else if (r.status != 200) {
             // Say what the server said instead of drawing zeros.
             ::mvprintw(2, 0, "server returned HTTP %d%s — retrying in 1s", r.status,
@@ -679,9 +698,21 @@ int tui_run(const char* host, int port, std::string (*ask_password)()) {
         ::refresh();
 
         // getch() blocks up to 1 s thanks to wtimeout(), then returns
-        // ERR on no-input or the keycode otherwise.
+        // ERR on no-input or the keycode otherwise. With stdin at its
+        // end (`< /dev/null`, a script, a piped password once read) it
+        // returns ERR at once, and the loop fetched as fast as the daemon
+        // answered, about 700 requests a second on its one HTTP thread:
+        // the rest of the second is slept out.
         int ch = ::getch();
         if (ch == 'q' || ch == 'Q' || ch == 27 /*ESC*/) quit = true;
+        if (ch == ERR && !quit) {
+            struct timespec t1{};
+            ::clock_gettime(CLOCK_MONOTONIC, &t1);
+            const long spent_ms = (t1.tv_sec - t0.tv_sec) * 1000L + (t1.tv_nsec - t0.tv_nsec) / 1000000L;
+            if (spent_ms >= 0 && spent_ms < 1000) {
+                ::usleep(static_cast<useconds_t>((1000L - spent_ms) * 1000L));
+            }
+        }
         ++tick;
     }
 

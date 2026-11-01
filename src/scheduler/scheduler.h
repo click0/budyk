@@ -102,9 +102,14 @@ public:
 
     /// Keep `level` active through `until_ns` (a later deadline replaces an
     /// earlier one; an earlier one is ignored). Unknown ids are ignored.
-    void request(Level level, uint64_t until_ns);
+    /// `made_at_ns` is the time the deadline was reckoned from (the
+    /// sample's, for a custom level's `when`): when the clock has stepped
+    /// back since, tick() moves the deadline back as far, keeping what
+    /// was left; a request already on the new clock (made on the very
+    /// sample the step is seen on) stays. 0: the last tick's clock.
+    void request(Level level, uint64_t until_ns, uint64_t made_at_ns = 0);
     /// Same, by level name ("L1".."L3" or a custom name). False if unknown.
-    bool request_by_name(const std::string& name, uint64_t until_ns);
+    bool request_by_name(const std::string& name, uint64_t until_ns, uint64_t made_at_ns = 0);
 
     /// Level table lookups. Unknown ids fall back to L1's values / "?".
     int         interval_ms(Level lv) const;
@@ -152,7 +157,8 @@ private:
     bool             escalated_            = false;
     bool             requested_[kMaxLevelId + 1]          = {};
     uint64_t         requested_until_ns_[kMaxLevelId + 1] = {};
-    uint64_t         last_tick_ns_ = 0;   ///< the previous tick's time: a step back moves the requests
+    uint64_t         requested_made_ns_[kMaxLevelId + 1]  = {};   ///< see request()
+    uint64_t         last_tick_ns_ = 0;   ///< the previous tick's time: a step back moves the timers
 
     AnomalyState       check_anomaly(const Sample& s) const;
     const CustomLevel* find_custom(Level lv) const;

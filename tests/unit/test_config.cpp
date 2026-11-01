@@ -431,6 +431,26 @@ int main(int argc, char** argv) {
         assert(lv[1].when.empty() && lv[1].hold_sec == 0 && lv[1].storage_mb == 50);
     }
 
+    // N+0a. A level below L1's priority (0) is never selected, and one at
+    //       it only on a shorter interval than L1's; both were accepted
+    //       without a word. They are kept, and said to be unreachable.
+    {
+        Config c;
+        const std::string out = stderr_of(
+            "collection:\n"
+            "  l1: { interval: 5m }\n"
+            "  levels:\n"
+            "    - { name: below, interval: 60, priority: -1 }\n"
+            "    - { name: slow, interval: 1800, priority: 0 }\n"
+            "    - { name: quick, interval: 60, priority: 0 }\n"
+            "    - { name: above, interval: 1800, priority: 5 }\n", &c);
+        assert(c.scheduler.custom_levels.size() == 4);
+        assert(has(out, "collection.levels (below): priority -1 is below L1's 0: the level can never be entered"));
+        assert(has(out, "collection.levels (slow): priority 0 is L1's, and its interval (1800000 ms) "
+                        "is not shorter than L1's (300 s): the level can never be entered"));
+        assert(!has(out, "(quick)") && !has(out, "(above)"));
+    }
+
     // N+0b. Numbers are read whole, durations with a unit or without:
     //       strtol() kept the digits before any text, so "5m" was 5 s,
     //       "1.5h" 1 s, "4294967596" 300 (truncated) and "nan" a threshold

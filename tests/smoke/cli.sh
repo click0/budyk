@@ -279,6 +279,170 @@ if b"HTTP 503" not in out:
 print("ok   the TUI reads a reply that takes 9 s: drew in %.1f s" % took)
 EOF
 
+# stdin at its end (`budyk tui < /dev/null`, a script, a piped password
+# once read): getch() returned ERR at once instead of after a second, and
+# the loop fetched as fast as the daemon answered, about 700 requests a
+# second on the one HTTP thread. One request a second whatever stdin is.
+# The fake API answers every request with a sample at once.
+#
+# Ending the TUI: a SIGTERM runs ncurses' endwin(), which sets the
+# terminal back with TCSADRAIN; on FreeBSD that waits for the output to
+# be read, up to kern.tty_drainwait (300 s), so the master is read until
+# the TUI is gone (a plain waitpid took 5 minutes there).
+python3 - "$BIN" <<'EOF' || fail=1
+import os, pty, select, signal, socket, sys, threading, time
+binary = sys.argv[1]
+def end_tui(pid, fd):
+    os.kill(pid, signal.SIGTERM)
+    end = time.time() + 5
+    while os.waitpid(pid, os.WNOHANG)[0] == 0:
+        if time.time() > end:
+            os.kill(pid, signal.SIGKILL)
+            os.waitpid(pid, 0)
+            break
+        try:
+            if select.select([fd], [], [], 0.1)[0]:
+                os.read(fd, 65536)
+        except OSError:
+            time.sleep(0.1)
+srv = socket.socket()
+srv.bind(("127.0.0.1", 0))
+srv.listen(64)
+port = srv.getsockname()[1]
+count = {"samples": 0}
+sample = (b'[{"ts":1,"level":1,"groups":["cpu"],"cpu":{"total_percent":1.0,"count":1}}]')
+def serve():
+    while True:
+        try:
+            c, _ = srv.accept()
+        except OSError:
+            return
+        req = b""
+        while b"\r\n\r\n" not in req:
+            chunk = c.recv(4096)
+            if not chunk:
+                break
+            req += chunk
+        if b"GET /api/samples" in req:
+            count["samples"] += 1
+        c.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\n"
+                  b"Connection: close\r\n\r\n" % len(sample) + sample)
+        c.close()
+threading.Thread(target=serve, daemon=True).start()
+pid, fd = pty.fork()
+if pid == 0:
+    os.environ["TERM"] = "xterm"
+    devnull = os.open(os.devnull, os.O_RDONLY)
+    os.dup2(devnull, 0)                      # stdin at its end
+    os.execv(binary, [binary, "tui", "--port", str(port)])
+end = time.time() + 4
+while time.time() < end:
+    try:
+        if select.select([fd], [], [], 0.2)[0]:
+            os.read(fd, 65536)
+    except OSError:
+        break
+n = count["samples"]
+end_tui(pid, fd)
+if n > 8:
+    sys.exit("FAIL: the TUI with stdin at its end made %d /api/samples requests in 4 s" % n)
+if n < 2:
+    sys.exit("FAIL: the TUI with stdin at its end made only %d request(s) in 4 s" % n)
+print("ok   the TUI with stdin at its end asks once a second: %d requests in 4 s" % n)
+EOF
+
+# The session ends (the daemon restarted with a new password hash) and
+# the stored password is no longer accepted: the TUI posted it once a
+# second for ever, which with the daemon's throttle (5 failures a
+# minute) locked its address, a reverse proxy's address meaning everyone,
+# out of the login, and said only "login required or expired". One
+# attempt, then the reason on the screen.
+#
+# The password prompt turns echo off with TCSAFLUSH, which drops what was
+# typed ahead; on FreeBSD it first waits for the prompt to be read, so an
+# answer sent the moment the prompt shows can land before the flush and be
+# dropped with it: the answer is sent half a second later. The TUI is
+# ended as above (endwin() drains the terminal).
+python3 - "$BIN" <<'EOF' || fail=1
+import os, pty, select, signal, socket, sys, threading, time
+binary = sys.argv[1]
+def end_tui(pid, fd):
+    os.kill(pid, signal.SIGTERM)
+    end = time.time() + 5
+    while os.waitpid(pid, os.WNOHANG)[0] == 0:
+        if time.time() > end:
+            os.kill(pid, signal.SIGKILL)
+            os.waitpid(pid, 0)
+            break
+        try:
+            if select.select([fd], [], [], 0.1)[0]:
+                os.read(fd, 65536)
+        except OSError:
+            time.sleep(0.1)
+srv = socket.socket()
+srv.bind(("127.0.0.1", 0))
+srv.listen(64)
+port = srv.getsockname()[1]
+count = {"login": 0, "samples": 0}
+def reply(c, status, body, extra=b""):
+    c.sendall(b"HTTP/1.1 " + status + b"\r\nContent-Type: application/json\r\n" + extra +
+              b"Content-Length: %d\r\nConnection: close\r\n\r\n" % len(body) + body)
+def serve():
+    while True:
+        try:
+            c, _ = srv.accept()
+        except OSError:
+            return
+        req = b""
+        while b"\r\n\r\n" not in req:
+            chunk = c.recv(4096)
+            if not chunk:
+                break
+            req += chunk
+        if b"POST /api/auth/login" in req:
+            count["login"] += 1
+            if count["login"] == 1:          # the password at the prompt: accepted
+                reply(c, b"200 OK", b'{"ok":true}',
+                      b"Set-Cookie: budyk_session=abc; HttpOnly; Path=/\r\n")
+            else:                            # the daemon has a new hash now
+                reply(c, b"401 Unauthorized", b'{"error":"invalid credentials"}')
+        elif b"GET /api/samples" in req:
+            count["samples"] += 1
+            reply(c, b"401 Unauthorized", b'{"error":"unauthenticated"}')
+        else:
+            reply(c, b"200 OK", b'{}')
+        c.close()
+threading.Thread(target=serve, daemon=True).start()
+pid, fd = pty.fork()
+if pid == 0:
+    os.environ["TERM"] = "xterm"
+    os.execv(binary, [binary, "tui", "--port", str(port)])
+out = b""
+answer_at = None                                 # when to answer the prompt
+end = time.time() + 6
+while time.time() < end:
+    if answer_at is not None and time.time() >= answer_at:
+        os.write(fd, b"secret\n")
+        answer_at = None
+    try:
+        if select.select([fd], [], [], 0.1)[0]:
+            chunk = os.read(fd, 65536)
+            if b"password:" in chunk and not out:  # the prompt, once
+                answer_at = time.time() + 0.5
+            out += chunk
+    except OSError:
+        break
+logins = count["login"]
+end_tui(pid, fd)
+text = out.decode("utf-8", "replace")
+if logins != 2:
+    sys.exit("FAIL: the TUI posted the rejected password %d time(s) in 6 s, not once: %r"
+             % (logins - 1, text[-300:]))
+if "no longer accepted" not in text:
+    sys.exit("FAIL: the TUI did not say the password is no longer accepted: %r" % text[-300:])
+print("ok   a rejected password is posted once, and the screen says so")
+EOF
+
 if grep -qE 'ERROR: (Address|Leak)Sanitizer|ThreadSanitizer|runtime error:' "$DIR/log"; then
     echo "FAIL: sanitizer report"; fail=1
 fi
