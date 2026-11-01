@@ -140,14 +140,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   minute, its address, a reverse proxy's address meaning everyone, was
   refused the login for as long as it ran, and the screen said only
   "login required or expired". It tries once and says why.
+- `uptime_seconds` in the JSON lost seconds past 11 days of uptime:
+  every number was written with 6 significant digits (17280042 came out
+  as 1.728e+07, 42 s short), and past 115 days the minute the dashboard
+  and the TUI showed could be off by one. A whole number from a million
+  up is written whole, a fraction with 15 digits.
+- The dashboard drew whichever history reply arrived last: 7d clicked
+  and then 1h showed the slower 7d window under the 1h button until the
+  next refresh. Only the newest request's reply is drawn.
 
 - **A session ended 24 hours after the login however much it was used**:
   the dashboard, or the TUI polling each second, got the login screen in
   the middle of the day. A session in use is kept going now (sliding
   expiration, as spec §3.2 has it): a request with the session cookie,
   once an eighth of the 24 hours has passed, moves its end to 24 hours
-  from then. One left alone still ends after 24 hours; an open dashboard
-  that only receives the stream counts as left alone.
+  from then. One left alone still ends after 24 hours: a dashboard in a
+  background tab asks for nothing and is left alone; a visible one
+  refreshes its history each minute and stays signed in.
 - **`-DENABLE_LLM=OFF` did not leave the LLM client out** (spec §3.7.3):
   `suggest-rules --ai` was in every binary, the FreeBSD port's and the
   Docker image's included, which are built with it off. The option is
