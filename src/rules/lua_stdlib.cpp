@@ -230,14 +230,21 @@ int l_alert(lua_State* L) {
 
     const char* name    = luaL_checkstring(L, 1);
     const char* sev_str = lua_tostring(L, 2);
-    const char* msg     = lua_tostring(L, 3);
+    // A number reads as its text; a boolean or a table (a comparison, or
+    // the sample table itself, where the string was meant) is an error,
+    // not an empty message sent without a word.
+    if (!lua_isnoneornil(L, 3) && !lua_isstring(L, 3)) {
+        return luaL_error(L, "alert: 'message' must be a string, not %s", luaL_typename(L, 3));
+    }
+    size_t msg_len = 0;
+    const char* msg = lua_tolstring(L, 3, &msg_len);
 
     // Lenient on purpose: an unknown severity falls back to warning rather
     // than failing the action mid-incident.
     budyk::AlertSeverity sev = budyk::AlertSeverity::Warning;
     budyk::parse_severity(sev_str, &sev);
 
-    const int ok = eng->raise_alert(sev, name, msg ? msg : "");
+    const int ok = eng->raise_alert(sev, name, msg != nullptr ? std::string(msg, msg_len) : std::string());
     lua_pushinteger(L, ok);
     return 1;
 }
@@ -318,17 +325,30 @@ int exec_impl(lua_State* L, budyk::LuaEngine* eng, ExecOutcome* out, char* err,
     // it came after the argv strings, whose destructors the raise skipped.
     int  timeout_s = 30;
     bool wait      = false;
-    auto take_timeout = [&](int idx) {
+    // 0, a negative number or a fraction (0.5 read as 0) used to mean
+    // the default 30 s without a word.
+    auto take_timeout = [&](int idx) -> bool {
+        if (!lua_isinteger(L, idx)) return false;
         const lua_Integer t = lua_tointeger(L, idx);
-        if (t > 0) timeout_s = static_cast<int>(t < 86400 ? t : 86400);
+        if (t < 1) return false;
+        timeout_s = static_cast<int>(t < 86400 ? t : 86400);
+        return true;
     };
+    const char* const kBadTimeout = "exec: 'timeout' must be a whole number of seconds, 1 or more";
     if (lua_isnumber(L, 2)) {
-        take_timeout(2);
+        if (!take_timeout(2)) {
+            std::snprintf(err, err_cap, "%s", kBadTimeout);
+            return -1;
+        }
     } else if (lua_istable(L, 2)) {
         lua_pushstring(L, "timeout");
         lua_rawget(L, 2);
-        if (lua_isnumber(L, -1)) take_timeout(-1);
+        const bool timeout_ok = lua_isnil(L, -1) || take_timeout(-1);
         lua_pop(L, 1);
+        if (!timeout_ok) {
+            std::snprintf(err, err_cap, "%s", kBadTimeout);
+            return -1;
+        }
         lua_pushstring(L, "wait");
         lua_rawget(L, 2);
         wait = lua_toboolean(L, -1) != 0;
@@ -560,10 +580,15 @@ int freeze_action(lua_State* L, const char* fn_name, bool stop) {
     }
 
     const lua_Integer pid_arg = luaL_checkinteger(L, 1);
-    if (pid_arg <= 0) {
+    if (pid_arg <= 0 || pid_arg > INT_MAX) {
+        // The int it was cast to took 2^32 + n as n.
         return luaL_error(L, "%s: pid must be a positive integer", fn_name);
     }
     const int pid = static_cast<int>(pid_arg);
+    if (budyk::freeze_refused(pid)) {
+        return luaL_error(L, "%s: refusing pid %d (%s)", fn_name, pid,
+                          pid == 1 ? "init" : "budyk itself");
+    }
 
     // Resolve the target's `comm` first — needed both for the allowlist
     // check and to surface it back to the rule in the result table.

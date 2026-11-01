@@ -376,9 +376,8 @@ int cmd_serve(int argc, char* argv[], const char* version) {
         int rc = 0;
         if (is_yaml) {
             std::string lua_src;
-            if (budyk::yaml_rules_to_lua_file(cfg.rules_path, &lua_src) != 0) {
-                rc   = -1;
-                *err = "YAML parse error";
+            if (budyk::yaml_rules_to_lua_file(cfg.rules_path, &lua_src, err) != 0) {
+                rc = -1;                       // *err: which rule and what
             } else if ((rc = e.load_string(lua_src.c_str())) != 0) {
                 *err = e.last_error();
             }

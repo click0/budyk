@@ -54,14 +54,22 @@ int proc_name_of(int pid, char* buf, std::size_t cap) {
 #endif
 }
 
+bool freeze_refused(int pid) {
+    // budyk itself (a rule over proc.top with budyk at the top SIGSTOPped
+    // the daemon, and nothing ever sent SIGCONT) and init.
+    return pid == 1 || pid == static_cast<int>(::getpid());
+}
+
 int freeze_pid(int pid) {
     if (pid <= 0) return -EINVAL;
+    if (freeze_refused(pid)) return -EPERM;
     if (::kill(static_cast<pid_t>(pid), SIGSTOP) != 0) return -errno;
     return 0;
 }
 
 int unfreeze_pid(int pid) {
     if (pid <= 0) return -EINVAL;
+    if (freeze_refused(pid)) return -EPERM;
     if (::kill(static_cast<pid_t>(pid), SIGCONT) != 0) return -errno;
     return 0;
 }

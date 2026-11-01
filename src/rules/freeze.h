@@ -21,7 +21,13 @@ namespace budyk {
 /// gone, permission denied, malformed value). `cap` must be > 0.
 int proc_name_of(int pid, char* buf, std::size_t cap);
 
-/// kill(pid, SIGSTOP) — returns 0 on success, -errno on failure.
+/// True for the pids freeze_pid() and unfreeze_pid() refuse whatever the
+/// allowlist says: budyk's own (a rule over `proc.top` with budyk at the
+/// top SIGSTOPped the daemon, and nothing ever sent SIGCONT) and init.
+bool freeze_refused(int pid);
+
+/// kill(pid, SIGSTOP) — returns 0 on success, -errno on failure (-EPERM
+/// for a pid freeze_refused()).
 int freeze_pid(int pid);
 
 /// kill(pid, SIGCONT) — returns 0 on success, -errno on failure.

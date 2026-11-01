@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #include "rules/worker.h"
 
+#include <sys/resource.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
 #include <atomic>
 #include <cassert>
 #include <chrono>
@@ -99,6 +103,37 @@ int main() {
         }));
         w.stop(2000);
         assert(ran == 1 && w.completed() == 1 && w.dropped() == 0);
+    }
+
+    // 5. A thread that cannot be made (RLIMIT_NPROC: a "too many
+    //    processes" host, the condition a rule alerts on) is a dropped
+    //    job, not the end of the process: std::thread's constructor threw
+    //    std::system_error, which -fno-exceptions code cannot catch, and
+    //    the daemon aborted on its first alert. In a child, as an
+    //    unprivileged user (root is not held to the limit), with the
+    //    limit at one process: post() returns false and counts the drop.
+    //    Where the limit does not bite (FreeBSD does not count threads,
+    //    no leave to change user) the post succeeds and that is fine too.
+    {
+        const pid_t child = ::fork();
+        assert(child >= 0);
+        if (child == 0) {
+            if (::geteuid() == 0 && (::setgid(65534) != 0 || ::setuid(65534) != 0)) _exit(0);
+            const rlimit one{1, 1};
+            if (::setrlimit(RLIMIT_NPROC, &one) != 0) _exit(0);
+            Worker w("t5", 4);
+            std::atomic<int> ran{0};
+            const bool posted = w.post([&](const std::atomic<bool>&) { ++ran; });
+            if (posted) {
+                w.wait_idle(5000);
+                _exit(ran == 1 ? 0 : 20);                 // the limit did not bite
+            }
+            _exit(w.dropped() == 1 && w.pending() == 0 ? 10 : 21);   // dropped, counted
+        }
+        int status = 0;
+        assert(::waitpid(child, &status, 0) == child);
+        assert(WIFEXITED(status));                        // not SIGABRT
+        assert(WEXITSTATUS(status) == 0 || WEXITSTATUS(status) == 10);
     }
 
     std::printf("test_worker: PASS\n");

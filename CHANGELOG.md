@@ -29,6 +29,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cut the mail there and read what followed as SMTP commands.
 - A line break in an alert's message or an `exec()` argument forged a
   line in budyk's own log; they are logged on one line.
+- **budyk could stop itself.** `freeze(pid)` took a pid past 2^31 as the
+  int it truncates to, and refused no pid: a rule over `proc.top` with
+  budyk at the top (`freeze(proc.top[1].pid)`, the allowlist empty)
+  sent SIGSTOP to the daemon, and nothing ever sent SIGCONT. A pid out
+  of range, budyk's own and init are errors now, whatever the allowlist.
+- **An alert on a host out of processes ended the daemon.** The alert
+  and `exec()` worker threads, and the HTTP thread, were `std::thread`s:
+  when a thread cannot be made (`RLIMIT_NPROC`, a cgroup's `pids.max`,
+  the very condition a "too many processes" rule alerts on) its
+  constructor throws, and with exceptions off that is an abort. They
+  are made with `pthread_create()` now: a worker that cannot start
+  drops the job and says so, an HTTP thread that cannot start is
+  reported as any other start-up failure of the server.
+- **A YAML rule's `severity: Critical` went out as a warning**, as did
+  any severity not spelled in lower case, without a word; `action:
+  escalate` sent an alert and escalated nothing. The severity is taken
+  in any case, `escalate` is the spec's `{ alert, escalate }`, and a
+  severity or action that is none of the known ones is an error that
+  names the rule, as `watch()` has it.
+- A YAML rules file that did not load said only "YAML parse error",
+  whatever was wrong. It says which rule and what now (`rule 'hot_cpu':
+  for_ticks '5s' is not a whole number of ticks`, `rule 2: no 'name'`,
+  `YAML: did not find expected key at line 4`).
+- `alert()` with a message that is not a string (a comparison's boolean,
+  a table where the string was meant) sent an empty message; it is an
+  error. `exec()` with a timeout of 0, a negative one or a fraction ran
+  with the default 30 s; it is an error.
 
 - **A session ended 24 hours after the login however much it was used**:
   the dashboard, or the TUI polling each second, got the login screen in

@@ -90,6 +90,17 @@ int main() {
         assert(rc == -ESRCH || rc == -EPERM);
     }
 
+    // 6. budyk's own pid and init are refused before kill(): a rule over
+    //    proc.top with budyk at the top SIGSTOPped the daemon itself, and
+    //    nothing ever sent SIGCONT.
+    {
+        assert(freeze_refused(1) && freeze_refused(static_cast<int>(::getpid())));
+        assert(!freeze_refused(2) && !freeze_refused(0x7FFFFFFE));
+        assert(freeze_pid(static_cast<int>(::getpid())) == -EPERM);   // not stopped: we are still here
+        assert(unfreeze_pid(static_cast<int>(::getpid())) == -EPERM);
+        assert(freeze_pid(1) == -EPERM);
+    }
+
     std::printf("test_freeze: PASS\n");
     return 0;
 }
