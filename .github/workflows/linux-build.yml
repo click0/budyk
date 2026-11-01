@@ -521,9 +521,13 @@ jobs:
             -DSTATIC_LINK=OFF \
             -DBUILD_TESTS=ON \
             -DCMAKE_BUILD_TYPE=Debug \
-            -DCMAKE_C_FLAGS=--coverage \
-            -DCMAKE_CXX_FLAGS=--coverage \
+            -DCMAKE_C_FLAGS="--coverage -fprofile-update=atomic" \
+            -DCMAKE_CXX_FLAGS="--coverage -fprofile-update=atomic" \
             -DCMAKE_EXE_LINKER_FLAGS=--coverage
+          # -fprofile-update=atomic: the counters are plain increments
+          # otherwise, and the tests' threads (the HTTP server's, a hub
+          # test's writer) race on them; a torn one read as a negative hit
+          # count, which lcov (gcov 15) refuses to capture.
 
       - name: Build
         run: cmake --build build -j"$(nproc)"
