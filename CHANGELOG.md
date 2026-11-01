@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A session ended 24 hours after the login however much it was used**:
+  the dashboard, or the TUI polling each second, got the login screen in
+  the middle of the day. A session in use is kept going now (sliding
+  expiration, as spec §3.2 has it): a request with the session cookie,
+  once an eighth of the 24 hours has passed, moves its end to 24 hours
+  from then. One left alone still ends after 24 hours; an open dashboard
+  that only receives the stream counts as left alone.
+- **`-DENABLE_LLM=OFF` did not leave the LLM client out** (spec §3.7.3):
+  `suggest-rules --ai` was in every binary, the FreeBSD port's and the
+  Docker image's included, which are built with it off. The option is
+  real now: off, the LLM client is not compiled and `--ai` says so; on,
+  the default and the release binaries, as before.
+- A WebSocket client that did not read its handshake and catch-up frame
+  held the HTTP thread: they were sent with a blocking send(), which on
+  FreeBSD SO_SNDTIMEO bounds for each wait for room, not as a whole. They
+  go out as a response does now, within the I/O timeout plus the frame's
+  size at 256 KiB/s, or the client is dropped.
+- `tests/smoke/escalate.sh` and `resources.sh` listened on the same port,
+  `fsck.sh` and `crosscheck.sh` on another, `modes.sh` and `upgrade.sh`
+  on a third: run at the same time, the second failed on "Address
+  already in use". Each has a port of its own.
+
 ## [0.8.5] — 2026-10-31
 
 budyk builds with GCC 15 again (Ubuntu 26.04, which the release runners

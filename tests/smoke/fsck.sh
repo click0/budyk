@@ -16,7 +16,7 @@
 
 set -eu
 BIN=${1:?usage: fsck.sh path/to/budyk [port]}
-PORT=${2:-18769}
+PORT=${2:-18774}
 DIR=$(mktemp -d)
 PID=
 trap 'kill "$PID" 2>/dev/null || true; rm -rf "$DIR"' EXIT

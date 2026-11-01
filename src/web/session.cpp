@@ -73,6 +73,34 @@ bool SessionStore::verify(const std::string& token) {
     return ok;
 }
 
+bool SessionStore::touch(const std::string& token) {
+    if (token.empty()) return false;
+    const uint64_t now = now_realtime_ns();
+    bool evicted = false;
+    bool ok      = false;
+    bool slid    = false;
+    {
+        std::lock_guard<std::mutex> g(mtx_);
+        auto it = deadline_.find(token);
+        if (it == deadline_.end()) return false;
+        if (it->second <= now) {
+            deadline_.erase(it);
+            evicted = true;
+        } else {
+            ok = true;
+            // Only forward: a clock stepped back would otherwise cut the
+            // session short.
+            const uint64_t fresh = now + ttl_ns_;
+            if (fresh > it->second && fresh - it->second >= ttl_ns_ / 8) {
+                it->second = fresh;
+                slid = true;
+            }
+        }
+    }
+    if (evicted || slid) autosave();
+    return ok;
+}
+
 void SessionStore::revoke(const std::string& token) {
     bool removed;
     {

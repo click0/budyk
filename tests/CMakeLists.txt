@@ -37,7 +37,9 @@ budyk_add_test(test_ring_check      LIBS budyk_storage budyk_core)
 # AI suggestions
 budyk_add_test(test_baseline        LIBS budyk_ai budyk_core)
 budyk_add_test(test_suggest         LIBS budyk_ai budyk_core)
-budyk_add_test(test_llm_client      LIBS budyk_ai budyk_core)
+if(ENABLE_LLM)
+    budyk_add_test(test_llm_client  LIBS budyk_ai budyk_core)
+endif()
 
 # web
 budyk_add_test(test_auth            LIBS budyk_web budyk_core)

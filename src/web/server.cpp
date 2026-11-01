@@ -269,6 +269,15 @@ ssize_t send_response(int fd, const HttpResponse& r, int io_timeout_ms, size_t m
 
 } // namespace
 
+ssize_t send_bounded(int fd, const void* data, size_t len, int io_timeout_ms, size_t min_rate) {
+    if (min_rate == 0) min_rate = 1;
+    const Deadline deadline = Clock::now() + std::chrono::milliseconds(io_timeout_ms) +
+        std::chrono::milliseconds(len * 1000 / min_rate);
+    return send_all(fd, data, len, deadline, io_timeout_ms);
+}
+
+size_t HttpServer::min_send_rate() const { return min_send_rate_; }
+
 std::string HttpRequest::header(const std::string& name) const {
     for (const auto& kv : headers) {
         if (ascii_ieq(kv.first, name.c_str())) return kv.second;

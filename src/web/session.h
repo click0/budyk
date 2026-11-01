@@ -30,6 +30,14 @@ public:
     /// True when `token` is present and not yet expired.
     bool        verify(const std::string& token);
 
+    /// verify(), and a session in use is kept going (sliding expiration,
+    /// spec §3.2): once an eighth of the TTL has passed since its deadline
+    /// was set, the deadline is `now + TTL` again and the file rewritten.
+    /// A request within that eighth is a verify() alone, so the file is
+    /// not rewritten on every request. For the requests a session
+    /// authenticates; the hub's check of an open WebSocket is verify().
+    bool        touch(const std::string& token);
+
     /// Drop a token if present.
     void        revoke(const std::string& token);
 

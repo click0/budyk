@@ -74,7 +74,7 @@ endif()
 include(cmake/platform.cmake)
 
 # Options
-option(ENABLE_LLM "Enable LLM API client for AI rule suggestions (Tier B)" OFF)
+option(ENABLE_LLM "Build the LLM client of suggest-rules --ai (Tier B); OFF leaves it out of the binary" ON)
 option(ENABLE_EXEC "Enable exec() action in Lua rules (security-sensitive)" OFF)
 option(BUILD_TESTS "Build test suite" ON)
 option(STATIC_LINK "Static linking for single-binary deployment" ON)

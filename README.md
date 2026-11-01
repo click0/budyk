@@ -189,7 +189,10 @@ cmake --install build      # binary, example config, rules, man page
 ```
 
 The build is fully static by default. Pass `-DSTATIC_LINK=OFF` to link
-against shared libraries instead.
+against shared libraries instead. `-DENABLE_LLM=OFF` leaves the LLM
+client out of the binary: `budyk suggest-rules --ai` then says so, and
+the local suggestions remain (the FreeBSD port and the Docker image are
+built so).
 
 With Doxygen installed, `cmake --build build --target docs` writes the
 API reference of the headers in `src/` to `build/docs/html/index.html`.
@@ -268,6 +271,9 @@ Failed logins are throttled: after 5 failures from one address within a
 minute (`web.auth.max_login_failures`, `web.auth.login_window`), further
 attempts from that address get HTTP 429 until the minute is up, and no
 password hash is computed for them. A successful login clears the count.
+A session lasts 24 hours from its last request: the dashboard's reloads
+and the TUI's polls keep it going, an open dashboard that only receives
+the stream does not. Signing out ends it at once.
 
 budyk speaks plain HTTP. To reach the dashboard from another machine,
 keep `listen: 127.0.0.1` and put a TLS reverse proxy in front that sets
