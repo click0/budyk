@@ -14,6 +14,7 @@
 #include <vector>
 
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -24,6 +25,37 @@ using namespace budyk;
 static bool contains(const std::string& hay, const char* needle) {
     return hay.find(needle) != std::string::npos;
 }
+
+// The daemon's log is stderr: what the dispatcher says about a channel
+// is read back through a file that stands in for it meanwhile.
+struct StderrCapture {
+    int         saved = -1;
+    std::string path;
+    void begin() {
+        char tmpl[] = "/tmp/budyk_alert_log_XXXXXX";
+        const int fd = ::mkstemp(tmpl);
+        assert(fd >= 0);
+        path  = tmpl;
+        saved = ::dup(2);
+        std::fflush(stderr);
+        ::dup2(fd, 2);
+        ::close(fd);
+    }
+    std::string end() {
+        std::fflush(stderr);
+        ::dup2(saved, 2);
+        ::close(saved);
+        std::string out;
+        FILE* f = std::fopen(path.c_str(), "r");
+        assert(f != nullptr);
+        char buf[4096];
+        size_t n;
+        while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) out.append(buf, n);
+        std::fclose(f);
+        ::unlink(path.c_str());
+        return out;
+    }
+};
 
 // An executable `name` in one of $PATH's directories.
 static bool on_path(const char* name) {
@@ -145,6 +177,20 @@ int main() {
         for (const auto& line : h) assert(line.find_first_of("\r\n") == std::string::npos);
         assert(header_value(std::string("a\x01" "b\x7f" "c\t")) == "a b c ");
         assert(header_value("caf\xc3\xa9") == "caf\xc3\xa9");   // UTF-8 kept
+    }
+
+    // 9c. The body's line ends are CR LF whatever the message had: curl
+    //     dot-stuffs a line that starts with "." only after CR LF, so a
+    //     bare-LF "\n.\n" (from a process name, anyone's bytes) went out
+    //     as it was, and an MTA that takes <LF>.<LF> as the end of DATA
+    //     cut the mail there and read what followed as commands.
+    {
+        const std::string m = smtp_message(AlertSeverity::Warning, "a@example.com",
+                                           "b@example.com", "r", "line1\n.\nQUIT\r\nline3\rend");
+        assert(contains(m, "\r\n\r\nline1\r\n.\r\nQUIT\r\nline3\r\nend\r\n"));
+        assert(!contains(m, "\n.\nQUIT") && !contains(m, "\r\r\n") && !contains(m, "\rend"));
+        const std::string plain = smtp_message(AlertSeverity::Info, "a@x", "b@x", "r", "one\r\ntwo");
+        assert(contains(plain, "\r\n\r\none\r\ntwo\r\n"));
     }
 
     // 10. twilio_form — URL-encoded From/To/Body. '+' in E.164 phone
@@ -312,6 +358,7 @@ int main() {
                 "    printf 'FILE %%s mode=%%s: ' \"$1\" \"$(stat -c %%a \"$2\" 2>/dev/null || stat -f %%Lp \"$2\")\" >> '%s'\n"
                 "    cat \"$2\" >> '%s'\n"
                 "  fi\n"
+                "  if [ \"$1\" = -D ]; then printf 'HTTP/1.1 200 OK\\r\\n\\r\\n' > \"$2\"; fi\n"
                 "  shift\n"
                 "done\n"
                 "exit 0\n",
@@ -383,11 +430,71 @@ int main() {
         ::rmdir(dir);
     }
 
+    // 15b. What curl says when it fails reaches the log: its stderr went
+    //      to /dev/null with the child's, and the operator got
+    //      "failed (rc=-3)" for a DNS failure, a TLS failure, a timeout
+    //      and curl not installed alike. A stand-in exits 6 with curl's
+    //      words in the --stderr file; another is not there at all.
+    if (::access("/bin/sh", X_OK) == 0) {
+        char dir_tmpl[] = "/tmp/budyk_fakecurl_XXXXXX";
+        const char* dir = ::mkdtemp(dir_tmpl);
+        assert(dir != nullptr);
+        const std::string fake = std::string(dir) + "/curl";
+        {
+            FILE* f = std::fopen(fake.c_str(), "w");
+            assert(f != nullptr);
+            std::fputs("#!/bin/sh\n"
+                       "while [ $# -gt 0 ]; do\n"
+                       "  if [ \"$1\" = --stderr ]; then echo 'curl: (6) Could not resolve host: nope' > \"$2\"; fi\n"
+                       "  shift\n"
+                       "done\n"
+                       "exit 6\n", f);
+            std::fclose(f);
+            ::chmod(fake.c_str(), 0755);
+        }
+        const char* old_path = ::getenv("PATH");
+        const std::string new_path = std::string(dir) + ":" + (old_path != nullptr ? old_path : "");
+        ::setenv("PATH", new_path.c_str(), 1);
+
+        AlertDispatcher d;
+        AlertChannel ch;
+        ch.name = "n"; ch.type = "ntfy"; ch.url = "https://nope.example"; ch.topic = "t";
+        d.add_channel(std::move(ch));
+        StderrCapture log;
+        log.begin();
+        assert(d.dispatch(AlertSeverity::Info, "r", "m") == 1);
+        assert(d.flush(30000));
+        std::string text = log.end();
+        assert(d.failed() == 1);
+        assert(contains(text, "budyk alert: channel 'n' (ntfy) failed: "
+                              "curl: (6) Could not resolve host: nope (exit 6)\n"));
+
+        ::unlink(fake.c_str());                       // no curl in this directory now
+        ::setenv("PATH", dir, 1);                     // ...and nowhere else
+        AlertDispatcher none;
+        AlertChannel ch2;
+        ch2.name = "n"; ch2.type = "ntfy"; ch2.url = "https://nope.example"; ch2.topic = "t";
+        none.add_channel(std::move(ch2));
+        log.begin();
+        assert(none.dispatch(AlertSeverity::Info, "r", "m") == 1);
+        assert(none.flush(30000));
+        text = log.end();
+        assert(none.failed() == 1);
+        assert(contains(text, "failed: curl not found in PATH (exit 127)\n"));
+
+        ::setenv("PATH", old_path != nullptr ? old_path : "", 1);
+        ::rmdir(dir);
+    }
+
     // 16. What a server gets from the real curl(1), when it is installed:
     //     an ntfy message keeps its line breaks (-d @file dropped them:
     //     "/var 97% fulllargest: ..."), and a Twilio token whose password
     //     has blanks (a Gmail app password as Google shows it) is sent
-    //     whole (netrc split it: Basic auth of "AC1:abcd").
+    //     whole (netrc split it: Basic auth of "AC1:abcd"). The third
+    //     channel is answered 400 as Telegram answers a wrong chat_id:
+    //     curl exits 0 on that, and it counted as delivered, with no log
+    //     line; it is a failure now, with the status line and the body's
+    //     reason in the log.
     if (on_path("curl")) {
         int lfd = ::socket(AF_INET, SOCK_STREAM, 0);
         assert(lfd >= 0);
@@ -402,7 +509,7 @@ int main() {
 
         std::vector<std::string> requests;
         std::thread server([&] {
-            for (int i = 0; i < 2; ++i) {
+            for (int i = 0; i < 3; ++i) {
                 const int c = ::accept(lfd, nullptr, nullptr);
                 if (c < 0) return;
                 std::string req;
@@ -420,7 +527,14 @@ int main() {
                     }
                 }
                 const char ok[] = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-                (void)::send(c, ok, sizeof(ok) - 1, MSG_NOSIGNAL);
+                const char bad[] = "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\n"
+                                   "Content-Length: 73\r\nConnection: close\r\n\r\n"
+                                   "{\"ok\":false,\"error_code\":400,\"description\":\"Bad Request: chat not found\"}";
+                if (contains(req, "POST /bot")) {
+                    (void)::send(c, bad, sizeof(bad) - 1, MSG_NOSIGNAL);
+                } else {
+                    (void)::send(c, ok, sizeof(ok) - 1, MSG_NOSIGNAL);
+                }
                 ::close(c);
                 requests.push_back(req);
             }
@@ -434,14 +548,24 @@ int main() {
         tw.name = "w"; tw.type = "twilio"; tw.url = base + "/tw";
         tw.from = "+1"; tw.topic = "+2"; tw.token = "AC1:abcd efgh ijkl";
         d.add_channel(std::move(tw));
-        assert(d.dispatch(AlertSeverity::Warning, "disk_full", "/var 97% full\nlargest: log") == 2);
+        AlertChannel tg;
+        tg.name = "tg"; tg.type = "telegram"; tg.url = base + "/bot"; tg.topic = "42"; tg.token = "T";
+        d.add_channel(std::move(tg));
+        StderrCapture log;
+        log.begin();
+        assert(d.dispatch(AlertSeverity::Warning, "disk_full", "/var 97% full\nlargest: log") == 3);
         assert(d.flush(30000));
+        const std::string text = log.end();
         server.join();
         ::close(lfd);
-        assert(requests.size() == 2);
-        assert(d.delivered() == 2);
+        assert(requests.size() == 3);
+        assert(d.delivered() == 2 && d.failed() == 1);
         assert(contains(requests[0], "\r\n\r\n/var 97% full\nlargest: log"));
         assert(contains(requests[1], "Authorization: Basic QUMxOmFiY2QgZWZnaCBpamts\r\n"));
+        assert(contains(requests[2], "\"chat_id\":\"42\""));
+        assert(contains(text, "budyk alert: channel 'tg' (telegram) failed: HTTP/1.1 400 Bad Request: "
+                              "{\"ok\":false,\"error_code\":400,\"description\":\"Bad Request: chat not found\"}\n"));
+        assert(!contains(text, "channel 'n'") && !contains(text, "channel 'w'"));
     }
 
     std::printf("test_alert: PASS\n");

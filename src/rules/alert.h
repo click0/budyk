@@ -114,7 +114,8 @@ std::string telegram_payload(AlertSeverity sev, const std::string& chat_id,
                              const std::string& rule_name,
                              const std::string& message);
 /// SMTP DATA section — full RFC 5322-ish blob: From/To/Subject/Date
-/// headers, blank line, then the body. No CR-LF folding, no MIME.
+/// headers, blank line, then the body with CR LF line ends (a bare LF
+/// or CR in the message becomes one). No folding, no MIME.
 std::string smtp_message    (AlertSeverity sev, const std::string& from,
                              const std::string& to,
                              const std::string& rule_name,

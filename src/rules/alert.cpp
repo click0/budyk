@@ -48,10 +48,39 @@ std::string url_encode(const std::string& s) {
     return out;
 }
 
-// Temp files for curl: bodies, header files, the -K url config and
-// netrc. Private (0600) and unlinked once curl exits.
-bool write_tmp(const std::string& body, char* path_out, size_t cap) {
-    return write_private_tmp("budyk_alert_", body, path_out, cap);
+// Temp files for curl: bodies, header files, the -K url config, and the
+// files curl writes (its stderr, the reply's headers and body). Private
+// (0600) and unlinked once curl exits. False with `why` set.
+bool write_tmp(const std::string& body, char* path_out, size_t cap, std::string* why) {
+    if (write_private_tmp("budyk_alert_", body, path_out, cap)) return true;
+    *why = std::string("cannot write a temp file: ") + std::strerror(errno);
+    return false;
+}
+
+// Up to `cap` bytes of a file curl wrote; "" when it cannot be read.
+std::string read_head(const char* path, size_t cap) {
+    std::string out;
+    std::FILE* f = std::fopen(path, "re");
+    if (f == nullptr) return out;
+    out.resize(cap);
+    const size_t n = std::fread(&out[0], 1, cap, f);
+    std::fclose(f);
+    out.resize(n);
+    return out;
+}
+
+// The first line of `text`, control characters as spaces, at most 200
+// characters: curl's own words and a reply's body go into one log line.
+std::string first_line(const std::string& text) {
+    std::string out;
+    for (const char c : text) {
+        if (c == '\n') break;
+        const auto u = static_cast<unsigned char>(c);
+        out += (u < 0x20 || u == 0x7f) ? ' ' : c;
+        if (out.size() >= 200) { out += "..."; break; }
+    }
+    while (!out.empty() && out.back() == ' ') out.pop_back();
+    return out;
 }
 
 // `key = "value"` for a curl config file, quoted per curl's config
@@ -84,10 +113,10 @@ std::string config_line(const char* key, const std::string& value) {
 // app password as Google shows it, "abcd efgh ijkl mnop", was sent as
 // "abcd".
 bool write_curl_config(const char* url, const std::string& user_pass,
-                       char* path_out, size_t cap) {
+                       char* path_out, size_t cap, std::string* why) {
     std::string cfg = config_line("url", url);
     if (!user_pass.empty()) cfg += config_line("user", user_pass);
-    return write_tmp(cfg, path_out, cap);
+    return write_tmp(cfg, path_out, cap, why);
 }
 
 const char* severity_color(AlertSeverity s) {
@@ -113,86 +142,117 @@ const char* ntfy_priority(AlertSeverity s) {
 // Runs curl with `args` as its argv, directly (fork + execvp, no shell).
 // A URL, address or token with spaces, quotes, `;` or `$(...)` stays one
 // argument and is never parsed as shell syntax; the URL itself goes
-// through a -K config file (write_url_config), so it is neither an
-// option nor visible in ps(1). stdio is
-// /dev/null and the run is killed after timeout_s (see exec_command).
-// Returns 0 when curl exits 0.
-int run_curl(const std::vector<std::string>& args, int timeout_s,
-             const std::atomic<bool>* cancel) {
+// through a -K config file (write_curl_config), so it is neither an
+// option nor visible in ps(1). stdio is /dev/null and the run is killed
+// after timeout_s (see exec_command). True when curl exited 0; otherwise
+// `why` says how it ended, in curl's own words where it has them (-sS
+// to a --stderr file: "curl: (6) Could not resolve host: ..."). The
+// operator used to get "failed (rc=-3)" for every one of them.
+bool run_curl(const std::vector<std::string>& args, int timeout_s,
+              const std::atomic<bool>* cancel, std::string* why) {
+    char err_path[PATH_MAX];
+    if (!write_tmp("", err_path, sizeof(err_path), why)) return false;
     std::vector<const char*> argv;
-    argv.reserve(args.size() + 2);
+    argv.reserve(args.size() + 4);
     argv.push_back("curl");
+    argv.push_back("--stderr");
+    argv.push_back(err_path);
     for (const auto& a : args) argv.push_back(a.c_str());
     argv.push_back(nullptr);
     ExecResult res{};
-    if (exec_command(argv.data(), timeout_s, &res, cancel) != 0) return -1;
-    return res.exit_status == 0 && res.signal == 0 && !res.timed_out ? 0 : -2;
+    const int rc  = exec_command(argv.data(), timeout_s, &res, cancel);
+    const int err = errno;
+    const std::string said = first_line(read_head(err_path, 4096));
+    ::unlink(err_path);
+    if (rc != 0) {
+        *why = rc == -4 ? std::string("cannot fork curl: ") + std::strerror(err)
+                        : std::string("cannot run curl");
+        return false;
+    }
+    if (res.cancelled) {
+        *why = "cancelled at shutdown";
+    } else if (res.timed_out) {
+        *why = "curl ran past " + std::to_string(timeout_s) + " s and was killed";
+    } else if (res.signal != 0) {
+        *why = "curl was killed by signal " + std::to_string(res.signal);
+    } else if (res.exit_status == 127 && said.empty()) {
+        *why = "curl not found in PATH (exit 127)";
+    } else if (res.exit_status != 0) {
+        *why = said.empty() ? "curl exited " + std::to_string(res.exit_status)
+                            : said + " (exit " + std::to_string(res.exit_status) + ")";
+    } else {
+        return true;
+    }
+    return false;
 }
 
-// Shared scaffold for the curl invocations below: writes body+headers
-// to /tmp, runs curl with --max-time 10, returns rc==0 on HTTP success
-// (curl already maps 4xx/5xx to non-zero via -f… but we don't use -f
-// because the dispatcher is best-effort and we don't want curl to
-// treat a 4xx as fatal-to-the-batch).
-int curl_post(const char* url,
-              const std::string& body,
-              const std::vector<std::string>& extra_headers,
-              const std::atomic<bool>* cancel) {
-    char body_path[PATH_MAX];
-    if (!write_tmp(body, body_path, sizeof(body_path))) return -1;
+// Was the HTTP reply a success? curl exits 0 on a 4xx or 5xx as well
+// (no --fail: that would also drop the body, which says why: Telegram's
+// "chat not found", Discord's "Unknown Webhook", ntfy's "forbidden", a
+// 429), so the headers it dumped (-D) say whether the message was taken,
+// and the body (-o) why not. Every such reply counted as delivered, and
+// nothing was logged.
+bool http_ok(const char* reply_hdr, const char* reply_body, std::string* why) {
+    const std::string hdrs = read_head(reply_hdr, 16384);
+    // The last status line: a "100 Continue" comes before the answer.
+    size_t pos = hdrs.rfind("\nHTTP/");
+    pos = pos == std::string::npos ? (hdrs.compare(0, 5, "HTTP/") == 0 ? 0 : std::string::npos)
+                                   : pos + 1;
+    if (pos == std::string::npos) {
+        *why = "no HTTP status line in the reply";
+        return false;
+    }
+    const std::string status = first_line(hdrs.substr(pos));
+    const size_t sp = status.find(' ');
+    const int code = sp != std::string::npos && status.size() >= sp + 4
+        ? std::atoi(status.substr(sp + 1, 3).c_str()) : 0;   // NOLINT(cert-err34-c): curl's own line
+    if (code >= 200 && code < 300) return true;
+    *why = status;
+    const std::string body = first_line(read_head(reply_body, 4096));
+    if (!body.empty()) *why += ": " + body;
+    return false;
+}
 
+// One HTTP POST: `body` with `extra_headers` to `url`, the reply checked.
+// Both the body and the header lines go through files; --data-binary,
+// because -d @file drops the file's CR, LF and NUL bytes, and an ntfy
+// message, its body as it is, came out on one line. The "user:password"
+// for Twilio rides in the -K config file as the URL does.
+bool curl_post(const char* url,
+               const std::string& user_pass,
+               const std::string& body,
+               const std::vector<std::string>& extra_headers,
+               const std::atomic<bool>* cancel, std::string* why) {
     std::string headers;
     for (const auto& h : extra_headers) {
         headers += h;
         headers += "\n";
     }
-    char hdr_path[PATH_MAX];
-    if (!write_tmp(headers, hdr_path, sizeof(hdr_path))) {
-        ::unlink(body_path);
-        return -2;
+    char body_path[PATH_MAX], hdr_path[PATH_MAX], cfg_path[PATH_MAX];
+    char reply_hdr[PATH_MAX], reply_body[PATH_MAX];
+    std::vector<const char*> made;
+    auto cleanup = [&] { for (const char* p : made) ::unlink(p); };
+    auto make = [&](const std::string& content, char* path) {
+        if (!write_tmp(content, path, PATH_MAX, why)) return false;
+        made.push_back(path);
+        return true;
+    };
+    if (!make(body, body_path) || !make(headers, hdr_path) ||
+        !make("", reply_hdr) || !make("", reply_body) ||
+        !write_curl_config(url, user_pass, cfg_path, sizeof(cfg_path), why)) {
+        cleanup();
+        return false;
     }
-    char url_path[PATH_MAX];
-    if (!write_curl_config(url, "", url_path, sizeof(url_path))) {
-        ::unlink(body_path);
-        ::unlink(hdr_path);
-        return -2;
-    }
+    made.push_back(cfg_path);
 
-    // --data-binary: -d @file drops the file's CR, LF and NUL bytes, and
-    // an ntfy message, its body as it is, came out on one line.
-    const int rc = run_curl({"-sS", "-X", "POST",
-                             "-H", std::string("@") + hdr_path,
-                             "--data-binary", std::string("@") + body_path,
-                             "--max-time", "10", "-K", url_path}, 15, cancel);
-    ::unlink(body_path);
-    ::unlink(hdr_path);
-    ::unlink(url_path);
-    return rc == 0 ? 0 : -3;
-}
-
-// HTTP POST with HTTP basic auth and an x-www-form-urlencoded body.
-// Used for Twilio's REST API; the "user:password" rides in the -K config
-// file (write_curl_config) so it doesn't appear in `ps`/argv.
-int curl_basic_form_post(const char* url,
-                         const std::string& user_pass,
-                         const std::string& form_body,
-              const std::atomic<bool>* cancel) {
-    if (user_pass.find(':') == std::string::npos) return -2;
-    char body_path[PATH_MAX];
-    if (!write_tmp(form_body, body_path, sizeof(body_path))) return -1;
-    char cfg_path[PATH_MAX];
-    if (!write_curl_config(url, user_pass, cfg_path, sizeof(cfg_path))) {
-        ::unlink(body_path);
-        return -3;
-    }
-
-    const int rc = run_curl({"-sS", "-X", "POST",
-                             "-H", "Content-Type: application/x-www-form-urlencoded",
-                             "--data-binary", std::string("@") + body_path,
-                             "--max-time", "10", "-K", cfg_path}, 15, cancel);
-    ::unlink(body_path);
-    ::unlink(cfg_path);
-    return rc == 0 ? 0 : -4;
+    const bool ran = run_curl({"-sS", "-X", "POST",
+                               "-H", std::string("@") + hdr_path,
+                               "--data-binary", std::string("@") + body_path,
+                               "-D", reply_hdr, "-o", reply_body,
+                               "--max-time", "10", "-K", cfg_path}, 15, cancel, why);
+    const bool ok = ran && http_ok(reply_hdr, reply_body, why);
+    cleanup();
+    return ok;
 }
 
 // SMTP delivery via curl. The credentials again ride in the -K config
@@ -201,26 +261,25 @@ int curl_basic_form_post(const char* url,
 //   user_pass: "user:pass" (may be empty for unauth relays)
 //   from/to: envelope sender + recipient
 //   message: full RFC822 DATA blob (headers + blank line + body)
-int curl_smtp(const char* url,
-              const std::string& user_pass,
-              const std::string& from,
-              const std::string& to,
-              const std::string& message,
-              const std::atomic<bool>* cancel) {
-    if (!user_pass.empty() && user_pass.find(':') == std::string::npos) return -2;
+bool curl_smtp(const char* url,
+               const std::string& user_pass,
+               const std::string& from,
+               const std::string& to,
+               const std::string& message,
+               const std::atomic<bool>* cancel, std::string* why) {
     char body_path[PATH_MAX];
-    if (!write_tmp(message, body_path, sizeof(body_path))) return -1;
+    if (!write_tmp(message, body_path, sizeof(body_path), why)) return false;
     char cfg_path[PATH_MAX];
-    if (!write_curl_config(url, user_pass, cfg_path, sizeof(cfg_path))) {
+    if (!write_curl_config(url, user_pass, cfg_path, sizeof(cfg_path), why)) {
         ::unlink(body_path);
-        return -4;
+        return false;
     }
-    const int rc = run_curl({"-sS", "--mail-from", from, "--mail-rcpt", to,
-                             "-T", body_path, "--max-time", "15", "-K", cfg_path},
-                            20, cancel);
+    const bool ok = run_curl({"-sS", "--mail-from", from, "--mail-rcpt", to,
+                              "-T", body_path, "--max-time", "15", "-K", cfg_path},
+                             20, cancel, why);
     ::unlink(body_path);
     ::unlink(cfg_path);
-    return rc == 0 ? 0 : -5;
+    return ok;
 }
 
 } // namespace
@@ -313,7 +372,22 @@ std::string smtp_message(AlertSeverity sev, const std::string& from,
     out += "MIME-Version: 1.0\r\n";
     out += "Content-Type: text/plain; charset=utf-8\r\n";
     out += "\r\n";
-    out += message;
+    // The body's line ends as SMTP has them, CR LF: curl dot-stuffs a
+    // line that starts with "." only when CR LF ends the one before, so
+    // a bare-LF "\n.\n" in the message (a process name holds anyone's
+    // bytes) went out as it was, and an MTA that takes <LF>.<LF> as the
+    // end of DATA cut the mail there and read the rest as commands.
+    for (size_t i = 0; i < message.size(); ++i) {
+        const char c = message[i];
+        if (c == '\r') {
+            out += "\r\n";
+            if (i + 1 < message.size() && message[i + 1] == '\n') ++i;
+        } else if (c == '\n') {
+            out += "\r\n";
+        } else {
+            out += c;
+        }
+    }
     out += "\r\n";
     return out;
 }
@@ -389,26 +463,23 @@ bool channel_complete(const AlertChannel& ch) {
     return false;
 }
 
-// One channel, one alert. Runs on the worker thread. 0 when curl
-// exited 0.
-int send_one(const AlertChannel& ch, AlertSeverity sev,
-             const std::string& rule_name, const std::string& message,
-             const std::atomic<bool>* cancel) {
+// One channel, one alert. Runs on the worker thread. True when the
+// channel took the message; otherwise `why` is for the log.
+bool send_one(const AlertChannel& ch, AlertSeverity sev,
+              const std::string& rule_name, const std::string& message,
+              const std::atomic<bool>* cancel, std::string* why) {
     if (ch.type == "ntfy") {
         // ntfy.sh: POST to <base>/<topic>, body = message,
         // headers: Title, Priority, Tags.
         std::string url = ch.url;
         if (!url.empty() && url.back() != '/') url.push_back('/');
         url += ch.topic;
-        return curl_post(url.c_str(), ntfy_payload(sev, rule_name, message),
-                         ntfy_headers(sev, rule_name), cancel);
+        return curl_post(url.c_str(), "", ntfy_payload(sev, rule_name, message),
+                         ntfy_headers(sev, rule_name), cancel, why);
     }
     if (ch.type == "discord") {
-        std::vector<std::string> hdrs = {
-            "Content-Type: application/json",
-        };
-        return curl_post(ch.url.c_str(),
-                         discord_payload(sev, rule_name, message), hdrs, cancel);
+        return curl_post(ch.url.c_str(), "", discord_payload(sev, rule_name, message),
+                         {"Content-Type: application/json"}, cancel, why);
     }
     if (ch.type == "telegram") {
         // url override; default to the public Bot API endpoint.
@@ -418,25 +489,29 @@ int send_one(const AlertChannel& ch, AlertSeverity sev,
             url += ch.token;
             url += "/sendMessage";
         }
-        std::vector<std::string> hdrs = {
-            "Content-Type: application/json",
-        };
-        return curl_post(url.c_str(),
-                         telegram_payload(sev, ch.topic, rule_name, message),
-                         hdrs, cancel);
+        return curl_post(url.c_str(), "", telegram_payload(sev, ch.topic, rule_name, message),
+                         {"Content-Type: application/json"}, cancel, why);
     }
     if (ch.type == "smtp") {
-        return curl_smtp(ch.url.c_str(), ch.token,
-                         ch.from, ch.topic,
-                         smtp_message(sev, ch.from, ch.topic,
-                                      rule_name, message), cancel);
+        if (!ch.token.empty() && ch.token.find(':') == std::string::npos) {
+            *why = "token is not \"user:password\"";
+            return false;
+        }
+        return curl_smtp(ch.url.c_str(), ch.token, ch.from, ch.topic,
+                         smtp_message(sev, ch.from, ch.topic, rule_name, message),
+                         cancel, why);
     }
     if (ch.type == "twilio") {
-        return curl_basic_form_post(ch.url.c_str(), ch.token,
-                                    twilio_form(ch.from, ch.topic,
-                                                rule_name, message), cancel);
+        // Basic auth with "AccountSID:AuthToken", an x-www-form-urlencoded body.
+        if (ch.token.find(':') == std::string::npos) {
+            *why = "token is not \"AccountSID:AuthToken\"";
+            return false;
+        }
+        return curl_post(ch.url.c_str(), ch.token, twilio_form(ch.from, ch.topic, rule_name, message),
+                         {"Content-Type: application/x-www-form-urlencoded"}, cancel, why);
     }
-    return -4;
+    *why = "unknown channel type";
+    return false;
 }
 
 } // namespace
@@ -480,14 +555,14 @@ int AlertDispatcher::dispatch(AlertSeverity sev,
                     failed_.fetch_add(1);
                     continue;
                 }
-                const int rc = send_one(ch, sev, rule_name, message, &cancel);
-                if (rc == 0) {
+                std::string why;
+                if (send_one(ch, sev, rule_name, message, &cancel, &why)) {
                     delivered_.fetch_add(1);
                 } else {
                     failed_.fetch_add(1);
                     std::fprintf(stderr,
-                        "budyk alert: channel '%s' (%s) failed (rc=%d)\n",
-                        ch.name.c_str(), ch.type.c_str(), rc);
+                        "budyk alert: channel '%s' (%s) failed: %s\n",
+                        ch.name.c_str(), ch.type.c_str(), why.c_str());
                 }
             }
         });

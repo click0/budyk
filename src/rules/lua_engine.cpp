@@ -627,8 +627,10 @@ void LuaEngine::run_actions(LuaRule* r) {
 }
 
 int LuaEngine::raise_alert(AlertSeverity sev, const std::string& rule, const std::string& message) {
-    std::fprintf(stderr, "budyk alert: %s %s: %s\n", severity_name(sev), rule.c_str(),
-                 message.c_str());
+    // One log line whatever the bytes: a message built from a process
+    // name holds anyone's, and a line break in it forged a log line.
+    std::fprintf(stderr, "budyk alert: %s %s: %s\n", severity_name(sev),
+                 header_value(rule).c_str(), header_value(message).c_str());
     if (alert_events_.size() < kMaxPendingAlerts) {
         alert_events_.push_back(AlertEvent{now_realtime_ns(), severity_name(sev), rule, message});
     } else {

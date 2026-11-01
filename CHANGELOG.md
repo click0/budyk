@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An alert channel's refusal counted as delivered, and was not logged.**
+  curl exits 0 on an HTTP 4xx or 5xx, and the dispatcher took that as
+  success: a Telegram `chat_id` that is wrong, a Discord webhook that
+  was deleted, an ntfy topic the token may not write, a 429, a message
+  over the channel's limit: every alert "delivered", none arriving,
+  nothing in the log, for as long as it stayed so. The reply's status is
+  checked now, and a refusal is logged with its status line and the
+  reply's first line (`HTTP/1.1 400 Bad Request: {"ok":false,...
+  "description":"Bad Request: chat not found"}`).
+- A channel that failed was logged as `failed (rc=-3)`: for a name that
+  does not resolve, a TLS failure, a timeout and curl not installed
+  alike. curl's own words go to the log now (`curl: (6) Could not
+  resolve host: ...`, `curl not found in PATH`).
+- The SMTP body's line ends are CR LF whatever the message had. curl
+  dot-stuffs a line that starts with `.` only after CR LF, so a bare-LF
+  `\n.\n` in a message (a process name is anyone's bytes) went to the
+  server as it was, and an MTA that takes `<LF>.<LF>` as the end of DATA
+  cut the mail there and read what followed as SMTP commands.
+- A line break in an alert's message or an `exec()` argument forged a
+  line in budyk's own log; they are logged on one line.
+
 - **A session ended 24 hours after the login however much it was used**:
   the dashboard, or the TUI polling each second, got the login screen in
   the middle of the day. A session in use is kept going now (sliding
