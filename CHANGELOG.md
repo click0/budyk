@@ -107,6 +107,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   after a second, and the TUI fetched as fast as the daemon answered:
   about 700 requests a second on its one HTTP thread, and `q` could
   never arrive. It asks once a second whatever stdin is.
+- **FreeBSD: md(4) memory disks and CTL LUNs counted as disks.** Both
+  register with devstat as direct-access devices, so a swap-backed
+  `/tmp` (`tmpmfs`) read as hundreds of MB/s of disk writes while no
+  disk moved, a vnode-backed image was counted on `md0` and again on
+  the disk under it, and an iSCSI target's `cbb0` doubled its backing
+  file's I/O. Neither is counted now, as Linux's `loop` and `ram` are
+  not. Such hosts read lower disk totals.
+- **FreeBSD: `proc.blocked` never counted an uninterruptible sleep.**
+  Only `SLOCK` was blocked; a process stuck in `biowait`, `wdrain` or
+  `nfsreq` (an NFS server that stopped answering) was sleeping, `S` in
+  `proc.top`, and a `proc.blocked > N` rule never fired. The state is as
+  ps(1) prints it: a sleep a signal cannot end is `D` and blocked, a
+  process being created `R` (it was `I`, which in ps means idle).
+- FreeBSD: a clock step (`ntpd -g` at boot, `date(1)`) moved every
+  process's start time, which is on the wall clock, so the tracker
+  matched none of them for a tick and `proc.top` by CPU was empty. The
+  start is taken from the boot time read in the same tick.
+- FreeBSD: an IPoIB interface (`ib0`) was left out of the network totals
+  whenever an Ethernet interface existed; it is a device's.
+- FreeBSD: only `dev.cpu.N.temperature` was read, so a server without
+  coretemp or amdtemp loaded (neither is by default) had no temperature
+  sensor; the ACPI thermal zones (`hw.acpi.thermal.tzN.temperature`)
+  are read too.
+- FreeBSD: a filesystem whose mount point the daemon cannot reach (a
+  dataset or a jail's root under a 0700 directory, budyk not root) was
+  left out of `fs` without a word; the mount list's own numbers stand in.
 - **The TUI could lock its address out of the login.** When its session
   ended and the stored password was no longer accepted (the daemon
   restarted with a new hash), or the login was throttled, it posted the
