@@ -101,12 +101,14 @@ There is no event-loop library (no libuv, kqueue or epoll). The daemon is:
   every request's Host must be one of budyk's names (an address,
   localhost, the hostname, `web.allowed_hosts`), or 403: DNS rebinding
   (`own_host()` in `router.cpp`).
-- **WebSocket hub:** client fds are non-blocking. `broadcast()` drops a
-  client whose send would block or writes a partial frame; `service()`,
-  called by the main thread once per tick, answers pings, honours close
-  frames and drops clients that hung up; with auth on, `drop_sessions()`
-  then closes (1008) every client whose session ended (logout, expiry).
-  A vanished client releases L3 on the next tick.
+- **WebSocket hub:** client fds are non-blocking. `broadcast()` sends
+  what each client's socket takes and keeps the rest for the next call
+  (`WebSocketHub::kMaxBacklog`, 1 MiB, behind: dropped); `service()`,
+  called by the main thread once per tick, sends what is owed, reads at
+  most `kServiceReadBudget` (4 KiB) from each client, answers pings,
+  honours close frames and drops clients that hung up; with auth on,
+  `drop_sessions()` then closes (1008) every client whose session ended
+  (logout, expiry). A vanished client releases L3 on the next tick.
 - **Worker threads** (`src/rules/worker.*`): one for alerts, one for
   `exec()`. Bounded FIFO of 256 jobs, started on first use, cancelled on
   shutdown after a grace period. Both survive a SIGHUP rules reload.

@@ -33,11 +33,13 @@ bool is_websocket_upgrade(const HttpRequest& req);
 /// Broadcast hub. Holds the connected client fds, all non-blocking, and
 /// never waits on a client (spec §3.3 item 4: one broadcast, slow
 /// consumers are dropped). The collector tick calls broadcast() and
-/// service(); the HTTP thread calls add(). A client is evicted, and
-/// its fd closed, when:
-///   - a send would block or writes only part of a frame (the socket
-///     buffer is full: the peer has not read for a long time, or the
-///     connection is half-open);
+/// service(); the HTTP thread calls add(). What a client's socket does
+/// not take at once is kept and sent as the peer reads (a frame larger
+/// than a fresh socket's buffer was a partial write and a drop: a
+/// dashboard's first frame on a host with hundreds of interfaces, on
+/// every reconnect). A client is evicted, and its fd closed, when:
+///   - it is more than kMaxBacklog behind (the peer has not read for a
+///     long time, or the connection is half-open);
 ///   - it sends a close frame, or closes the connection;
 ///   - it sends bytes that are not a WebSocket frame.
 class WebSocketHub {
@@ -49,6 +51,14 @@ public:
     /// so WebSocket connections alone cannot use up the daemon's
     /// descriptors.
     static constexpr size_t kMaxClients = 64;
+    /// Unsent bytes a client may fall behind by before it is dropped:
+    /// minutes of frames for a dashboard, a few of the largest.
+    static constexpr size_t kMaxBacklog = 1024 * 1024;
+    /// Bytes service() reads from one client per call. A client that kept
+    /// sending (a data frame of any length, which the hub discards) held
+    /// the collector tick for as long as it sent; the rest waits in the
+    /// socket, where TCP holds the sender back.
+    static constexpr size_t kServiceReadBudget = 4096;
 
     /// After a successful handshake, register the fd. The hub now owns
     /// the fd — it is switched to non-blocking, and close() / close_all()
@@ -60,16 +70,18 @@ public:
     /// without the hub's lock. Returns the number dropped.
     size_t drop_sessions(const std::function<bool(const std::string&)>& valid);
 
-    /// Send a text frame to every registered client. Clients whose
-    /// write fails or would block are removed and their fd closed.
+    /// Send a text frame to every registered client, after what it still
+    /// owes them. A client whose socket failed, or that is more than
+    /// kMaxBacklog behind, is removed and its fd closed.
     void  broadcast(const std::string& payload);
 
-    /// Read whatever the clients have sent and act on it: answer pings
-    /// with pongs, answer and honour close frames, drop clients that
-    /// hung up or talk garbage, skip over data frames (the dashboard
-    /// sends none). Returns the number of clients removed. Call it once
-    /// per tick, before size() is used for the client count, so a
-    /// vanished dashboard releases L3 within a tick.
+    /// Send what the clients are owed, read what they have sent (at
+    /// most kServiceReadBudget each) and act on it: answer pings with
+    /// pongs, answer and honour close frames, drop clients that hung up
+    /// or talk garbage, skip over data frames (the dashboard sends
+    /// none). Returns the number of clients removed. Call it once per
+    /// tick, before size() is used for the client count, so a vanished
+    /// dashboard releases L3 within a tick.
     size_t service();
 
     /// Drop every client; closes all owned fds.
@@ -83,11 +95,18 @@ private:
         std::string inbuf;      ///< bytes received, not yet parsed as a frame
         uint64_t    skip;       ///< payload bytes of a data frame still to discard
         std::string session;    ///< the token it was let in with ("" with auth off)
+        std::string outbuf;     ///< frames' bytes the socket has not taken yet
     };
 
     /// Parse and act on the frames in c->inbuf. Returns false when the
     /// client must be dropped (close frame, or not a WebSocket frame).
     bool consume_frames(Client* c);
+    /// Send what c->outbuf holds, as far as the socket takes it. False
+    /// when the socket failed.
+    bool flush_out(Client* c);
+    /// flush_out(), then `frame`, the rest kept in c->outbuf. False when
+    /// the socket failed or the client is more than kMaxBacklog behind.
+    bool queue_out(Client* c, const std::string& frame);
 
     mutable std::mutex  mtx_;
     std::vector<Client> clients_;

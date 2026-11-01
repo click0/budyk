@@ -181,8 +181,11 @@ HttpHandler make_router(const RouterDeps& d) {
                     403, "text/plain", "auth disabled\n"};
             }
             // Throttled before the body is even looked at, so a blocked
-            // client costs no Argon2 run.
-            const uint64_t now_s = static_cast<uint64_t>(::time(nullptr));
+            // client costs no Argon2 run. The windows are on the monotonic
+            // clock: on the wall clock, one stepped back by an hour kept
+            // every blocked address blocked an hour longer (Retry-After
+            // said so), and one stepped forward unblocked them all.
+            const uint64_t now_s = now_monotonic_ns() / 1000000000ULL;
             if (const int wait = login_limiter.retry_after(req.peer, now_s); wait > 0) {
                 budyk::HttpResponse r;
                 r.status       = 429;

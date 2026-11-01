@@ -280,6 +280,21 @@ int main() {
             std::chrono::steady_clock::now() - t0).count();
         assert(secs < 2.0);
         ::close(half);
+
+        // The deadline is the bound, not the deadline plus a socket
+        // timeout: a byte at 0 and one just inside the deadline (at 0.9
+        // of it) held the thread for two budgets, since the recv that
+        // began inside the deadline ran SO_RCVTIMEO out on its own.
+        int late = connect();
+        t0 = std::chrono::steady_clock::now();
+        assert(::send(late, "G", 1, MSG_NOSIGNAL) == 1);
+        ::usleep(270000);                         // 0.9 of the 300 ms budget
+        assert(::send(late, "E", 1, MSG_NOSIGNAL) == 1);
+        assert(::recv(late, &one, 1, 0) == 0);    // closed, no response
+        secs = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - t0).count();
+        assert(secs >= 0.25 && secs < 0.45);      // ~0.3 s, not ~0.57 s
+        ::close(late);
         s.stop();
     }
 

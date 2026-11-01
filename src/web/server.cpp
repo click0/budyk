@@ -27,16 +27,26 @@ constexpr size_t kMaxBodyBytes  = 64 * 1024;   // 64 KiB body cap
 using Clock    = std::chrono::steady_clock;
 using Deadline = Clock::time_point;
 
-// recv(2) with the per-request budget applied twice over: SO_RCVTIMEO
-// on the socket bounds one call (a client that sends nothing), and the
-// deadline bounds the whole request (a client that drips one byte at a
-// time, each within the socket timeout). Returns -1 on either.
-ssize_t recv_bounded(int fd, char* dst, size_t cap, Deadline deadline) {
+// recv(2) within the request's deadline: poll() waits for bytes until
+// the deadline, or io_timeout_ms with nothing from the client, and the
+// recv itself does not wait. The whole request is bounded by the
+// deadline, as server.h says: a wait that began just inside it used to
+// run SO_RCVTIMEO out (a byte at 0 and one at 4.9 s held the thread
+// 9.9 s). Returns -1 on either bound.
+ssize_t recv_bounded(int fd, char* dst, size_t cap, Deadline deadline, int io_timeout_ms) {
     for (;;) {
-        if (Clock::now() >= deadline) return -1;
-        const ssize_t n = ::recv(fd, dst, cap, 0);
-        if (n < 0 && errno == EINTR) continue;
-        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return -1;   // SO_RCVTIMEO
+        const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
+            deadline - Clock::now()).count();
+        if (left <= 0) return -1;
+        struct pollfd pfd{fd, POLLIN, 0};
+        const int pr = ::poll(&pfd, 1, static_cast<int>(left < io_timeout_ms ? left : io_timeout_ms));
+        if (pr < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (pr == 0) return -1;                      // nothing for io_timeout_ms, or the deadline
+        const ssize_t n = ::recv(fd, dst, cap, MSG_DONTWAIT);
+        if (n < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) continue;
         return n;
     }
 }
@@ -60,11 +70,11 @@ constexpr ssize_t kHeadersTooLarge = -2;
 // where the body starts (one past the blank line); 0 on EOF before that;
 // -1 on error or when the deadline passes; kHeadersTooLarge when the
 // block outgrows kHeaderReadCap.
-ssize_t read_until_headers(int fd, std::vector<char>* buf, Deadline deadline) {
+ssize_t read_until_headers(int fd, std::vector<char>* buf, Deadline deadline, int io_timeout_ms) {
     buf->resize(0);
     char tmp[1024];
     while (buf->size() < kHeaderReadCap) {
-        ssize_t n = recv_bounded(fd, tmp, sizeof(tmp), deadline);
+        ssize_t n = recv_bounded(fd, tmp, sizeof(tmp), deadline, io_timeout_ms);
         if (n < 0) return -1;
         if (n == 0) return 0;
         // Search the new chunk plus a 2-byte overlap with the old data.
@@ -76,10 +86,10 @@ ssize_t read_until_headers(int fd, std::vector<char>* buf, Deadline deadline) {
     return kHeadersTooLarge;
 }
 
-ssize_t read_full(int fd, char* dst, size_t want, Deadline deadline) {
+ssize_t read_full(int fd, char* dst, size_t want, Deadline deadline, int io_timeout_ms) {
     size_t total = 0;
     while (total < want) {
-        ssize_t n = recv_bounded(fd, dst + total, want - total, deadline);
+        ssize_t n = recv_bounded(fd, dst + total, want - total, deadline, io_timeout_ms);
         if (n < 0) return -1;
         if (n == 0) break;
         total += static_cast<size_t>(n);
@@ -446,7 +456,7 @@ bool HttpServer::handle_client(int client_fd, const char* peer) {
     };
 
     std::vector<char> buf;
-    ssize_t hdr_end = read_until_headers(client_fd, &buf, deadline);
+    ssize_t hdr_end = read_until_headers(client_fd, &buf, deadline, io_timeout_ms_);
     if (hdr_end == kHeadersTooLarge) {
         reply(HttpResponse{431, "text/plain", "request headers too large\n"});
         return false;
@@ -486,7 +496,7 @@ bool HttpServer::handle_client(int client_fd, const char* peer) {
     if (req.body.size() < len) {
         const size_t need = len - req.body.size();
         std::vector<char> rest(need);
-        ssize_t got = read_full(client_fd, rest.data(), need, deadline);
+        ssize_t got = read_full(client_fd, rest.data(), need, deadline, io_timeout_ms_);
         if (got < 0) return false;             // stalled mid-body
         if (got > 0) req.body.append(rest.data(), static_cast<size_t>(got));
     } else if (req.body.size() > len) {

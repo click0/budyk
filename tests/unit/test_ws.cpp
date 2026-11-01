@@ -3,12 +3,15 @@
 #include "web/sha1_base64.h"
 #include "web/ws_hub.h"
 
+#include <atomic>
 #include <cassert>
+#include <cerrno>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <sys/socket.h>
@@ -275,19 +278,18 @@ int main() {
     }
 
     // 10. A client that stops reading is dropped by broadcast() instead
-    //     of stalling it: once its socket buffer is full the send would
-    //     block, and the hub does not wait. The other client still gets
+    //     of stalling it: once its socket buffer is full the hub keeps
+    //     what it owes, and drops the client once that passes
+    //     kMaxBacklog; it never waits. The other client still gets
     //     every frame.
     {
         WebSocketHub hub;
         int slow, slow_peer, fast, fast_peer;
         pair(&slow, &slow_peer);
         pair(&fast, &fast_peer);
-        // A frame must fit the socket buffer, or even a client that
-        // keeps up is dropped on the first partial write: FreeBSD's
-        // unix-socket buffer is 8 KiB by default, Linux's about 200 KiB.
-        // Pin the buffer and keep frames small so the slow peer fills
-        // up after a bounded number of frames on either.
+        // Pin the buffer (FreeBSD's unix-socket buffer is 8 KiB by
+        // default, Linux's about 200 KiB) and keep frames small so the
+        // slow peer fills up after a bounded number of frames on either.
         const int sndbuf = 16 * 1024;
         assert(::setsockopt(slow, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf)) == 0);
         assert(::setsockopt(fast, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf)) == 0);
@@ -306,6 +308,9 @@ int main() {
             std::chrono::steady_clock::now() - t0).count();
         assert(hub.size() == 1);                    // slow one gone, fast one kept
         assert(frames < 10000);
+        // Dropped once more than kMaxBacklog was owed, not at the first
+        // full buffer (16 KiB: 16 frames); the slow peer never read.
+        assert(static_cast<size_t>(frames) * payload.size() > WebSocketHub::kMaxBacklog);
         assert(secs < 2.0);                         // no blocking on the slow peer
         char one;
         // The hub's end of the slow pair is closed; the peer sees EOF
@@ -317,6 +322,85 @@ int main() {
         assert(drain(fast_peer) == std::string("\x81\x0Astill here", 12));
         ::close(slow_peer);
         ::close(fast_peer);
+    }
+
+    // 10b. A frame larger than what the socket takes at once is not a
+    //      dropped client: the rest is kept and goes out as the peer
+    //      reads, before the next frame, whole and in order. A
+    //      dashboard's first frame on a fresh connection (256 interfaces:
+    //      ~60 KB of detail) was a partial write and a drop, on every
+    //      reconnect, for as long as the hot buffer stayed small.
+    {
+        WebSocketHub hub;
+        int a, a_peer;
+        pair(&a, &a_peer);
+        const int sndbuf = 16 * 1024;
+        assert(::setsockopt(a, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf)) == 0);
+        hub.add(a);
+        const std::string big(200 * 1024, 'b');
+        hub.broadcast(big);                         // partial: the tail is owed
+        assert(hub.size() == 1);
+        hub.broadcast("next");                      // queued behind it
+        assert(hub.size() == 1);
+        const std::string want = ws_text_frame(big) + ws_text_frame("next");
+        std::string got;
+        for (int i = 0; i < 2000 && got.size() < want.size(); ++i) {
+            got += drain(a_peer);                   // the peer makes room...
+            assert(hub.service() == 0);             // ...and the hub fills it
+        }
+        assert(got == want);
+        hub.broadcast("after");                     // nothing owed: straight out
+        assert(drain(a_peer) == ws_text_frame("after"));
+        ::close(a_peer);
+    }
+
+    // 12. service() reads at most kServiceReadBudget from a client per
+    //     call: one that kept sending (a data frame of any length, which
+    //     the hub discards as it arrives) held the collector tick for as
+    //     long as it sent. The rest waits in the socket, and the client
+    //     is kept.
+    {
+        WebSocketHub hub;
+        int a, a_peer;
+        pair(&a, &a_peer);
+        hub.add(a);
+        // A masked data frame with a 2^40-byte payload, then payload
+        // from another thread for 400 ms.
+        std::string hdr;
+        hdr.push_back(static_cast<char>(0x81));
+        hdr.push_back(static_cast<char>(0x80 | 127));
+        for (int i = 7; i >= 0; --i) {
+            hdr.push_back(static_cast<char>(((uint64_t{1} << 40) >> (i * 8)) & 0xFF));
+        }
+        hdr.append("\x12\x34\x56\x78", 4);
+        assert(::send(a_peer, hdr.data(), hdr.size(), 0) == static_cast<ssize_t>(hdr.size()));
+        std::atomic<bool> stop{false};
+        std::thread writer([&] {
+            const std::string chunk(4096, 'z');
+            while (!stop) {
+                if (::send(a_peer, chunk.data(), chunk.size(), MSG_NOSIGNAL | MSG_DONTWAIT) < 0 &&
+                    errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+                    break;
+                }
+            }
+        });
+        const auto t0 = std::chrono::steady_clock::now();
+        double longest = 0;
+        int    calls   = 0;
+        while (std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() < 0.4) {
+            const auto c0 = std::chrono::steady_clock::now();
+            assert(hub.service() == 0);
+            const double took = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - c0).count();
+            if (took > longest) longest = took;
+            ++calls;
+        }
+        stop = true;
+        writer.join();
+        assert(hub.size() == 1);                    // kept: nothing wrong with it
+        assert(longest < 0.1);                      // each call bounded, not the writer's 400 ms
+        assert(calls > 10);
+        ::close(a_peer);
     }
 
     // 11. drop_sessions(): a client whose session ended (logout, expiry)
