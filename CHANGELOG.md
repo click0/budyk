@@ -101,6 +101,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A custom level with a `priority` below L1's 0, or at 0 with an
   interval no shorter than L1's, can never be entered and was accepted
   without a word; the config says so now (the level is kept).
+- **`budyk tui` with stdin at its end flooded the daemon.** Run as
+  `budyk tui < /dev/null`, from a script, or with the password piped in
+  (`echo "$PW" | budyk tui`), the key read returned at once instead of
+  after a second, and the TUI fetched as fast as the daemon answered:
+  about 700 requests a second on its one HTTP thread, and `q` could
+  never arrive. It asks once a second whatever stdin is.
+- **The TUI could lock its address out of the login.** When its session
+  ended and the stored password was no longer accepted (the daemon
+  restarted with a new hash), or the login was throttled, it posted the
+  password again every second for ever: with the daemon's 5 failures a
+  minute, its address, a reverse proxy's address meaning everyone, was
+  refused the login for as long as it ran, and the screen said only
+  "login required or expired". It tries once and says why.
 
 - **A session ended 24 hours after the login however much it was used**:
   the dashboard, or the TUI polling each second, got the login screen in
