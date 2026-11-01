@@ -11,6 +11,12 @@ Type=simple
 # directory to exist; create it first, outside the sandbox ("+").
 ExecStartPre=+/usr/bin/install -d -o budyk -g budyk -m 0750 /var/db/budyk
 ExecStart=/usr/local/bin/budyk serve --config /etc/budyk/config.yaml
+# `systemctl reload budyk`: the rules file is read again (SIGHUP).
+ExecReload=/bin/kill -HUP $MAINPID
+# Stop budyk alone: it ends its children itself (an alert's curl in
+# flight, an exec() command), with a grace period; control-group would
+# have killed them with it.
+KillMode=mixed
 Restart=on-failure
 RestartSec=5
 

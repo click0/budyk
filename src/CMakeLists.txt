@@ -147,7 +147,8 @@ add_library(budyk_web STATIC
     web/spa.cpp
 )
 target_link_libraries(budyk_web PRIVATE budyk_core)
-# pthreads — HttpServer runs an accept loop on a worker std::thread.
+# pthreads — HttpServer runs its accept loop on a thread of its own
+# (pthread_create: std::thread's constructor throws when it fails).
 find_package(Threads REQUIRED)
 target_link_libraries(budyk_web PUBLIC Threads::Threads)
 # Argon2id for password hashing (spec §3.2). Required at v1.0.

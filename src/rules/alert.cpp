@@ -437,7 +437,33 @@ namespace {
 // the send used to make, done before queueing so dispatch() can report
 // the count of channels the alert will reach and log the rest once.
 bool channel_complete(const AlertChannel& ch) {
-    if (ch.type == "ntfy" || ch.type == "discord" || ch.type == "telegram") return true;
+    // The config loader asks the same (alert_channel_missing) and leaves
+    // such a channel out at start; a channel added by other means is
+    // checked here.
+    if (ch.type == "ntfy") {
+        if (ch.url.empty() || ch.topic.empty()) {
+            std::fprintf(stderr, "budyk alert: ntfy channel '%s' missing url/topic\n",
+                         ch.name.c_str());
+            return false;
+        }
+        return true;
+    }
+    if (ch.type == "discord") {
+        if (ch.url.empty()) {
+            std::fprintf(stderr, "budyk alert: discord channel '%s' missing url\n",
+                         ch.name.c_str());
+            return false;
+        }
+        return true;
+    }
+    if (ch.type == "telegram") {
+        if ((ch.token.empty() && ch.url.empty()) || ch.topic.empty()) {
+            std::fprintf(stderr, "budyk alert: telegram channel '%s' missing token/topic\n",
+                         ch.name.c_str());
+            return false;
+        }
+        return true;
+    }
     if (ch.type == "smtp") {
         if (ch.from.empty() || ch.topic.empty() || ch.url.empty()) {
             std::fprintf(stderr,

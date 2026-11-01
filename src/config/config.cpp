@@ -8,6 +8,7 @@ extern "C" {
 
 #include "core/parse_int.h"
 
+#include <cctype>
 #include <climits>
 #include <cmath>
 #include <cstdio>
@@ -19,6 +20,30 @@ extern "C" {
 #include <unistd.h>
 
 namespace budyk {
+
+const char* alert_channel_missing(const Config::AlertChannelConfig& ch) {
+    const std::string& t = ch.type;
+    if (t == "ntfy") {
+        return ch.url.empty() ? "no url (the ntfy server)" : ch.topic.empty() ? "no topic" : nullptr;
+    }
+    if (t == "discord") return ch.url.empty() ? "no url (the webhook)" : nullptr;
+    if (t == "telegram") {
+        if (ch.token.empty() && ch.url.empty()) return "no token (the bot's)";
+        return ch.topic.empty() ? "no topic (the chat id)" : nullptr;
+    }
+    if (t == "smtp") {
+        return ch.url.empty()  ? "no url (smtp[s]://host:port)"
+             : ch.from.empty() ? "no from (the sender)"
+             : ch.topic.empty() ? "no topic (the recipient)" : nullptr;
+    }
+    if (t == "twilio") {
+        return ch.url.empty()   ? "no url (the account's Messages.json)"
+             : ch.token.empty() ? "no token (\"AccountSID:AuthToken\")"
+             : ch.from.empty()  ? "no from (the sending number)"
+             : ch.topic.empty() ? "no topic (the number to text)" : nullptr;
+    }
+    return "unknown type (ntfy, discord, telegram, smtp, twilio)";
+}
 
 namespace {
 
@@ -80,10 +105,20 @@ void apply_str(yaml_document_t* d, const yaml_node_t* m, const char* key,
 // min), h or d: "300", "300s" (the spec's form), "5m", "1.5h", "500ms".
 bool parse_duration_full(const char* v, double* seconds) {
     if (v == nullptr || *v == '\0') return false;
+    // Digits with at most one point before the unit: strtod() also took
+    // "0x10" (16), "1e1" (10), " 5" and "infm", none of them a duration
+    // anyone writes on purpose.
+    size_t digits = 0, points = 0, number = 0;
+    for (const char* p = v; *p != '\0' && (std::isdigit(static_cast<unsigned char>(*p)) || *p == '.'); ++p) {
+        if (*p == '.') ++points; else ++digits;
+        ++number;
+    }
+    if (digits == 0 || points > 1) return false;
     errno = 0;
     char* end = nullptr;
     const double x = std::strtod(v, &end);
-    if (end == v || errno == ERANGE || !std::isfinite(x)) return false;
+    // strtod() read past the digits: a hex or exponent form.
+    if (end != v + number || errno == ERANGE || !std::isfinite(x)) return false;
     double unit = 0;
     if      (*end == '\0' || std::strcmp(end, "s") == 0)   unit = 1.0;
     else if (std::strcmp(end, "ms") == 0)                   unit = 0.001;
@@ -236,6 +271,17 @@ void apply_alert_channels(yaml_document_t* d, const yaml_node_t* m,
             std::fprintf(stderr,
                 "budyk config: %s (%s): no type (ntfy, discord, telegram, smtp, twilio); "
                 "left out\n", where.c_str(), ch.name.empty() ? "?" : ch.name.c_str());
+            continue;
+        }
+        // The type in any case (`Telegram`), as the booleans are read.
+        for (char& c : ch.type) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        // What the type needs to send anything, checked here: it used to
+        // be checked at the first alert, so a wrong type or a missing
+        // field was found hours later, when that alert went nowhere, and
+        // the start-up line had counted the channel as registered.
+        if (const char* missing = alert_channel_missing(ch); missing != nullptr) {
+            std::fprintf(stderr, "budyk config: %s (%s): %s; left out\n",
+                         where.c_str(), ch.name.empty() ? "?" : ch.name.c_str(), missing);
             continue;
         }
         dst->emplace_back(std::move(ch));
@@ -434,7 +480,7 @@ void apply_custom_levels(yaml_document_t* d, const yaml_node_t* col,
         long prio = 0;
         if (!parse_long_full(yaml_scalar(yaml_find_key(d, n, "priority")), &prio) ||
             prio < -1000 || prio > 1000) {
-            reject("'priority' is required: an integer (L1 = 0, L2 = 20, L3 = 30)");
+            reject("'priority' is required: an integer from -1000 to 1000 (L1 = 0, L2 = 20, L3 = 30)");
             continue;
         }
         lv.priority = static_cast<int>(prio);
@@ -635,8 +681,11 @@ int parse_document(yaml_parser_t* parser, Config* out, std::string* error) {
             apply_str(&doc, rules, "path", out->rules_path, sizeof(out->rules_path),
                       "rules.path");
         }
-        apply_bool(&doc, rules, "enable_exec",   &out->rules_enable_exec,     // legacy flat key
-                   "rules.enable_exec");
+        if (yaml_find_key(&doc, rules, "enable_exec") != nullptr) {    // legacy flat key
+            std::fprintf(stderr, "budyk config: rules.enable_exec is the old name of "
+                                 "rules.exec.enabled (still read)\n");
+            apply_bool(&doc, rules, "enable_exec", &out->rules_enable_exec, "rules.enable_exec");
+        }
         apply_bool(&doc, rules, "persist_state", &out->rules_persist_state, "rules.persist_state");
         apply_str (&doc, rules, "state_path",    out->rules_state_path,
                    sizeof(out->rules_state_path), "rules.state_path");

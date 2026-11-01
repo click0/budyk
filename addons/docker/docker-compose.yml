@@ -6,6 +6,7 @@ services:
       dockerfile: addons/docker/Dockerfile
     pid: host
     network_mode: host
+    init: true
     # The config mounted below: the image's own command reads the
     # example config it ships with.
     command: ["serve", "--config", "/etc/budyk/config.yaml"]

@@ -517,7 +517,7 @@ int deferred_exec(lua_State* L);
 int l_exec(lua_State* L) {
     auto* eng = engine_from(L);
     if (eng == nullptr || !eng->exec_enabled()) {
-        return luaL_error(L, "exec is disabled (enable with --enable-exec)");
+        return luaL_error(L, "exec is disabled (enable with --enable-exec or rules.exec.enabled: true)");
     }
     char        err[512] = "";
     ExecOutcome out;

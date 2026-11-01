@@ -14,6 +14,8 @@ LICENSE_FILE=	${WRKSRC}/LICENSE
 
 LIB_DEPENDS=	libargon2.so:security/libargon2 \
 		libyaml.so:textproc/libyaml
+# The alert channels and the LLM request run curl(1).
+RUN_DEPENDS=	curl:ftp/curl
 
 USES=		cmake lua:5.4 pkgconfig
 USE_GITHUB=	yes

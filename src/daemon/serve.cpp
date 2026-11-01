@@ -196,11 +196,20 @@ int cmd_serve(int argc, char* argv[], const char* version) {
             cli_enable_exec = true;
         } else if (std::strcmp(argv[i], "--enable-freeze") == 0) {
             cli_enable_freeze = true;
+        } else if (std::strcmp(argv[i], "--config") == 0) {
+            std::fprintf(stderr, "budyk serve: --config needs a value (the config file)\n");
+            return 1;
         } else {
             std::fprintf(stderr, "budyk serve: unknown arg '%s'\n", argv[i]);
             return 1;
         }
     }
+
+    // First thing: a SIGHUP in the first milliseconds (a deploy script's
+    // `service budyk start && kill -HUP`) ended the daemon with nothing
+    // logged, SIGHUP's default being to terminate. The handlers only set
+    // flags and write to the wake pipe when there is one.
+    install_signal_handlers();
 
     budyk::Config cfg;
     std::string cfg_err;
@@ -213,6 +222,16 @@ int cmd_serve(int argc, char* argv[], const char* version) {
     // CLI flags override config (operator intent on the command line wins).
     if (cli_enable_exec)   cfg.rules_enable_exec   = true;
     if (cli_enable_freeze) cfg.rules_enable_freeze = true;
+
+    // A password required with no hash, or not an Argon2id one, is a
+    // dashboard nobody can log in to; it started without a word.
+    if (cfg.auth_enabled && std::strncmp(cfg.password_hash, "$argon2id$", 10) != 0) {
+        std::fprintf(stderr,
+            "budyk serve: web.auth.enabled is true but web.auth.password_hash is %s: "
+            "nobody could log in. Run `budyk hash-password` and quote the hash.\n",
+            cfg.password_hash[0] == '\0' ? "empty" : "not an Argon2id hash ($argon2id$...)");
+        return 1;
+    }
 
     // Anyone who can write the rules file runs Lua as this daemon, and
     // anyone who can write the config decides what it does; say so when
@@ -230,7 +249,6 @@ int cmd_serve(int argc, char* argv[], const char* version) {
             cfg.listen_addr);
     }
 
-    install_signal_handlers();
     if (::pipe2(g_wake_pipe, O_NONBLOCK | O_CLOEXEC) != 0) {
         // Not fatal: without it a new client waits for the current sleep
         // to end before the level steps up to L3.
@@ -242,13 +260,20 @@ int cmd_serve(int argc, char* argv[], const char* version) {
 
     // Create data_dir if it is missing (one level, mode 0750 as the rc.d
     // script does), so a manual `budyk serve` on a fresh host works; a
-    // missing parent is still an error, reported by TierManager below.
+    // missing parent is an error that names it (the example config's
+    // /var/db/budyk on a Linux host without /var/db was reported as
+    // "cannot lock budyk.lock: No such file or directory").
     {
         struct stat st{};
         if (::stat(cfg.data_dir, &st) != 0 && errno == ENOENT) {
             if (::mkdir(cfg.data_dir, 0750) == 0) {
                 std::fprintf(stderr, "budyk serve: created data_dir '%s'\n", cfg.data_dir);
-            } else if (errno != ENOENT) {
+            } else if (errno == ENOENT) {
+                std::fprintf(stderr,
+                    "budyk serve: cannot create data_dir '%s': its parent directory does not "
+                    "exist (create it, or set data_dir to one that does)\n", cfg.data_dir);
+                return 1;
+            } else {
                 std::fprintf(stderr, "budyk serve: cannot create data_dir '%s': %s\n",
                              cfg.data_dir, std::strerror(errno));
                 return 1;
@@ -556,18 +581,30 @@ int cmd_serve(int argc, char* argv[], const char* version) {
         if (::gethostname(name, sizeof(name) - 1) == 0) deps.hostname = name;
     }
     const HttpHandler router = make_router(deps);
+    // A listen address that cannot be bound (not an IPv4 address, a port
+    // in use) is not the end: the rules and the alerts still run, and the
+    // started line says there is no dashboard (it said "listen=...:0").
+    bool http_up = true;
     if (const int hrc = http.start(cfg.listen_addr, cfg.listen_port, router); hrc != 0) {
+        http_up = false;
         std::fprintf(stderr,
-            "budyk serve: HttpServer.start(%s:%d) failed: %s%s%s — continuing without HTTP\n",
+            "budyk serve: HttpServer.start(%s:%d) failed: %s%s%s — continuing without HTTP "
+            "(no dashboard, no TUI, no API; listen takes an IPv4 address)\n",
             cfg.listen_addr, cfg.listen_port, budyk::HttpServer::describe(hrc),
             http.last_errno() != 0 ? ": " : "",
             http.last_errno() != 0 ? std::strerror(http.last_errno()) : "");
     }
 
-    std::fprintf(stderr,
-        "budyk serve: started (config=%s, data_dir=%s, rules=%d, listen=%s:%d)\n",
-        config_path, cfg.data_dir, engine.rule_count(),
-        cfg.listen_addr, http.bound_port());
+    if (http_up) {
+        std::fprintf(stderr,
+            "budyk serve: started (config=%s, data_dir=%s, rules=%d, listen=%s:%d)\n",
+            config_path, cfg.data_dir, engine.rule_count(),
+            cfg.listen_addr, http.bound_port());
+    } else {
+        std::fprintf(stderr,
+            "budyk serve: started (config=%s, data_dir=%s, rules=%d, no HTTP)\n",
+            config_path, cfg.data_dir, engine.rule_count());
+    }
     if (sched.mode() == budyk::CollectionMode::Always) {
         std::fprintf(stderr, "budyk serve: collection.mode always: collecting at L3 all the time\n");
     } else if (sched.mode() == budyk::CollectionMode::OnDemand) {

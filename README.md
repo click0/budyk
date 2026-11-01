@@ -271,6 +271,11 @@ Failed logins are throttled: after 5 failures from one address within a
 minute (`web.auth.max_login_failures`, `web.auth.login_window`), further
 attempts from that address get HTTP 429 until the minute is up, and no
 password hash is computed for them. A successful login clears the count.
+Fifty failures from all addresses together within the window throttle
+every login the same way (many addresses taking turns, or a proxy that
+makes every client one address). With `enabled: true` and no
+`password_hash`, or one that is not Argon2id, the daemon refuses to start:
+nobody could have logged in.
 A session lasts 24 hours from its last request: the dashboard's reloads
 and the TUI's polls keep it going, an open dashboard that only receives
 the stream does not. Signing out ends it at once.
@@ -355,7 +360,9 @@ watch("disk_storm", {
 
 **Fields.** `name`, `interval` and `priority` are required. `name` uses
 letters, digits, `_` or `-`, can't be L1–L3, and must be unique.
-`interval` is 0.1–86400 s. `when`, `hold` (default 0) and `storage_mb`
+`interval` is 0.1–86400 s. `priority` is an integer from -1000 to 1000;
+one below L1's 0, or at 0 with an interval no shorter than L1's, can
+never be entered, and the daemon says so. `when`, `hold` (default 0) and `storage_mb`
 (default 50) are optional. An invalid level is skipped with a message
 in the daemon log, and the other levels still load. A `when` that
 doesn't compile is also logged; that level can then only be switched on
@@ -426,8 +433,9 @@ message; a custom level's `when` that does counts as false.
 ## Rules
 
 Point `rules.path` at a `.lua` or `.yaml` file. After editing it, send
-`SIGHUP` (`kill -HUP <pid>`) to reload without a restart. Per-rule
-cooldowns carry over the reload.
+`SIGHUP` (`service budyk reload`, `systemctl reload budyk`, or `kill -HUP
+<pid>`) to reload without a restart. Per-rule cooldowns carry over the
+reload.
 
 ### Lua
 
@@ -634,7 +642,9 @@ dropped and logged until it drains.
 | `twilio` | SMS through Twilio |
 
 See [`config.example.yaml`](config.example.yaml) for the fields each type
-needs.
+needs. A channel of an unknown type, or without a field its type needs,
+is left out when the config loads and named in the log, so the start-up
+line's "registered N alert channel(s)" counts channels that can send.
 
 ## HTTP API
 

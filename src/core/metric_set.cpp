@@ -72,6 +72,13 @@ int parse_metric_set(const std::vector<std::string>& names, MetricSet* out,
                     if (c.bit == list) r.groups |= c.group;
                 }
                 r.detail |= list;
+            } else if (group == kGroupFileWatch) {
+                // Not a level's to pick: the watcher runs at every level.
+                if (error != nullptr) {
+                    *error = "'file_watch' is not a metric a level reads (security.file_watch "
+                             "runs at every level)";
+                }
+                return -EINVAL;
             } else {
                 if (error != nullptr) *error = "unknown metric '" + n + "'";
                 return -EINVAL;

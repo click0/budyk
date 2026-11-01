@@ -184,6 +184,11 @@ int cmd_fsck(int argc, char* argv[]) {
             config_path = argv[++i];
         } else if (argv[i][0] != '-' && dir == nullptr) {
             dir = argv[i];
+        } else if (std::strcmp(argv[i], "--config") == 0) {
+            std::fprintf(stderr,
+                "budyk fsck: --config needs a value (the config file)\n"
+                "usage: budyk fsck [--repair] [--config FILE] [DATA_DIR]\n");
+            return kExitFailed;
         } else {
             std::fprintf(stderr,
                 "budyk fsck: unknown arg '%s'\n"

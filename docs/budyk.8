@@ -114,7 +114,8 @@ Each level reads its own set of metrics,
 .B standard
 (every group),
 .B full
-(also each core, disk, interface and filesystem) or a list of names;
+(also each core, disk, interface and filesystem, and the top processes)
+or a list of names;
 standard at L1 and full elsewhere by default. A rule that reads a group
 its level does not collect is skipped for that tick.
 .B collection.mode
@@ -146,13 +147,30 @@ is given. The .deb and the .rpm install it as
 Lua monitoring rules.
 .TP
 .I /var/db/budyk/
-Ring-buffer data directory.
+Ring-buffer data directory
+.RI ( data_dir ;
+the .deb and the .rpm use
+.IR /var/lib/budyk ).
+Its parent must exist; the directory itself is made on the first start.
 .TP
 .I /var/db/budyk/budyk.lock
 Held (flock) by the running daemon, with its pid inside, so a second
 daemon on the same directory, and
 .BR "budyk fsck \-\-repair" ,
 refuse to start. The kernel releases it however the daemon exits.
+.TP
+.I /var/db/budyk/rule_state.tsv
+The rules' cooldowns and counters, written on shutdown and read on
+start
+.RB ( rules.persist_state ).
+.TP
+.I /var/db/budyk/sessions.tsv
+The dashboard's live sessions (mode 0600: the file holds bearer
+tokens), kept across a restart
+.RB ( web.auth.persist_sessions ).
+.TP
+.I /var/run/budyk/budyk.pid
+The pid file the FreeBSD rc.d script keeps.
 .SH SIGNALS
 .TP
 .B SIGTERM, SIGINT
@@ -160,6 +178,8 @@ Graceful shutdown \(em flushes rule state, closes the HTTP server, writes
 the fold windows still open and closes the ring files.
 .TP
 .B SIGHUP
+.RB ( "service budyk reload" ,
+.BR "systemctl reload budyk" )
 Reload the rules file specified by
 .I rules.path
 in the config without dropping the daemon. Per-rule

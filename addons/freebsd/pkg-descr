@@ -1,6 +1,6 @@
 budyk (Ukrainian "будик" — alarm clock) is a lightweight, self-contained
-server monitoring daemon. Single static binary, no external dependencies,
-no database.
+server monitoring daemon. One binary, no database, nothing to run beside
+it but curl(1) for the alert channels.
 
 Key features:
   * 3-level adaptive collection (L1 heartbeat / L2 watchful / L3 active) —
@@ -11,4 +11,6 @@ Key features:
   * ncurses-based terminal UI.
   * Argon2id password hashing per OWASP 2024.
 
-See %%DOCSDIR%%/config.example.yaml for a complete configuration schema.
+The package installs %%PREFIX%%/etc/budyk/config.yaml.sample, the
+complete configuration with every key explained, and rules.lua.sample,
+the default rules; budyk(8) describes the commands and the files.
