@@ -22,6 +22,17 @@ static std::string mktmp() {
     return std::string(tmpl);
 }
 
+static std::string slurp(const std::string& path) {
+    std::FILE* f = std::fopen(path.c_str(), "re");
+    assert(f != nullptr);
+    std::string out;
+    char buf[512];
+    size_t n;
+    while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) out.append(buf, n);
+    std::fclose(f);
+    return out;
+}
+
 int main() {
     // 1. Round-trip — token minted, verifies, then revoke removes it.
     {
@@ -180,6 +191,31 @@ int main() {
         assert(failed.load() == 0);
         SessionStore b(/*ttl_s*/ 3600);
         assert(b.load(path.c_str()) == 0 && b.size() == 20);
+        ::unlink(path.c_str());
+    }
+
+    // 12. Sliding expiration (spec §3.2): touch() moves the deadline on
+    //     once an eighth of the TTL has passed, and saves then, not on
+    //     every request; a session touched lives past its first deadline,
+    //     one left alone ends at it. Every session ended TTL after the
+    //     login, however much it was used.
+    {
+        const std::string path = mktmp();
+        SessionStore a(/*ttl_s*/ 2);
+        a.set_persist_path(path);
+        const std::string t     = a.create();
+        const std::string idle  = a.create();
+        const std::string first = slurp(path);
+        assert(a.touch(t));
+        assert(slurp(path) == first);               // within the first eighth: a verify
+        std::this_thread::sleep_for(std::chrono::milliseconds(600));
+        assert(a.touch(t));
+        assert(slurp(path) != first);               // slid, and saved: ends at 2.6 s now
+        std::this_thread::sleep_for(std::chrono::milliseconds(1600));   // 2.2 s
+        assert(a.verify(t));                        // in use: lives on
+        assert(!a.verify(idle));                    // left alone: ended at 2 s
+        assert(!a.touch(idle));
+        assert(!a.touch("not-a-real-token-deadbeef"));
         ::unlink(path.c_str());
     }
 

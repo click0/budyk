@@ -138,12 +138,15 @@ HttpHandler make_router(const RouterDeps& d) {
                 "budyk: this Host is not one of budyk's names; add it to web.allowed_hosts\n"};
         }
 
+        // touch(): a session in use is kept going (sliding expiration);
+        // one left alone for the TTL ends. The dashboard's reloads and
+        // the TUI's polls are such use; an open WebSocket alone is not.
         auto authed = [&cfg, &sessions](const HttpRequest& r) -> bool {
             if (!cfg.auth_enabled) return true;
             const std::string c = r.header("Cookie");
             if (c.empty())        return false;
             const std::string tok = cookie_value(c, "budyk_session");
-            return !tok.empty() && sessions.verify(tok);
+            return !tok.empty() && sessions.touch(tok);
         };
 
         // Static SPA — served at / and /index.html. Always public; the JS
@@ -425,14 +428,13 @@ HttpHandler make_router(const RouterDeps& d) {
                 budyk::samples_to_json(snap.data(), snap.size()));
 
             budyk::HttpResponse r;
-            r.hijack = [handshake, catchup, session, &ws, wake = d.wake](int fd) {
-                ssize_t n1 = ::send(fd, handshake.data(), handshake.size(), MSG_NOSIGNAL);
-                if (n1 != static_cast<ssize_t>(handshake.size())) {
-                    ::close(fd);
-                    return;
-                }
-                ssize_t n2 = ::send(fd, catchup.data(), catchup.size(), MSG_NOSIGNAL);
-                if (n2 != static_cast<ssize_t>(catchup.size())) {
+            // Sent within the server's bounds, as a response is: a
+            // blocking send() to a client that read a byte every few
+            // seconds held the HTTP thread for the whole catch-up frame.
+            r.hijack = [handshake, catchup, session, &ws, wake = d.wake,
+                        io = d.io_timeout_ms, rate = d.min_send_rate](int fd) {
+                if (budyk::send_bounded(fd, handshake.data(), handshake.size(), io, rate) < 0 ||
+                    budyk::send_bounded(fd, catchup.data(), catchup.size(), io, rate) < 0) {
                     ::close(fd);
                     return;
                 }

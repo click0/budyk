@@ -13,11 +13,16 @@
 #include <atomic>
 #include <deque>
 #include <cassert>
+#include <cerrno>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <fcntl.h>
 #include <mutex>
 #include <string>
 #include <sys/socket.h>
+#include <thread>
 #include <unistd.h>
 #include <vector>
 
@@ -39,9 +44,13 @@ struct World {
     int                    wakes = 0;
     std::string            dir;
     HttpHandler            handler;
+    int                    io_timeout_ms = 5000;        // the server's bounds, for the WebSocket upgrade
+    size_t                 min_send_rate = 256 * 1024;
 
     World() : sched(cfg.scheduler) {}
     explicit World(const SchedulerConfig& sc) : sched(sc) {}
+    World(size_t hot_cap, uint64_t session_ttl_s)
+        : hot(hot_cap), sessions(session_ttl_s), sched(cfg.scheduler) {}
 
     void init() {
         char tmpl[] = "/tmp/budyk_router_XXXXXX";
@@ -57,6 +66,8 @@ struct World {
         d.version = "9.9.9-test";
         d.hostname = "db\"1";                // escaped in the JSON
         d.recent_alerts = &alerts;
+        d.io_timeout_ms = io_timeout_ms;
+        d.min_send_rate = min_send_rate;
         handler = make_router(d);
     }
     ~World() {
@@ -429,6 +440,81 @@ int main() {
         assert(r.status == 200 && r.content_type == "application/json");
         assert(has(r.body, "{\"count\":2,\"alerts\":[{\"ts\":1,\"severity\":\"warning\","
                            "\"rule\":\"a\",\"message\":\"first\"},{\"ts\":2,"));
+    }
+
+    // 10. Sliding expiration (spec §3.2): a request with the session cookie
+    //     keeps the session going, so one in use does not end at the TTL.
+    //     A session ended TTL after the login however much it was used:
+    //     the dashboard, or the TUI polling each second, got the login
+    //     screen in the middle of the day.
+    {
+        World w(16, /*session_ttl_s*/ 2);
+        w.cfg.auth_enabled = true;
+        std::snprintf(w.cfg.password_hash, sizeof(w.cfg.password_hash), "%s", "$argon2id$v=19$dummy");
+        w.init();
+        const std::string cookie = "budyk_session=" + w.sessions.create();
+        assert(w.handler(get("/api/samples", cookie)).status == 200);
+        std::this_thread::sleep_for(std::chrono::milliseconds(600));   // past an eighth of the TTL
+        assert(w.handler(get("/api/samples", cookie)).status == 200);  // slid: ends at 2.6 s now
+        std::this_thread::sleep_for(std::chrono::milliseconds(1600));  // 2.2 s: past the login's TTL
+        assert(w.handler(get("/api/samples", cookie)).status == 200);
+        assert(w.handler(get("/api/samples", "budyk_session=nope")).status == 401);
+    }
+
+    // 11. The WebSocket handshake and the catch-up frame go out within the
+    //     server's bounds (io_timeout_ms plus the size at min_send_rate),
+    //     as a response does. A client that does not read got a blocking
+    //     send(): the HTTP thread sat in it for as long as the client
+    //     cared to read a byte at a time. It is dropped now, its socket
+    //     closed, and the hub never sees it; one that reads gets both and
+    //     joins the hub.
+    {
+        World w(2000, 86400);
+        w.io_timeout_ms = 200;
+        w.min_send_rate = 4 * 1024 * 1024;
+        w.init();
+        Sample s{};
+        for (int i = 0; i < 2000; ++i) {          // a catch-up frame of over 1 MB
+            s.timestamp_nanos = 1000 + static_cast<uint64_t>(i);
+            w.hot.push(s);
+        }
+        auto upgrade = [] {
+            HttpRequest up = get("/api/ws");
+            up.headers.push_back({"Upgrade", "websocket"});
+            up.headers.push_back({"Connection", "Upgrade"});
+            up.headers.push_back({"Sec-WebSocket-Version", "13"});
+            up.headers.push_back({"Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ=="});
+            return up;
+        };
+        HttpResponse r = w.handler(upgrade());
+        assert(static_cast<bool>(r.hijack));
+        int sp[2];
+        assert(::socketpair(AF_UNIX, SOCK_STREAM, 0, sp) == 0);
+        const auto t0 = std::chrono::steady_clock::now();
+        r.hijack(sp[0]);                           // the peer reads nothing
+        const auto took = std::chrono::steady_clock::now() - t0;
+        assert(took < std::chrono::seconds(5));
+        assert(w.ws.size() == 0 && w.wakes == 0);
+        assert(::fcntl(sp[0], F_GETFD) == -1 && errno == EBADF);   // closed by the hijack
+        char head[64];
+        const ssize_t n = ::read(sp[1], head, sizeof(head));
+        assert(n >= 12 && std::memcmp(head, "HTTP/1.1 101", 12) == 0);
+        ::close(sp[1]);
+
+        r = w.handler(upgrade());
+        assert(::socketpair(AF_UNIX, SOCK_STREAM, 0, sp) == 0);
+        std::atomic<size_t> got{0};
+        std::thread reader([&] {
+            char b[4096];
+            ssize_t k;
+            while ((k = ::read(sp[1], b, sizeof(b))) > 0) got += static_cast<size_t>(k);
+        });
+        r.hijack(sp[0]);                           // the peer reads it all
+        assert(w.ws.size() == 1 && w.wakes == 1);
+        w.ws.close_all();                          // the reader sees the end
+        reader.join();
+        ::close(sp[1]);
+        assert(got.load() > 1000000);              // the handshake and the whole catch-up
     }
 
     std::printf("test_router: PASS\n");

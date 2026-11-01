@@ -550,6 +550,8 @@ int cmd_serve(int argc, char* argv[], const char* version) {
     deps.poller_window_ns = kPollerWindowNs;
     deps.wake             = [] { wake_collection_loop(); };
     deps.version          = version;
+    deps.io_timeout_ms    = http.io_timeout_ms();
+    deps.min_send_rate    = http.min_send_rate();
     {
         char name[256] = "";
         if (::gethostname(name, sizeof(name) - 1) == 0) deps.hostname = name;

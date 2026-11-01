@@ -118,19 +118,20 @@ find_path(YAML_INCLUDE_DIR_RULES yaml.h REQUIRED)
 target_link_libraries(budyk_rules PRIVATE ${YAML_LIB_RULES})
 target_include_directories(budyk_rules PRIVATE ${YAML_INCLUDE_DIR_RULES})
 
-# AI suggestions
-add_library(budyk_ai STATIC
-    ai/baseline.cpp
-    ai/suggest.cpp
-    ai/llm_client.cpp
-)
-# budyk_rules for exec_command(): llm_client runs curl(1) through it.
-target_link_libraries(budyk_ai PRIVATE budyk_core budyk_util budyk_storage budyk_rules)
-# ENABLE_LLM is now an informational option only — llm_client invokes
-# curl(1) at runtime, so there's no build-time TLS / HTTP dep to gate.
-# The user opts in via `budyk suggest-rules --ai --api-key …`.
+# AI suggestions. Tier B, the LLM client, is in the binary only with
+# ENABLE_LLM (spec §3.7.3 item 3): without it `suggest-rules --ai` says
+# so, and nothing that talks to an LLM API is compiled.
+set(_budyk_ai_sources ai/baseline.cpp ai/suggest.cpp)
 if(ENABLE_LLM)
-    target_compile_definitions(budyk_ai PRIVATE BUDYK_LLM_ENABLED)
+    list(APPEND _budyk_ai_sources ai/llm_client.cpp)
+endif()
+add_library(budyk_ai STATIC ${_budyk_ai_sources})
+# budyk_rules for check_suggested_rules() (a scratch LuaEngine) and for
+# exec_command(): llm_client runs curl(1) through it.
+target_link_libraries(budyk_ai PRIVATE budyk_core budyk_util budyk_storage budyk_rules)
+if(ENABLE_LLM)
+    # PUBLIC: cli/commands.cpp (budyk_app) has the --ai path under it.
+    target_compile_definitions(budyk_ai PUBLIC BUDYK_LLM_ENABLED)
 endif()
 
 # Web server

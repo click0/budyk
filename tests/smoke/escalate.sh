@@ -12,7 +12,7 @@
 
 set -eu
 BIN=${1:?usage: escalate.sh path/to/budyk [port]}
-PORT=${2:-18768}
+PORT=${2:-18772}
 DIR=$(mktemp -d)
 PID=
 trap 'kill "$PID" 2>/dev/null || true; rm -rf "$DIR"' EXIT

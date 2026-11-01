@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #pragma once
+#include <sys/types.h>
+
 #include <atomic>
 #include <cstddef>
 #include <functional>
@@ -55,6 +57,16 @@ struct HttpResponse {
 
 using HttpHandler = std::function<HttpResponse(const HttpRequest&)>;
 
+/// send(2) `len` bytes to `fd` within `io_timeout_ms` plus the size at
+/// `min_rate` bytes per second, waiting for room with poll(): the bytes
+/// sent, or -1 when the peer is gone or reads slower than that. The
+/// bound a response gets, for what a hijack callback writes before the
+/// socket is its own (the WebSocket handshake and the catch-up frame):
+/// a blocking send() there held the HTTP thread for as long as a client
+/// cared to read a byte at a time (on FreeBSD SO_SNDTIMEO bounds each
+/// wait for room, not the call).
+ssize_t send_bounded(int fd, const void* data, size_t len, int io_timeout_ms, size_t min_rate);
+
 class HttpServer {
 public:
     HttpServer();
@@ -92,6 +104,7 @@ public:
     /// /api/range gets a few more seconds); a client reading slower is
     /// cut off, so it cannot hold the thread.
     void set_min_send_rate(size_t bytes_per_sec);
+    size_t min_send_rate() const;
 
 private:
     /// Written by start() and stop() on the caller's thread, read by the

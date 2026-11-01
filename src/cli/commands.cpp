@@ -2,7 +2,9 @@
 #include "cli/commands.h"
 
 #include "ai/baseline.h"
+#ifdef BUDYK_LLM_ENABLED
 #include "ai/llm_client.h"
+#endif
 #include "ai/suggest.h"
 #include "config/config.h"
 #include "core/clock.h"
@@ -97,6 +99,7 @@ int load_samples_for_suggest(const char* ring_path,
     return 0;
 }
 
+#ifdef BUDYK_LLM_ENABLED
 // Format a MetricBaseline as a one-line digest for the LLM prompt.
 std::string fmt_baseline_line(const char* name, const budyk::MetricBaseline& b) {
     if (b.n == 0) return {};
@@ -130,6 +133,7 @@ std::string build_llm_summary(const budyk::Sample* s, size_t n) {
                              budyk::compute_net_tx_bytes_per_sec_stats(s, n));
     return out;
 }
+#endif // BUDYK_LLM_ENABLED
 
 } // namespace
 
@@ -150,6 +154,7 @@ void restore_tty_and_reraise(int sig) {
     ::raise(sig);
 }
 
+#ifdef BUDYK_LLM_ENABLED
 // Ctrl-C (or a TERM, a HUP) while curl talks to the LLM API: the handler
 // raises the flag suggest_rules_llm() polls, curl is killed, its temp
 // files (one holds the API key) are removed, and then the signal ends
@@ -186,6 +191,7 @@ int suggest_rules_llm_cancellable(const char* api_key, const std::string& summar
     }
     return rc;
 }
+#endif // BUDYK_LLM_ENABLED
 
 } // namespace
 
@@ -291,6 +297,15 @@ int cmd_suggest_rules(int argc, char* argv[]) {
         }
     }
 
+#ifndef BUDYK_LLM_ENABLED
+    // Spec §3.7.3 item 3: a build with ENABLE_LLM=OFF has no LLM client.
+    if (ai) {
+        std::fprintf(stderr,
+            "budyk suggest-rules: this budyk was built without the LLM client "
+            "(ENABLE_LLM=OFF): --ai is not available, the local suggestions are\n");
+        return 1;
+    }
+#endif
     if (ai && (api_key == nullptr || *api_key == '\0')) {
         const char* env = std::getenv("ANTHROPIC_API_KEY");
         if (env != nullptr && *env != '\0') {
@@ -358,6 +373,7 @@ int cmd_suggest_rules(int argc, char* argv[]) {
 
     std::string doc;
     if (ai) {
+#ifdef BUDYK_LLM_ENABLED
         const std::string summary = build_llm_summary(samples.data(), samples.size());
         std::string why;
         if (suggest_rules_llm_cancellable(api_key, summary, &doc, &why) != 0) {
@@ -382,6 +398,7 @@ int cmd_suggest_rules(int argc, char* argv[]) {
         doc = "-- AI-suggested rules (Tier B, LLM-generated). Review before using.\n"
               "-- Generated from " + std::to_string(samples.size()) +
               " samples in window " + window_arg + ".\n\n" + doc;
+#endif // BUDYK_LLM_ENABLED: --ai was refused above
     } else {
         doc = budyk::suggest_rules_for_samples(samples.data(), samples.size());
         // The templates' own output, checked as the daemon would load it:

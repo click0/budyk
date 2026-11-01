@@ -15,7 +15,7 @@
 set -eu
 BIN=${1:?usage: upgrade.sh path/to/budyk path/to/older/budyk [port]}
 OLD=${2:?usage: upgrade.sh path/to/budyk path/to/older/budyk [port]}
-PORT=${3:-18770}
+PORT=${3:-18777}
 DIR=$(mktemp -d)
 PID=
 trap 'kill "$PID" 2>/dev/null || true; rm -rf "$DIR"' EXIT

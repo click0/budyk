@@ -11,6 +11,7 @@
 #include "web/ws_hub.h"
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <functional>
@@ -50,6 +51,11 @@ struct RouterDeps {
     const char*            version      = "";
     /// This host's name (gethostname), in /api/health.
     std::string            hostname;
+    /// The HTTP server's bounds (HttpServer::io_timeout_ms() and
+    /// min_send_rate()), for what the WebSocket upgrade sends before the
+    /// hub takes the socket: the handshake and the catch-up frame.
+    int                    io_timeout_ms = 5000;
+    size_t                 min_send_rate = 256 * 1024;
 };
 
 /// How many alerts the daemon keeps for /api/alerts (RAM only).
