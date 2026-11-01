@@ -21,18 +21,28 @@ Scheduler::Scheduler(const SchedulerConfig& cfg)
 Level Scheduler::tick(const Sample& current) {
     const uint64_t now = current.timestamp_nanos;
 
-    // The clock stepped back (an NTP correction, a VM restored): the
-    // requests' deadlines, instants on that clock, move back as far,
-    // keeping what was left of each. The other timers start afresh on a
-    // step back; a request made an hour before a step back of a day held
-    // its level (escalate(), a custom level's hold) for the day.
+    // The clock stepped back (an NTP correction, a VM restored): every
+    // instant on that clock moves back as far, keeping what was left of
+    // each. The requests' deadlines (escalate(), a custom level's hold):
+    // a request made an hour before a step back of a day held its level
+    // for the day. The client grace, the L2 hysteresis and the anomaly
+    // run: left where they were, each replayed its window a day later,
+    // when the clock reached the old stamp again (60 s of L3 with nobody
+    // connected). A request already on the new clock (a custom level's
+    // `when` on the very sample the step is seen on) stays: moved, it
+    // ended before it began, and the level was missed for a tick.
     if (last_tick_ns_ != 0 && now < last_tick_ns_) {
         const uint64_t back = last_tick_ns_ - now;
+        auto move = [back](uint64_t* t) { *t = *t > back ? *t - back : 0; };
         for (size_t id = 0; id <= kMaxLevelId; ++id) {
             if (!requested_[id]) continue;
-            requested_until_ns_[id] = requested_until_ns_[id] > back
-                                    ? requested_until_ns_[id] - back : 0;
+            if (requested_made_ns_[id] == 0 || requested_made_ns_[id] > now) {
+                move(&requested_until_ns_[id]);
+            }
         }
+        if (had_clients_)    move(&last_client_active_ns_);
+        if (had_anomaly_)    move(&last_anomaly_ns_);
+        if (in_anomaly_run_) move(&anomaly_run_start_ns_);
     }
     last_tick_ns_ = now;
 
@@ -42,8 +52,7 @@ Level Scheduler::tick(const Sample& current) {
     if (cfg_.mode == CollectionMode::OnDemand) {
         // Thresholds raise nothing: no L2, no escalation to L3.
     } else if (anomaly_ != AnomalyState::NORMAL) {
-        // A clock step back starts the run afresh.
-        if (!in_anomaly_run_ || now < anomaly_run_start_ns_) {
+        if (!in_anomaly_run_) {
             in_anomaly_run_       = true;
             anomaly_run_start_ns_ = now;
         }
@@ -55,7 +64,12 @@ Level Scheduler::tick(const Sample& current) {
     } else if (!escalated_) {
         in_anomaly_run_ = false;     // broken before it escalated
     }
-    if (escalated_ && (now < last_anomaly_ns_ || now - last_anomaly_ns_ >= grace_ns)) {
+    // The escalation ends once the anomaly has been gone for grace_period:
+    // only once it is gone. The tick that set escalated_ cleared it again
+    // with grace_period 0 (the anomaly's last tick was this one, 0 >= 0),
+    // and that value, which the config accepts, turned the escalation off.
+    if (escalated_ && anomaly_ == AnomalyState::NORMAL &&
+        (now < last_anomaly_ns_ || now - last_anomaly_ns_ >= grace_ns)) {
         escalated_      = false;
         in_anomaly_run_ = false;
     }
@@ -78,13 +92,14 @@ Level Scheduler::select(uint64_t now) const {
     };
 
     // L3: a client is connected, or the last one left less than
-    // grace_period ago; or a sustained anomaly, likewise.
+    // grace_period ago; or a sustained anomaly holds now, or held less
+    // than grace_period ago.
     const bool l3 = cfg_.mode == CollectionMode::Always ||
         client_count_.load() > 0 ||
         (had_clients_ && now >= last_client_active_ns_ &&
          (now - last_client_active_ns_) < grace_ns) ||
-        (escalated_ && now >= last_anomaly_ns_ &&
-         (now - last_anomaly_ns_) < grace_ns) ||
+        (escalated_ && (anomaly_ != AnomalyState::NORMAL ||
+                        (now >= last_anomaly_ns_ && (now - last_anomaly_ns_) < grace_ns))) ||
         requested(Level::L3);
 
     // L2: a threshold is crossed now, or was less than hysteresis ago.
@@ -119,19 +134,20 @@ Level Scheduler::higher(Level a, Level b) const {
     return interval_ms(b) < interval_ms(a) ? b : a;
 }
 
-void Scheduler::request(Level level, uint64_t until_ns) {
+void Scheduler::request(Level level, uint64_t until_ns, uint64_t made_at_ns) {
     const uint8_t id = static_cast<uint8_t>(level);
     if (id < 1 || id > kMaxLevelId) return;
     if (id >= kFirstCustomLevel && find_custom(level) == nullptr) return;
     if (requested_[id] && requested_until_ns_[id] >= until_ns) return;
     requested_[id]          = true;
     requested_until_ns_[id] = until_ns;
+    requested_made_ns_[id]  = made_at_ns;
 }
 
-bool Scheduler::request_by_name(const std::string& name, uint64_t until_ns) {
+bool Scheduler::request_by_name(const std::string& name, uint64_t until_ns, uint64_t made_at_ns) {
     Level lv;
     if (!level_by_name(name, &lv)) return false;
-    request(lv, until_ns);
+    request(lv, until_ns, made_at_ns);
     return true;
 }
 
@@ -214,12 +230,24 @@ int          Scheduler::client_count()    const { return client_count_.load(); }
 bool         Scheduler::escalated()       const { return escalated_; }
 
 AnomalyState Scheduler::check_anomaly(const Sample& s) const {
-    if (s.load.avg_1m       > cfg_.critical_load_1m       ) return AnomalyState::CRITICAL;
-    if (s.cpu.total_percent > cfg_.critical_cpu_percent   ) return AnomalyState::CRITICAL;
-    if (s.swap.used_percent > cfg_.critical_swap_percent  ) return AnomalyState::CRITICAL;
-    if (s.load.avg_1m       > cfg_.escalation_load_1m     ) return AnomalyState::ELEVATED;
-    if (s.cpu.total_percent > cfg_.escalation_cpu_percent ) return AnomalyState::ELEVATED;
-    if (s.swap.used_percent > cfg_.escalation_swap_percent) return AnomalyState::ELEVATED;
+    // Only what the sample has: a reading its sample lacks (a collector
+    // that failed, the baseline tick after it came back, a level whose
+    // metric set leaves it out) is a 0 in the struct, and 0 read as
+    // NORMAL broke an anomaly run before it escalated and started the
+    // hysteresis. A reading that is there and over a threshold says so;
+    // one that is missing cannot say the anomaly is gone, so with any
+    // of the three missing and the rest in bounds the state stays as it
+    // was.
+    const bool load = (s.groups & kGroupLoad) != 0;
+    const bool cpu  = (s.groups & kGroupCpu)  != 0;
+    const bool swap = (s.groups & kGroupSwap) != 0;
+    if (load && s.load.avg_1m       > cfg_.critical_load_1m       ) return AnomalyState::CRITICAL;
+    if (cpu  && s.cpu.total_percent > cfg_.critical_cpu_percent   ) return AnomalyState::CRITICAL;
+    if (swap && s.swap.used_percent > cfg_.critical_swap_percent  ) return AnomalyState::CRITICAL;
+    if (load && s.load.avg_1m       > cfg_.escalation_load_1m     ) return AnomalyState::ELEVATED;
+    if (cpu  && s.cpu.total_percent > cfg_.escalation_cpu_percent ) return AnomalyState::ELEVATED;
+    if (swap && s.swap.used_percent > cfg_.escalation_swap_percent) return AnomalyState::ELEVATED;
+    if (!load || !cpu || !swap) return anomaly_;
     return AnomalyState::NORMAL;
 }
 

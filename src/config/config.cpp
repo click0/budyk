@@ -492,6 +492,21 @@ void clamp_numbers(Config* c) {
     clamp_int(&c->scheduler.hysteresis_sec,   0, 86400, d.scheduler.hysteresis_sec,   "collection.l2.hysteresis");
     clamp_int(&c->scheduler.grace_period_sec, 0, 86400, d.scheduler.grace_period_sec, "collection.l3.grace_period");
     clamp_int(&c->scheduler.escalate_after_sec, 0, 86400, d.scheduler.escalate_after_sec, "collection.l2.escalate_after");
+    // A custom level below L1's priority (0) is never selected, and one
+    // at it only on a shorter interval than L1's: dead config, which was
+    // accepted without a word.
+    for (const auto& lv : c->scheduler.custom_levels) {
+        if (lv.priority < 0) {
+            std::fprintf(stderr,
+                "budyk config: collection.levels (%s): priority %d is below L1's 0: "
+                "the level can never be entered\n", lv.name.c_str(), lv.priority);
+        } else if (lv.priority == 0 && lv.interval_ms >= c->scheduler.l1_interval_sec * 1000) {
+            std::fprintf(stderr,
+                "budyk config: collection.levels (%s): priority 0 is L1's, and its interval "
+                "(%d ms) is not shorter than L1's (%d s): the level can never be entered\n",
+                lv.name.c_str(), lv.interval_ms, c->scheduler.l1_interval_sec);
+        }
+    }
     clamp_int(&c->hot_buffer_capacity,   1, 100000, d.hot_buffer_capacity,   "collection.hot_buffer.capacity");
     clamp_int(&c->hot_buffer_warm_grace, 0, 86400,  d.hot_buffer_warm_grace, "collection.hot_buffer.warm_grace");
     clamp_int(&c->tier1_max_mb, 1, 100000, d.tier1_max_mb, "storage.tier1_max_mb");
