@@ -32,6 +32,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Linux: a tick across a clock step read its rates as readings.** The
+  collectors divide a counter's change by the wall-clock interval since
+  their previous read; an NTP step at boot (a Pi with no RTC), a VM
+  resumed from a snapshot or a `date -s` made that interval nothing or an
+  hour, and every rate read as 0, or diluted 3600 times, stored as a
+  reading. When the wall clock and the monotonic clock disagree about the
+  interval by more than a second, the tick's rates are a baseline.
+- **Linux, `/proc` mounted `hidepid`: the process group read budyk's own
+  processes as the system's.** As the packaged unit's user, `readdir()`
+  listed budyk's pids only, so `proc.total` was 1 and `proc.top` budyk
+  alone, nothing logged. Pid 1 that cannot be read means the rest are
+  hidden: the group is left out and logged once ("Permission denied").
+- **Linux filesystems: a mount point budyk cannot reach was skipped in
+  silence**, so a full filesystem under `/root` or a 0700 home was never
+  reported as the service user; such mount points are counted and logged
+  when their number changes ("3 mount point(s) budyk cannot reach"). **A
+  filesystem hidden under another mount on the same point was listed with
+  the top one's numbers under its own name and type** (`/dev/shm` mounted
+  twice, an image mounted over a directory): only the top one is listed.
+  A device name's `\040` is a space, as the mount point's was.
+- **Linux memory: a kernel without `MemAvailable` (before 3.14) lost both
+  the memory and the swap group** for the daemon's life; it reads free(1)'s
+  sum (MemFree + Buffers + Cached + SReclaimable). **ZFS on Linux: the ARC
+  counted as used**, as it did on FreeBSD before 0.8.4: a root-on-ZFS host
+  read 40 points low and `memory_low` fired. The ARC above its minimum is
+  reclaimable and counted available.
+- **Linux thermal read `/sys/class/thermal` only**: a server whose sensors
+  are hwmon chips (k10temp, coretemp, nvme, drivetemp, IPMI), most of
+  them, had no temperature. The hwmon `temp*_input` files are read too.
+- Linux: a 32-bit kernel's snmp counter (TCP segments, UDP datagrams)
+  wrapping at 2^32 read as 0 for that interval; the wrap is counted. A
+  process in state `K` (wakekill, kernels 3.9 to 4.13) counts as blocked,
+  `x` (dead) is skipped like `X`. More CPUs than `cpu.cores` holds (1024)
+  is said in the log as the other caps are. `tests/smoke/crosscheck.sh`
+  leaves `zd`, `bcache` and `drbd` out as the collector does.
 - **A SIGHUP while the rules file was missing or unreadable dropped every
   rule.** A deploy's `mv rules.lua rules.lua.bak` with a HUP in between,
   a mount briefly gone, a chmod mistake: the reload took "no file" as "no

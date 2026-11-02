@@ -39,10 +39,20 @@ static int snmp_value(const char* names, const char* values,
     return 0;
 }
 
-/* Per-second rate of a cumulative counter; 0 when it went backwards
- * (a counter reset, or a network namespace switch). */
+/* Per-second rate of a cumulative counter. The snmp counters are
+ * `unsigned long`, 32 bits on a 32-bit kernel (a Raspberry Pi OS, an
+ * armv7 board): one that went back from under 2^32 wrapped, and the
+ * interval's count is what it took to get there and back (it read 0, a
+ * whole interval lost). These counters reset only at boot, when budyk
+ * restarts too; a 64-bit one that went back is 0 (a namespace switch). */
 static double rate(unsigned long long now, uint64_t prev, uint64_t dns) {
-    if (now < prev || dns == 0) return 0.0;
+    if (dns == 0) return 0.0;
+    if (now < prev) {
+        /* A wrap: from the upper half of 32 bits to the lower; anything
+         * else that went back is 0, as before. */
+        if (prev < (1ULL << 31) || prev >= (1ULL << 32) || now >= (1ULL << 31)) return 0.0;
+        return (double)((1ULL << 32) - prev + now) * 1.0e9 / (double)dns;
+    }
     return (double)(now - prev) * 1.0e9 / (double)dns;
 }
 

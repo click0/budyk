@@ -31,6 +31,19 @@ struct CollectContext {
     /// The groups whose collector failed on the last call: not in
     /// s->groups, and a baseline when they read again.
     uint32_t failed = 0;
+    /// The previous read's wall and monotonic clocks: a rate is a change
+    /// over the wall-clock interval, so a tick across a clock step (an
+    /// NTP step at boot, a VM resumed from a snapshot, `date -s`) reads
+    /// its rates as a baseline, not as a reading.
+    uint64_t last_wall_ns = 0;
+    uint64_t last_mono_ns = 0;
+    /// The caller's monotonic clock at this tick (now_monotonic_ns()),
+    /// set before each collect_one(); 0 (a test with synthetic
+    /// timestamps) skips the check.
+    uint64_t mono_now_ns = 0;
+    /// Mount points the filesystem collector could not reach last time
+    /// (budyk_fs_c::unreadable), logged when the count changes.
+    uint32_t fs_unreadable = 0;
     /// What was cut short when last checked, logged when it starts: a
     /// list holds BUDYK_MAX_ENTITIES, the totals follow BUDYK_MAX_COUNTED
     /// devices of each kind (bits: kCutDiskTotals, kCutNetTotals, and the

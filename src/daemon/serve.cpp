@@ -809,6 +809,7 @@ int cmd_serve(int argc, char* argv[], const char* version) {
             interruptible_sleep(idle_ms, reload_rules);
             continue;
         }
+        collect_ctx.mono_now_ns = now_monotonic_ns();
         collect_one(&s, &collect_ctx, sched.metrics(collect_at));
 
         // File-watch drain — non-blocking poll so the tick cadence is

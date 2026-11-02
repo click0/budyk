@@ -9,6 +9,7 @@ namespace budyk {
 void collect_one(Sample* s, CollectContext* ctx, const MetricSet& set) {
     budyk_sample_c c{};
     c.timestamp_nanos = s->timestamp_nanos;
+    const uint64_t mono = ctx->mono_now_ns;
 
     const uint32_t lists = set.detail & kDetailAll;
     uint32_t want = set.groups | kGroupsMinimal;
@@ -108,6 +109,24 @@ void collect_one(Sample* s, CollectContext* ctx, const MetricSet& set) {
         cut_short(kDetailMounts, c.fs.count > d->nmounts,
                   c.fs.count, d->nmounts, "filesystems", "fs.mounts lists");
     }
+    if ((failed & kGroupCpu) == 0 && list(kDetailCores) != nullptr) {
+        cut_short(kDetailCores, c.cpu.count > d->ncores, c.cpu.count, d->ncores,
+                  "CPUs", "cpu.cores lists");
+    }
+    // Mount points budyk cannot reach (EACCES as the service user: a
+    // mount under /root or a 0700 home) are not in fs, and were skipped
+    // in silence; logged when their number changes.
+    if ((failed & kGroupFs) == 0 && wants(kGroupFs) && c.fs.unreadable != ctx->fs_unreadable) {
+        if (c.fs.unreadable > 0) {
+            std::fprintf(stderr,
+                "budyk: %u mount point(s) budyk cannot reach (Permission denied): not in fs; "
+                "run it as root or give it search access to the directories above them\n",
+                c.fs.unreadable);
+        } else {
+            std::fprintf(stderr, "budyk: every mount point is reachable again\n");
+        }
+        ctx->fs_unreadable = c.fs.unreadable;
+    }
     // Past BUDYK_MAX_TRACKED_PROCS a process has no CPU time kept, so no
     // CPU rate: proc.top by CPU leaves it out. Said like the other caps
     // (it was the one cut without a word).
@@ -199,8 +218,27 @@ void collect_one(Sample* s, CollectContext* ctx, const MetricSet& set) {
     if ((failed & kGroupProc) != 0) failed_lists |= kDetailProcesses;
     const uint32_t read       = want & ~failed;
     const uint32_t read_lists = lists & ~failed_lists;
-    const uint32_t have       = read & ~(kRateGroups & ~ctx->last_groups);
-    const uint32_t have_lists = read_lists & ~(kRateLists & ~ctx->last_detail);
+    uint32_t have       = read & ~(kRateGroups & ~ctx->last_groups);
+    uint32_t have_lists = read_lists & ~(kRateLists & ~ctx->last_detail);
+    // The collectors divide a counter's change by the wall-clock interval
+    // since their previous read: across a clock step (an NTP step at boot,
+    // a VM resumed from a snapshot, `date -s`) that interval is not the
+    // time that passed, and the rates read as zero or diluted, stored as
+    // a reading. When the wall clock and the monotonic clock disagree
+    // about the interval by more than a second, the rates of this tick
+    // are a baseline, as a first read's.
+    if (mono != 0 && ctx->last_wall_ns != 0 && ctx->last_mono_ns != 0 && mono > ctx->last_mono_ns) {
+        const uint64_t mono_dt = mono - ctx->last_mono_ns;
+        const uint64_t wall_dt = s->timestamp_nanos > ctx->last_wall_ns
+                               ? s->timestamp_nanos - ctx->last_wall_ns : 0;
+        const uint64_t off = mono_dt > wall_dt ? mono_dt - wall_dt : wall_dt - mono_dt;
+        if (wall_dt == 0 || off > 1000000000ULL) {
+            have       &= ~kRateGroups;
+            have_lists &= ~kRateLists;
+        }
+    }
+    ctx->last_wall_ns = s->timestamp_nanos;
+    ctx->last_mono_ns = mono;
     ctx->last_groups = read;
     ctx->last_detail = read_lists;
     ctx->failed      = failed;

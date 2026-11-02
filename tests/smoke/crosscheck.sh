@@ -232,7 +232,9 @@ if FREEBSD:
     sys_disks = {n for n in sysctl("kern.disks").split() if not n.startswith("cd")}
     disks_cmp = {n for n in disks if not n.startswith("md")}
 else:
-    deny = ("loop", "ram", "zram", "dm-", "md", "fd", "sr", "nbd")
+    # As the collector's is_noise_name(): stacked devices (zd, bcache,
+    # drbd) are counted on the disks under them.
+    deny = ("loop", "ram", "zram", "dm-", "md", "fd", "sr", "nbd", "zd", "bcache", "drbd")
     sys_disks = {n for n in os.listdir("/sys/block") if not n.startswith(deny)}
     disks_cmp = disks
 if disks_cmp == sys_disks:

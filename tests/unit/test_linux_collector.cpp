@@ -246,13 +246,14 @@ int main() {
     }
 
     // 7g. Processes against a fixture /proc: one of each state (I and P
-    //     count as sleeping, t as stopped), X not counted, a directory
+    //     count as sleeping, t as stopped, K (wakekill, kernels 3.9 to
+    //     4.13) as blocked), X and x (dead) not counted, a directory
     //     that is not a pid skipped, threads summed.
     {
         Fixture fx;
         const char* tail = " 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 %d 0 1 0\n";
-        const char states[] = {'R', 'S', 'I', 'D', 'T', 't', 'Z', 'P', 'X'};
-        for (int i = 0; i < 9; ++i) {
+        const char states[] = {'R', 'S', 'I', 'D', 'T', 't', 'Z', 'P', 'X', 'K', 'x'};
+        for (int i = 0; i < 11; ++i) {
             char line[256];
             std::snprintf(line, sizeof(line), "%d (p%d) %c", 100 + i, i, states[i]);
             char rest[128];
@@ -263,14 +264,14 @@ int main() {
         // A name with a line break (prctl(PR_SET_NAME, "miner\n") is one
         // call for any process): read up to a newline, its line had no
         // ')' and the process hid from the counts and the top list.
-        fx.file("110/stat", "110 (miner\n) R 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 9 0 1 0\n");
+        fx.file("120/stat", "120 (miner\n) R 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 9 0 1 0\n");
         budyk_linux_set_proc_root(fx.root.c_str());
         budyk_sample_c s;
         std::memset(&s, 0, sizeof(s));
         assert(budyk_collect_proc_linux(&s) == 0);
-        assert(s.proc.total == 9 && s.proc.running == 2 && s.proc.sleeping == 3);
-        assert(s.proc.blocked == 1 && s.proc.stopped == 2 && s.proc.zombie == 1);
-        assert(s.proc.threads == 1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 + 9);
+        assert(s.proc.total == 10 && s.proc.running == 2 && s.proc.sleeping == 3);
+        assert(s.proc.blocked == 2 && s.proc.stopped == 2 && s.proc.zombie == 1);
+        assert(s.proc.threads == 1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 + 10 + 9);
     }
 
     // 7g2. The top processes against a fixture /proc: CPU% from the
@@ -434,6 +435,16 @@ int main() {
         s.timestamp_nanos = 6'500'000'000ULL;
         assert(budyk_collect_netstat_linux(&ctx, &s) == 0);
         assert(s.tcp.active_opens_per_sec == 0.0);
+        // A 32-bit kernel's counter wraps at 2^32: from the upper half to
+        // the lower is the count it took to get there and back, not 0 (an
+        // interval of ActiveOpens was lost on a Raspberry Pi OS).
+        snmp(4294967000u, 6, 54, 300);
+        s.timestamp_nanos = 7'500'000'000ULL;
+        assert(budyk_collect_netstat_linux(&ctx, &s) == 0);
+        snmp(500, 6, 54, 300);
+        s.timestamp_nanos = 8'500'000'000ULL;
+        assert(budyk_collect_netstat_linux(&ctx, &s) == 0);
+        assert(near(s.tcp.active_opens_per_sec, 296.0 + 500.0));
 
         fx.file("net/snmp", "Ip: Forwarding\nIp: 1\n");   // no Tcp/Udp lines
         assert(budyk_collect_netstat_linux(&ctx, &s) != 0);
@@ -995,6 +1006,94 @@ int main() {
         assert(sum > 99.0 && sum < 101.0);
         // total_percent is everything but idle and iowait.
         assert(near(s.cpu.total_percent, 100.0 - s.cpu.idle_percent - s.cpu.iowait_percent));
+    }
+
+    // 10. Memory against a fixture meminfo: no MemAvailable (kernels
+    //     before 3.14) is free(1)'s sum, MemFree + Buffers + Cached +
+    //     SReclaimable, and swap is read with it (both groups were left
+    //     out for the daemon's life); a ZFS ARC above its minimum is
+    //     reclaimable, so counted available (a root-on-ZFS host read 40
+    //     points low); never above the total.
+    {
+        Fixture fx;
+        fx.file("meminfo", "MemTotal:       8000000 kB\nMemFree:        1000000 kB\n"
+                           "Buffers:         200000 kB\nCached:         2000000 kB\n"
+                           "SReclaimable:    300000 kB\nSwapTotal:      1000000 kB\n"
+                           "SwapFree:        750000 kB\n");
+        budyk_linux_set_proc_root(fx.root.c_str());
+        budyk_sample_c s;
+        std::memset(&s, 0, sizeof(s));
+        assert(budyk_collect_memory_linux(&s) == 0);
+        assert(s.mem.total == 8000000ULL * 1024 && s.mem.available == 3500000ULL * 1024);
+        assert(near(s.mem.available_percent, 43.75));
+        assert(s.swap.total == 1000000ULL * 1024 && s.swap.used == 250000ULL * 1024);
+        fx.file("meminfo", "MemTotal:       8000000 kB\nMemFree:        1000000 kB\n"
+                           "MemAvailable:   3000000 kB\n");
+        fx.file("spl/kstat/zfs/arcstats",
+                "12 1 0x01 123 5904 8 9\nname type data\nhits 4 100\n"
+                "size 4 2147483648\nc_min 4 1073741824\nc_max 4 4294967296\n");
+        assert(budyk_collect_memory_linux(&s) == 0);
+        assert(s.mem.available == 3000000ULL * 1024 + 1073741824ULL);   // + (size - c_min)
+        fx.file("spl/kstat/zfs/arcstats", "name type data\nsize 4 9000000000000\nc_min 4 0\n");
+        assert(budyk_collect_memory_linux(&s) == 0);
+        assert(s.mem.available == s.mem.total);
+        fx.file("meminfo", "MemTotal:       8000000 kB\nBuffers:         200000 kB\n");
+        assert(budyk_collect_memory_linux(&s) == -ENODATA);    // neither key
+    }
+
+    // 11. Thermal against a fixture /sys: the ACPI zones and the hwmon
+    //     chips' temp*_input (k10temp, nvme, drivetemp: most servers have
+    //     these only, and read "no sensor"); the hottest of all, every
+    //     reading a sensor; a file that is not a reading skipped.
+    {
+        Fixture fx;
+        budyk_sample_c s;
+        std::memset(&s, 0, sizeof(s));
+        assert(budyk_collect_thermal_linux(&s) == 0);
+        assert(!s.thermal.present && s.thermal.sensor_count == 0);
+        fx.file("sys/class/thermal/thermal_zone0/temp", "45000\n");
+        fx.file("sys/class/hwmon/hwmon0/name", "k10temp\n");
+        fx.file("sys/class/hwmon/hwmon0/temp1_input", "61250\n");
+        fx.file("sys/class/hwmon/hwmon0/temp1_label", "Tctl\n");
+        fx.file("sys/class/hwmon/hwmon0/in0_input", "1200\n");
+        fx.file("sys/class/hwmon/hwmon1/temp1_input", "50000\n");
+        fx.file("sys/class/hwmon/hwmon1/temp2_input", "\n");
+        assert(budyk_collect_thermal_linux(&s) == 0);
+        assert(s.thermal.present && s.thermal.sensor_count == 3);
+        assert(near(s.thermal.max_celsius, 61.25));
+    }
+
+    // 12. Filesystems against a fixture mountinfo: a mount point that
+    //     comes again later is a filesystem hidden under another mount on
+    //     the same point, and only the top one is listed (the hidden line
+    //     took the top's numbers under its own name and type); a device
+    //     name's \040 is a space; a mount point budyk cannot reach is
+    //     counted as unreadable, not listed, and does not fail the group.
+    {
+        Fixture fx;
+        const std::string over = fx.root + "/over";
+        const std::string locked = fx.root + "/locked";
+        assert(::mkdir(over.c_str(), 0700) == 0);
+        assert(::mkdir(locked.c_str(), 0700) == 0);
+        assert(::mkdir((locked + "/mnt").c_str(), 0700) == 0);
+        const bool can_lock = ::getuid() != 0;
+        if (can_lock) assert(::chmod(locked.c_str(), 0000) == 0);
+        const std::string info =
+            "30 25 0:30 / " + over + " rw - hidden_fs /dev/under rw\n"
+            "31 25 0:31 / " + over + " rw - topfs /dev/my\\040disk rw\n"
+            "32 25 0:32 / " + locked + "/mnt rw - ext4 /dev/sdz1 rw\n";
+        fx.file("self/mountinfo", info);
+        budyk_linux_set_proc_root(fx.root.c_str());
+        std::unique_ptr<budyk_detail_c> d(new budyk_detail_c());
+        budyk_sample_c s;
+        std::memset(&s, 0, sizeof(s));
+        assert(budyk_collect_fs_linux_ex(&s, d.get()) == 0);
+        assert(s.fs.present && s.fs.count == 1 && d->nmounts == 1);
+        assert(std::string(d->mounts[0].type) == "topfs");
+        assert(std::string(d->mounts[0].device) == "/dev/my disk");
+        assert(std::string(d->mounts[0].mount) == over);
+        assert(s.fs.unreadable == (can_lock ? 1u : 0u));
+        if (can_lock) ::chmod(locked.c_str(), 0700);
     }
 
     std::printf("test_linux_collector: PASS\n");

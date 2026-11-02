@@ -53,7 +53,14 @@ the code still differ, the code wins and this file says how.
   it starts failing), and a tick that reads nothing makes the next read
   a baseline. Filesystems are read from `/proc/self/mountinfo`, read-only
   by the filesystem's own options (systemd's ProtectSystem=strict makes
-  every mount look read-only).
+  every mount look read-only); a mount point budyk cannot reach (EACCES
+  as the service user) is counted in `budyk_fs_c::unreadable` and logged
+  when the count changes; a filesystem hidden under another mount on the
+  same point is left out. `/proc` mounted `hidepid` leaves the process
+  group out (pid 1 unreadable means the rest are hidden). The rates are
+  changes over the wall-clock interval between reads: a tick across a
+  clock step (the wall and the monotonic clock disagree by over a second,
+  `CollectContext::mono_now_ns`) is a baseline for the rate groups.
 - **Storage:** one ring file per level, records in a codec of our own. A
   new ring's header goes in with `pwrite` before it is mapped (a store
   through the mapping into the sparse file's hole is SIGBUS on a full
@@ -335,6 +342,10 @@ The gates a local build does not show:
 - The per-entity detail (cores, disks, interfaces, filesystems, top
   processes) is live only: not in the rings, so not in the history.
 - FreeBSD 13 not in CI.
+- cgroup limits are not read: budyk in a container limited with `-m` or
+  `--cpus` reports the host's memory and CPU count (`/proc/meminfo`,
+  `/proc/stat`), so `mem.available_percent` cannot show the container's
+  own pressure.
 
 ### Kept on purpose for later milestones (do not remove as dead code)
 
