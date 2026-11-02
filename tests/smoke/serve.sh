@@ -370,6 +370,25 @@ else
 fi
 mv "$DIR/rules.lua.gone" "$DIR/rules.lua"
 
+# A rules file with escalate() at file scope loads at start, and loaded
+# at a SIGHUP only once the check engine knew the level names (every
+# SIGHUP was "unknown level 'L3'", so no edit of such a file could be
+# applied without a restart). The file-scope alert() reaches the log
+# once, from the live engine, not from the check as well.
+cat > "$DIR/rules.lua" <<'EOF'
+escalate("L3", 5)
+alert("reloaded", "info", "file-scope alert")
+watch("after_hup", { when = function() return false end })
+EOF
+kill -HUP "$PID"
+sleep 1.5
+if grep -q "SIGHUP — rules reloaded (1 rule(s))" "$DIR/log" &&
+   [ "$(grep -c 'budyk alert: info reloaded: file-scope alert' "$DIR/log")" -eq 1 ]; then
+    echo "ok   a SIGHUP takes a rules file with escalate() at file scope, its alert() once"
+else
+    echo "FAIL: a SIGHUP with escalate() at file scope: $(grep -c 'info reloaded' "$DIR/log") alert line(s); $(grep 'SIGHUP' "$DIR/log" | tail -1)"; fail=1
+fi
+
 kill -TERM "$PID"
 if ! wait "$PID"; then
     echo "FAIL: daemon exited non-zero"; fail=1

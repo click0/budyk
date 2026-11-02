@@ -123,14 +123,30 @@ public:
 
     /// An alert (a rule's "alert" action, or alert() from Lua): logged,
     /// queued for take_alerts() and sent to every channel. Returns the
-    /// number of channels it was queued for.
+    /// number of channels it was queued for. The name and the message
+    /// are cut to kMaxAlertNameBytes / kMaxAlertMessageBytes, marked
+    /// "… (N bytes cut)": they are copied out of the Lua heap, which
+    /// rules.limits.memory_mb bounds, into the queue, the channels'
+    /// jobs, the daemon's recent alerts and a WebSocket frame, which it
+    /// did not (256 alerts of 15 MiB held gigabytes).
+    static constexpr size_t kMaxAlertNameBytes    = 256;
+    static constexpr size_t kMaxAlertMessageBytes = 4096;
     int raise_alert(AlertSeverity sev, const std::string& rule, const std::string& message);
     /// The alerts raised since the last call, oldest first: the serve loop
     /// pushes them to the dashboards and keeps them for /api/alerts. At
-    /// most kMaxPendingAlerts wait; the rest are counted, not kept.
+    /// most kMaxPendingAlerts wait; the rest are counted, not kept, and
+    /// the first one dropped between two calls is logged.
     static constexpr size_t kMaxPendingAlerts = 256;
     std::vector<AlertEvent> take_alerts();
     uint64_t                alerts_dropped() const;
+
+    /// A probe engine checks a rules file (the SIGHUP reload loads the new
+    /// file into one first): alert() queues, logs and sends nothing, and
+    /// freeze() / unfreeze() signal nothing (exec() already runs nothing
+    /// while a file loads). A file-scope alert() went out twice per
+    /// reload, and a freeze() stopped the process a second time.
+    void set_probe(bool probe);
+    bool probe() const;
 
     /// True while load_string() / load_file() runs the rules file. exec()
     /// called then returns the command as an action instead of running it
@@ -270,6 +286,8 @@ private:
     std::vector<Escalation>     escalations_;
     std::vector<AlertEvent>     alert_events_;
     uint64_t                    alerts_dropped_ = 0;
+    uint64_t                    alerts_dropped_tick_ = 0;   ///< since the last take_alerts()
+    bool                        probe_ = false;
     bool                        loading_        = false;
     bool                     has_file_state_  = false;
     FileWatchState           file_state_;

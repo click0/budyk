@@ -518,8 +518,8 @@ Functions available to rules:
 
 | Function | Purpose |
 |----------|---------|
-| `alert(name, severity, message)` | Raise an alert: logged, sent to every configured channel and to the dashboards, kept for `/api/alerts`. `severity` is `"info"`, `"warning"` (default) or `"critical"`. |
-| `print(...)` | Write to the daemon log. |
+| `alert(name, severity, message)` | Raise an alert: logged, sent to every configured channel and to the dashboards, kept for `/api/alerts`. `severity` is `"info"`, `"warning"` (default) or `"critical"`. The name is cut to 256 bytes and the message to 4096, marked `… (N bytes cut)`; past 256 alerts in one tick the rest reach the log and the channels, not the dashboards. |
+| `print(...)` | Write to the daemon log (the bytes written count against `rules.limits.instructions`, as `collectgarbage()` counts the heap it walks; `collectgarbage("stop")` and the tuning options are not available). |
 | `exec(cmd [, timeout_s])` | Run a program: a string or an argv table, absolute path, 30 s timeout by default (in the rules file itself it returns the command as an action instead, see above). **Off by default.** Enable with `rules.exec.enabled` or `--enable-exec`, and restrict it with `rules.exec.allow`. The command runs in the background: the call returns `{ queued = true }` at once (or `{ queued = false, error = "exec queue full" }`), the rules carry on, and the outcome is logged. To run it inline and get its result, `exec(cmd, { timeout = 5, wait = true })` returns `{ ok, exit_status, signal, timed_out, elapsed_seconds }`; the tick waits, so that timeout is capped at 60 s. |
 | `freeze(pid)` / `unfreeze(pid)` | Send `SIGSTOP` / `SIGCONT`. **Off by default.** Enable with `rules.freeze.enabled` or `--enable-freeze`, and restrict by process name with `rules.freeze.allow`. |
 | `collected(name)` | Whether the sample has a group (`"disk"`, `"self"`) or list (`"disk.devices"`); see [What each level collects](#what-each-level-collects). Raises for an unknown name. |
@@ -581,8 +581,9 @@ A group or list the current level does not collect skips the rule; see
 [What each level collects](#what-each-level-collects).
 
 Rules run in a sandbox that has only the base library, `math`, `string`
-and `table`. `io`, `os`, `require`, `load`, `loadfile` and `dofile` are
-not available.
+and `table`. `io`, `os`, `require`, `load`, `loadfile`, `dofile` and
+`string.dump` are not available, and the rules file is read as text
+(not as precompiled bytecode).
 
 A rule cannot stall the daemon. Each call into Lua (a `when`, an
 action, a custom level's `when`, the rules file being loaded) may run

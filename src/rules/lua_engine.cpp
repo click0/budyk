@@ -205,12 +205,31 @@ int sandbox_setmetatable(lua_State* L) {
     return call_upvalue(L);
 }
 
+int sandbox_collectgarbage(lua_State* L);
+int sandbox_print(lua_State* L);
+
 void open_sandbox_libs(lua_State* L) {
     // Only the safe subset: base + math + string + table.
     luaL_requiref(L, "_G",     luaopen_base,   1); lua_pop(L, 1);
     luaL_requiref(L, "math",   luaopen_math,   1); lua_pop(L, 1);
     luaL_requiref(L, "string", luaopen_string, 1); lua_pop(L, 1);
     luaL_requiref(L, "table",  luaopen_table,  1); lua_pop(L, 1);
+
+    // collectgarbage() and print() work in C with nothing allocated, so
+    // neither the count hook nor the allocator charged them: a loop of
+    // full collections held the tick for minutes on a large heap, and
+    // print() of a large string wrote gigabytes to the log in one tick.
+    // Both charge what they do (see them); string.dump has no use in a
+    // sandbox that loads no chunk.
+    lua_getglobal(L, "collectgarbage");
+    lua_pushcclosure(L, sandbox_collectgarbage, 1);
+    lua_setglobal(L, "collectgarbage");
+    lua_pushcfunction(L, sandbox_print);
+    lua_setglobal(L, "print");
+    lua_getglobal(L, "string");
+    lua_pushnil(L);
+    lua_setfield(L, -2, "dump");
+    lua_pop(L, 1);
 
     // The library functions that loop in C, where the count hook never
     // fires, replaced by versions whose work counts against
@@ -270,6 +289,60 @@ constexpr int kHookInterval = 1000;
 // under the instruction limit took 25 s a tick that way. About what a
 // copy of that many bytes costs next to a VM instruction.
 constexpr size_t kAllocBytesPerInstruction = 64;
+
+namespace {
+
+// collectgarbage([opt]): a collection walks the whole heap, charged as
+// the bytes it visits; "count" and "isrunning" read; "stop" and the
+// tuning options are refused ("stop" would switch collection off for
+// every later tick). Upvalue 1: Lua's collectgarbage.
+int sandbox_collectgarbage(lua_State* L) {
+    const char* opt = luaL_optstring(L, 1, "collect");
+    if (std::strcmp(opt, "count") == 0 || std::strcmp(opt, "isrunning") == 0) {
+        return call_upvalue(L);
+    }
+    if (std::strcmp(opt, "collect") != 0 && std::strcmp(opt, "step") != 0) {
+        return luaL_error(L, "collectgarbage('%s') is not available in rules", opt);
+    }
+    const uint64_t bytes = static_cast<uint64_t>(lua_gc(L, LUA_GCCOUNT, 0)) * 1024 +
+                           static_cast<uint64_t>(lua_gc(L, LUA_GCCOUNTB, 0));
+    LuaEngine::charge(L, bytes / kAllocBytesPerInstruction + 1);
+    return call_upvalue(L);
+}
+
+// print(...): Lua's, with the bytes written charged as the allocator
+// charges bytes handed out. The values are made strings first (that
+// may run __tostring), the charge raises before anything is written.
+int sandbox_print(lua_State* L) {
+    const int n = lua_gettop(L);
+    luaL_checkstack(L, n + 2, "print");
+    uint64_t total = 0;
+    for (int i = 1; i <= n; ++i) {
+        size_t len = 0;
+        luaL_tolstring(L, i, &len);                   // left on the stack: n + i
+        total += len + 1;
+    }
+    LuaEngine::charge(L, total / kAllocBytesPerInstruction + 1);
+    for (int i = 1; i <= n; ++i) {
+        size_t len = 0;
+        const char* s = lua_tolstring(L, n + i, &len);
+        if (i > 1) std::fputc('\t', stdout);
+        std::fwrite(s, 1, len, stdout);
+    }
+    std::fputc('\n', stdout);
+    std::fflush(stdout);
+    return 0;
+}
+
+// `s` cut to `max` bytes, marked: an alert's name or message is copied
+// out of the Lua heap, which the memory limit bounds, into the daemon's
+// queues, which it did not.
+std::string cut_to(const std::string& s, size_t max) {
+    if (s.size() <= max) return s;
+    return s.substr(0, max) + " … (" + std::to_string(s.size() - max) + " bytes cut)";
+}
+
+} // namespace
 
 void* LuaEngine::alloc(void* ud, void* ptr, size_t osize, size_t nsize) {
     auto* self = static_cast<LuaEngine*>(ud);
@@ -415,7 +488,10 @@ int LuaEngine::load_string(const char* code) {
     if (L_ == nullptr || code == nullptr) return -1;
     begin_call();
     loading_ = true;
-    const int rc = luaL_dostring(L_, code);
+    // Text only ("t"): Lua does not verify bytecode, and a precompiled
+    // chunk could do what no sandbox prevents.
+    int rc = luaL_loadbufferx(L_, code, std::strlen(code), code, "t");
+    if (rc == LUA_OK) rc = lua_pcall(L_, 0, LUA_MULTRET, 0);
     loading_ = false;
     if (rc != LUA_OK) {
         const char* msg = error_text(L_, -1);
@@ -430,7 +506,8 @@ int LuaEngine::load_file(const char* path) {
     if (L_ == nullptr || path == nullptr) return -1;
     begin_call();
     loading_ = true;
-    const int rc = luaL_dofile(L_, path);
+    int rc = luaL_loadfilex(L_, path, "t");       // text only, as load_string()
+    if (rc == LUA_OK) rc = lua_pcall(L_, 0, LUA_MULTRET, 0);
     loading_ = false;
     if (rc != LUA_OK) {
         const char* msg = error_text(L_, -1);
@@ -631,7 +708,7 @@ void LuaEngine::run_actions(LuaRule* r) {
             raise_alert(r->severity, r->name, r->message);
         } else if (what == "log") {
             // Same stream and format as Lua's print() / the YAML "log" action.
-            std::printf("[budyk] %s\n", r->message.c_str());
+            std::printf("[budyk] %s\n", cut_to(r->message, kMaxAlertMessageBytes).c_str());
             std::fflush(stdout);
         } else if (what == "escalate") {
             push_escalation("L3", 60);   // spec §3.6.2: { alert, escalate }
@@ -640,7 +717,11 @@ void LuaEngine::run_actions(LuaRule* r) {
     lua_settop(L_, list - 1);
 }
 
-int LuaEngine::raise_alert(AlertSeverity sev, const std::string& rule, const std::string& message) {
+int LuaEngine::raise_alert(AlertSeverity sev, const std::string& rule_in,
+                           const std::string& message_in) {
+    if (probe_) return 0;                        // a check of the file: nothing goes out
+    const std::string rule    = cut_to(rule_in, kMaxAlertNameBytes);
+    const std::string message = cut_to(message_in, kMaxAlertMessageBytes);
     // One log line whatever the bytes: a message built from a process
     // name holds anyone's, and a line break in it forged a log line.
     std::fprintf(stderr, "budyk alert: %s %s: %s\n", severity_name(sev),
@@ -649,6 +730,11 @@ int LuaEngine::raise_alert(AlertSeverity sev, const std::string& rule, const std
         alert_events_.push_back(AlertEvent{now_realtime_ns(), severity_name(sev), rule, message});
     } else {
         ++alerts_dropped_;
+        if (alerts_dropped_tick_++ == 0) {
+            std::fprintf(stderr,
+                "budyk alert: more than %zu alerts since the last tick: the rest reach the "
+                "log and the channels, not the dashboard\n", kMaxPendingAlerts);
+        }
     }
     return alerts_.dispatch(sev, rule, message);
 }
@@ -656,11 +742,14 @@ int LuaEngine::raise_alert(AlertSeverity sev, const std::string& rule, const std
 std::vector<AlertEvent> LuaEngine::take_alerts() {
     std::vector<AlertEvent> out;
     out.swap(alert_events_);
+    alerts_dropped_tick_ = 0;
     return out;
 }
 
 uint64_t LuaEngine::alerts_dropped() const { return alerts_dropped_; }
 bool     LuaEngine::loading()        const { return loading_; }
+void     LuaEngine::set_probe(bool probe)   { probe_ = probe; }
+bool     LuaEngine::probe()          const { return probe_; }
 
 int  LuaEngine::rule_count()      const { return static_cast<int>(rules_.size()); }
 const std::string& LuaEngine::last_error() const { return last_error_; }
