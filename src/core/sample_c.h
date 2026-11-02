@@ -97,12 +97,15 @@ typedef struct {
 } budyk_icmp_c;
 
 /** Local filesystems (pseudo, read-only and network ones are skipped):
- * how many, and the fullest by space and by inodes. */
+ * how many, and the fullest by space and by inodes. `unreadable` counts
+ * the mount points the collector could not reach (EACCES: a mount under
+ * a directory budyk, not root, cannot search), for the daemon's log. */
 typedef struct {
     uint32_t count;
     double   max_used_percent;
     double   max_inodes_used_percent;
     uint8_t  present;
+    uint32_t unreadable;
 } budyk_fs_c;
 
 /** The kernel's clock discipline (ntp_adjtime(2)): whether it considers

@@ -204,6 +204,105 @@ int main() {
         ::rmdir(net.c_str());
         ::rmdir(dir);
     }
+
+    // 7c. A clock step between two reads: the collectors divide by the
+    //     wall-clock interval, so the rates of that tick are not readings
+    //     (an NTP step at boot read every rate as 0, a VM resumed from a
+    //     snapshot diluted them 3600 times). When the caller's monotonic
+    //     clock (ctx.mono_now_ns) and the wall clock disagree about the
+    //     interval by more than a second, the rate groups are a baseline;
+    //     a tick with the clocks in step reads again. Without the
+    //     monotonic clock (0) nothing changes.
+    {
+        char tmpl[] = "/tmp/budyk_stepfx_XXXXXX";
+        const char* dir = ::mkdtemp(tmpl);
+        assert(dir != nullptr);
+        const std::string net = std::string(dir) + "/net";
+        assert(::mkdir(net.c_str(), 0700) == 0);
+        auto snmp = [&](unsigned in) {
+            FILE* f = std::fopen((net + "/snmp").c_str(), "w");
+            assert(f != nullptr);
+            std::fprintf(f, "Icmp: InMsgs InErrors InDestUnreachs OutMsgs\nIcmp: %u 0 0 0\n", in);
+            std::fclose(f);
+        };
+        budyk_linux_set_proc_root(dir);
+        CollectContext c4;
+        const MetricSet set{kGroupsMinimal | kGroupIcmp, 0};
+        auto tick = [&](uint64_t wall_ns, uint64_t mono_ns, unsigned in) {
+            snmp(in);
+            Sample x{};
+            x.timestamp_nanos = wall_ns;
+            c4.mono_now_ns    = mono_ns;
+            collect_one(&x, &c4, set);
+            return x;
+        };
+        Sample x = tick(1000000000ULL, 500000000000ULL, 100);
+        assert((x.baseline & kGroupIcmp) != 0);
+        x = tick(3000000000ULL, 502000000000ULL, 300);          // 2 s on both clocks
+        assert((x.groups & kGroupIcmp) != 0 && x.icmp.in_msgs_per_sec == 100.0);
+        // The wall clock stepped forward by an hour: 3602 s of wall for 2 s
+        // of monotonic.
+        x = tick(3605000000000ULL, 504000000000ULL, 500);
+        assert((x.groups & kGroupIcmp) == 0 && (x.baseline & kGroupIcmp) != 0);
+        x = tick(3607000000000ULL, 506000000000ULL, 700);       // in step again
+        assert((x.groups & kGroupIcmp) != 0 && x.icmp.in_msgs_per_sec == 100.0);
+        // Stepped back: the wall interval is nothing.
+        x = tick(3600000000000ULL, 508000000000ULL, 900);
+        assert((x.groups & kGroupIcmp) == 0 && (x.baseline & kGroupIcmp) != 0);
+        // Half a second apart is the daemon's own jitter, not a step.
+        x = tick(3602500000000ULL, 510000000000ULL, 1100);
+        assert((x.groups & kGroupIcmp) != 0);
+        // The groups that are not rates (mem, load) are readings throughout.
+        assert((x.groups & kGroupLoad) != 0);
+        // No monotonic clock given (a test with synthetic stamps): no check.
+        CollectContext c5;
+        snmp(10);
+        Sample y{};
+        y.timestamp_nanos = 1000000000ULL;
+        collect_one(&y, &c5, set);
+        snmp(30);
+        y = Sample{};
+        y.timestamp_nanos = 3000000000ULL;
+        collect_one(&y, &c5, set);
+        assert((y.groups & kGroupIcmp) != 0 && y.icmp.in_msgs_per_sec == 10.0);
+        budyk_linux_set_proc_root(nullptr);
+        ::unlink((net + "/snmp").c_str());
+        ::rmdir(net.c_str());
+        ::rmdir(dir);
+    }
+
+    // 7d. More CPUs than cpu.cores holds (BUDYK_MAX_CORES, 1024): the
+    //     list is cut short and ctx.cut says so (the message came for the
+    //     disks, the interfaces and the filesystems, not for the cores).
+    {
+        char tmpl[] = "/tmp/budyk_corefx_XXXXXX";
+        const char* dir = ::mkdtemp(tmpl);
+        assert(dir != nullptr);
+        {
+            FILE* f = std::fopen((std::string(dir) + "/stat").c_str(), "w");
+            assert(f != nullptr);
+            std::fputs("cpu  10 0 10 80 0 0 0 0 0 0\n", f);
+            for (int i = 0; i < 1030; ++i) std::fprintf(f, "cpu%d 10 0 10 80 0 0 0 0 0 0\n", i);
+            std::fputs("intr 0\n", f);
+            std::fclose(f);
+        }
+        budyk_linux_set_proc_root(dir);
+        CollectContext c6;
+        const MetricSet set{kGroupsMinimal, kDetailCores};
+        Sample x{};
+        x.timestamp_nanos = 1000000000ULL;
+        collect_one(&x, &c6, set);                 // the first read: a baseline
+        assert((c6.cut & kDetailCores) != 0);
+        x = Sample{};
+        x.timestamp_nanos = 2000000000ULL;
+        collect_one(&x, &c6, set);
+        budyk_linux_set_proc_root(nullptr);
+        assert(x.cpu.count == 1030 && (x.groups & kGroupCpu) != 0);
+        assert(c6.detail->ncores == BUDYK_MAX_CORES);
+        assert((c6.cut & kDetailCores) != 0);
+        ::unlink((std::string(dir) + "/stat").c_str());
+        ::rmdir(dir);
+    }
 #endif
 
     // 8. The byte rates in double: 60 GB in a 5-minute L1 interval is

@@ -49,6 +49,30 @@ static int parse_mountinfo(char* line, char* mnt, char* type, char* dev, char* s
            sscanf(sep + 3, "%63s %1023s %1023s", type, dev, sopts) == 3;
 }
 
+/* FNV-1a of a mount point, for the "mounted over" check below. */
+static uint64_t hash_str(const char* s) {
+    uint64_t h = 1469598103934665603ULL;
+    for (; *s != '\0'; ++s) h = (h ^ (unsigned char)*s) * 1099511628211ULL;
+    return h;
+}
+
+/* The mount points of every mountinfo line, in order: a line whose mount
+ * point comes again later is a filesystem hidden under another mount on
+ * the same point, and what the point names now is the top one (stat()
+ * and statvfs() of the hidden line gave the top's numbers under the
+ * hidden one's name and type: /dev/shm mounted twice, an image mounted
+ * over a directory). Hashes, not names: a node with thousands of
+ * mounts is a few KB here. Past the array a line is taken as it is. */
+#define BUDYK_FS_MAX_LINES 8192
+static uint64_t g_points[BUDYK_FS_MAX_LINES];
+
+static int mounted_over(size_t index, size_t nlines) {
+    for (size_t j = index + 1; j < nlines; ++j) {
+        if (g_points[j] == g_points[index]) return 1;
+    }
+    return 0;
+}
+
 /* Mount points in /proc/self/mounts and mountinfo escape space, tab,
  * newline and backslash as \040, \011, \012, \134. */
 void budyk_linux_unescape_mount(char* s) {
@@ -84,18 +108,40 @@ int budyk_collect_fs_linux_ex(budyk_sample_c* s, budyk_detail_c* d) {
     FILE* f = fopen(path, "re");
     if (f == NULL) return -errno;
 
+    /* First pass: every line's mount point, for mounted_over(). */
+    size_t nlines = 0;
+    char   line[4096];
+    while (nlines < BUDYK_FS_MAX_LINES && fgets(line, sizeof(line), f) != NULL) {
+        char dev[1024], mnt[1024], type[64], opts[1024];
+        g_points[nlines++] = parse_mountinfo(line, mnt, type, dev, opts) ? hash_str(mnt) : 0;
+    }
+    if (fseek(f, 0, SEEK_SET) != 0) {
+        const int e = errno;
+        fclose(f);
+        return -e;
+    }
+
     dev_t    seen[256];
     size_t   nseen = 0;
-    char     line[4096];
+    size_t   index = 0;
     while (fgets(line, sizeof(line), f) != NULL) {
+        const size_t at = index++;
         char dev[1024], mnt[1024], type[64], opts[1024];
         if (!parse_mountinfo(line, mnt, type, dev, opts)) continue;
+        if (at < nlines && mounted_over(at, nlines)) continue;
         if (skipped_type(type) || read_only(opts)) continue;
         budyk_linux_unescape_mount(mnt);
+        budyk_linux_unescape_mount(dev);
 
-        /* The same filesystem mounted twice (a bind mount) counts once. */
+        /* A mount point budyk cannot reach (EACCES: under a 0700 home,
+         * /root, as the packaged unit's user) is counted for the log; it
+         * was skipped in silence, a full one never reported. */
         struct stat st;
-        if (stat(mnt, &st) != 0) continue;
+        if (stat(mnt, &st) != 0) {
+            if (errno == EACCES) ++s->fs.unreadable;
+            continue;
+        }
+        /* The same filesystem mounted twice (a bind mount) counts once. */
         int dup = 0;
         for (size_t i = 0; i < nseen; ++i) dup |= seen[i] == st.st_dev;
         if (dup) continue;

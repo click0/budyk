@@ -162,10 +162,10 @@ int budyk_collect_proc_linux_ex(budyk_sample_c* s, budyk_detail_c* d) {
         switch (r.state) {
             case 'R':                               ++s->proc.running;  break;
             case 'S': case 'I': case 'W': case 'P': ++s->proc.sleeping; break;
-            case 'D':                               ++s->proc.blocked;  break;
+            case 'D': case 'K':                     ++s->proc.blocked;  break;   /* K: wakekill, 3.9-4.13 */
             case 'T': case 't':                     ++s->proc.stopped;  break;
             case 'Z':                               ++s->proc.zombie;   break;
-            default:                                continue;   /* X: being reaped */
+            default:                                continue;   /* X, x: being reaped */
         }
         ++s->proc.total;
         s->proc.threads += r.threads;
@@ -175,6 +175,14 @@ int budyk_collect_proc_linux_ex(budyk_sample_c* s, budyk_detail_c* d) {
     }
     closedir(dir);
     if (d != NULL) budyk_procs_end(d);
+    /* /proc mounted hidepid=1 or 2 and budyk not root (the packaged
+     * unit's user): readdir() lists budyk's own processes only, and
+     * proc.total = 1 read as a reading, nothing logged. Pid 1 is always
+     * there; one that cannot be read means the rest are hidden too, and
+     * the group is left out, logged once ("Permission denied"). */
+    if (s->proc.total <= 1 && strcmp(root, "/proc") == 0 && access("/proc/1/stat", R_OK) != 0) {
+        return -EACCES;
+    }
     return 0;
 }
 
@@ -241,11 +249,27 @@ int budyk_collect_self_linux(budyk_sample_c* s) {
     return 0;
 }
 
-/* Thermal — walk /sys/class/thermal/thermal_zone*\/temp.
- * Each file holds millidegrees Celsius (e.g. 45000 = 45.0°C).
- * Take the hottest reading across every zone we can read; report
- * present=0 (with sensor_count=0, max_celsius=0.0) when /sys/class/
- * thermal is missing (containers, jails, virt without ACPI).
+/* One temperature file (millidegrees Celsius, 45000 = 45.0°C) into the
+ * running hottest / count; a file that is not there or does not read
+ * (a sensor with no reading, "Input/output error") is skipped. */
+static void thermal_read(const char* path, double* hottest, uint32_t* count) {
+    FILE* f = fopen(path, "re");
+    if (f == NULL) return;
+    long milli = 0;
+    const int ok = fscanf(f, "%ld", &milli);
+    fclose(f);
+    if (ok != 1) return;
+    const double celsius = (double)milli / 1000.0;
+    if (celsius > *hottest) *hottest = celsius;
+    ++*count;
+}
+
+/* Thermal — the hottest reading across /sys/class/thermal/thermal_zone*\/
+ * temp (ACPI zones: laptops, some servers) and /sys/class/hwmon/hwmon*\/
+ * temp*_input (the chip drivers: k10temp, coretemp, nvme, drivetemp,
+ * IPMI). Most servers have hwmon only, and read "no sensor" from the
+ * zones alone. present=0 (sensor_count=0, max_celsius=0.0) when neither
+ * is there (containers, jails, virt without ACPI).
  */
 int budyk_collect_thermal_linux(budyk_sample_c* s) {
     if (s == NULL) return -EINVAL;
@@ -254,32 +278,50 @@ int budyk_collect_thermal_linux(budyk_sample_c* s) {
     s->thermal.sensor_count = 0;
     s->thermal.present      = 0;
 
-    DIR* d = opendir("/sys/class/thermal");
-    if (d == NULL) return 0;          /* soft-fail, host has no thermal sysfs */
+    double   hottest = -1e9;
+    uint32_t count   = 0;
+    char     dirpath[512];
+    char     path[768];
 
-    struct dirent* ent;
-    double         hottest = -1e9;
-    uint32_t       count   = 0;
-    while ((ent = readdir(d)) != NULL) {
-        if (strncmp(ent->d_name, "thermal_zone", 12) != 0) continue;
-
-        char path[256];
-        int n = snprintf(path, sizeof(path),
-                         "/sys/class/thermal/%s/temp", ent->d_name);
-        if (n <= 0 || (size_t)n >= sizeof(path)) continue;
-
-        FILE* f = fopen(path, "re");
-        if (f == NULL) continue;
-        long milli = 0;
-        int ok = fscanf(f, "%ld", &milli);
-        fclose(f);
-        if (ok != 1) continue;
-
-        double celsius = (double)milli / 1000.0;
-        if (celsius > hottest) hottest = celsius;
-        ++count;
+    snprintf(dirpath, sizeof(dirpath), "%s/class/thermal", budyk_linux_sys_root());
+    DIR* d = opendir(dirpath);
+    if (d != NULL) {
+        struct dirent* ent;
+        while ((ent = readdir(d)) != NULL) {
+            if (strncmp(ent->d_name, "thermal_zone", 12) != 0) continue;
+            const int n = snprintf(path, sizeof(path), "%s/%s/temp", dirpath, ent->d_name);
+            if (n <= 0 || (size_t)n >= sizeof(path)) continue;
+            thermal_read(path, &hottest, &count);
+        }
+        closedir(d);
     }
-    closedir(d);
+
+    snprintf(dirpath, sizeof(dirpath), "%s/class/hwmon", budyk_linux_sys_root());
+    d = opendir(dirpath);
+    if (d != NULL) {
+        struct dirent* ent;
+        while ((ent = readdir(d)) != NULL) {
+            if (strncmp(ent->d_name, "hwmon", 5) != 0) continue;
+            char chip[640];
+            const int n = snprintf(chip, sizeof(chip), "%s/%s", dirpath, ent->d_name);
+            if (n <= 0 || (size_t)n >= sizeof(chip)) continue;
+            DIR* cd = opendir(chip);
+            if (cd == NULL) continue;
+            struct dirent* in;
+            while ((in = readdir(cd)) != NULL) {
+                const size_t len = strlen(in->d_name);
+                if (strncmp(in->d_name, "temp", 4) != 0 || len < 11 ||
+                    strcmp(in->d_name + len - 6, "_input") != 0) {
+                    continue;
+                }
+                const int m = snprintf(path, sizeof(path), "%s/%s", chip, in->d_name);
+                if (m <= 0 || (size_t)m >= sizeof(path)) continue;
+                thermal_read(path, &hottest, &count);
+            }
+            closedir(cd);
+        }
+        closedir(d);
+    }
 
     if (count > 0) {
         s->thermal.max_celsius  = hottest;
