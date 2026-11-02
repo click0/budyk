@@ -91,6 +91,12 @@ char budyk_freebsd_proc_state(int stat, long tdflags) {
     }
 }
 
+char budyk_freebsd_proc_counted_state(int stat, long tdflags, int p_system) {
+    const char st = budyk_freebsd_proc_state(stat, tdflags);
+    if (p_system && (st == 'D' || st == 'L' || st == 'R')) return 'S';
+    return st;
+}
+
 /* With d, also the top processes: CPU time from ki_runtime (µs), told
  * apart from a reused pid by ki_start; system processes (P_SYSTEM: the
  * kernel, idle, interrupt threads) left out, as top(1) does without -S. */
@@ -131,7 +137,8 @@ int budyk_collect_proc_freebsd_ex(budyk_sample_c* s, budyk_detail_c* d) {
     if (d != NULL) budyk_procs_begin(d, s->timestamp_nanos);
     for (size_t i = 0; i < n; ++i) {
         const struct kinfo_proc* kp = &procs[i];
-        const char state = budyk_freebsd_proc_state(kp->ki_stat, kp->ki_tdflags);
+        const char state = budyk_freebsd_proc_counted_state(kp->ki_stat, kp->ki_tdflags,
+                                                            (kp->ki_flag & P_SYSTEM) != 0);
         switch (state) {
             case 'R':           ++s->proc.running;  break;
             case 'S': case 'W': ++s->proc.sleeping; break;

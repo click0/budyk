@@ -20,6 +20,7 @@
 
 #include <sys/types.h>
 #include <sys/param.h>
+#include <sys/mount.h>      // struct statfs
 #include <sys/proc.h>       // SSLEEP, TDF_SINTR
 #include <sys/socket.h>
 #include <sys/sysctl.h>
@@ -181,6 +182,33 @@ int main() {
         assert(budyk_freebsd_proc_state(SRUN, 0) == 'R' && budyk_freebsd_proc_state(SIDL, 0) == 'R');
         assert(budyk_freebsd_proc_state(SLOCK, 0) == 'L' && budyk_freebsd_proc_state(SSTOP, 0) == 'T');
         assert(budyk_freebsd_proc_state(SZOMB, 0) == 'Z' && budyk_freebsd_proc_state(SWAIT, 0) == 'W');
+        // A kernel process (P_SYSTEM) sleeps without PCATCH and the idle
+        // process runs: counted as sleeping, as Linux's kernel threads
+        // are (some 20 of them were "blocked" on an idle host, for ever).
+        assert(budyk_freebsd_proc_counted_state(SSLEEP, 0, 1) == 'S');
+        assert(budyk_freebsd_proc_counted_state(SLOCK, 0, 1) == 'S');
+        assert(budyk_freebsd_proc_counted_state(SRUN, 0, 1) == 'S');
+        assert(budyk_freebsd_proc_counted_state(SSLEEP, 0, 0) == 'D');   // a user process: as before
+        assert(budyk_freebsd_proc_counted_state(SRUN, 0, 0) == 'R');
+        assert(budyk_freebsd_proc_counted_state(SSTOP, 0, 1) == 'T');
+        assert(budyk_freebsd_proc_counted_state(SZOMB, 0, 1) == 'Z');
+    }
+
+    // 5f. A mount hidden under a later mount on the same point is left
+    //     out: statfs() of the point reaches the covering filesystem (an
+    //     NFS mount over a ZFS dataset on /home had the server asked on
+    //     every tick).
+    {
+        struct statfs list[3];
+        std::memset(list, 0, sizeof(list));
+        std::snprintf(list[0].f_mntonname, sizeof(list[0].f_mntonname), "/");
+        std::snprintf(list[1].f_mntonname, sizeof(list[1].f_mntonname), "/home");
+        std::snprintf(list[2].f_mntonname, sizeof(list[2].f_mntonname), "/home");
+        assert(budyk_freebsd_mount_hidden(list, 3, 0) == 0);
+        assert(budyk_freebsd_mount_hidden(list, 3, 1) == 1);     // under list[2]
+        assert(budyk_freebsd_mount_hidden(list, 3, 2) == 0);     // the top one
+        assert(budyk_freebsd_mount_hidden(list, 2, 1) == 0);     // nothing after it
+        assert(budyk_freebsd_mount_hidden(nullptr, 3, 1) == 0 && budyk_freebsd_mount_hidden(list, 3, 3) == 0);
     }
 
     // 5c. On this host, the cloners read from the kernel: the collector

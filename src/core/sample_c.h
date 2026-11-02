@@ -445,6 +445,22 @@ int budyk_freebsd_disk_counted(const char* device_name);
  *  `ki_tdflags` (a long): R, S, D (a sleep a signal cannot end: TDF_SINTR clear),
  *  W, L, T, Z. D and L count as blocked. */
 char budyk_freebsd_proc_state(int stat, long tdflags);
+/** The state proc.* counts a process under: budyk_freebsd_proc_state(),
+ *  except that a kernel process (`p_system`: P_SYSTEM) in D, L or R is
+ *  sleeping. Kernel processes sleep without PCATCH (TDF_SINTR never
+ *  set), so their idle sleeps read as D and some 20 of them ([kernel],
+ *  [cam], [pagedaemon], [syncer], [zfskern]) were "blocked" on an idle
+ *  host, for its whole life, as the idle process was "running"; Linux's
+ *  kernel threads (state I) count as sleeping. */
+char budyk_freebsd_proc_counted_state(int stat, long tdflags, int p_system);
+/** Whether mount list entry `i` of `n` is hidden under a later mount on
+ *  the same point (getmntinfo() lists mounts in mount order, covered
+ *  ones included): statfs() of its point reaches the covering filesystem,
+ *  so a ZFS dataset under an NFS mount on /home had the NFS server asked
+ *  on every tick (the main thread blocked on a hard mount with the server
+ *  down), and listed the export as local. */
+struct statfs;
+int budyk_freebsd_mount_hidden(const struct statfs* list, int n, int i);
 int budyk_collect_proc_freebsd   (budyk_sample_c* s);
 int budyk_collect_proc_freebsd_ex(budyk_sample_c* s, budyk_detail_c* d);
 int budyk_collect_entropy_freebsd(budyk_sample_c* s);
