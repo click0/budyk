@@ -77,7 +77,16 @@ fi
 # a port and "5s" as 5 ms): a bad one is an error that names it.
 cli_rejects() {   # cli_rejects <expected message> <args...>
     msg=$1; shift
-    if "$BIN" "$@" > /dev/null 2> "$DIR/cli.err" < /dev/null; then
+    # In the background with a bound: a `serve` that is wrongly taken
+    # runs as a daemon for ever.
+    "$BIN" "$@" > /dev/null 2> "$DIR/cli.err" < /dev/null &
+    cpid=$!
+    i=0
+    while kill -0 "$cpid" 2>/dev/null && [ "$i" -lt 50 ]; do i=$((i + 1)); sleep 0.1; done
+    if kill -0 "$cpid" 2>/dev/null; then
+        kill "$cpid"; wait "$cpid" 2>/dev/null
+        echo "FAIL: budyk $* kept running"; fail=1
+    elif wait "$cpid"; then
         echo "FAIL: budyk $* succeeded"; fail=1
     elif ! grep -qF -- "$msg" "$DIR/cli.err"; then
         echo "FAIL: budyk $*: no '$msg' in: $(cat "$DIR/cli.err")"; fail=1
