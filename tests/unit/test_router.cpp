@@ -309,6 +309,53 @@ int main() {
         assert(r.status == 401 && !r.hijack);
     }
 
+    // 7c. The hijack sends the handshake, then hands the fd to the hub
+    //     with the catch-up frame: the newest kCatchupSamples (300) of the
+    //     hot buffer, not the whole of it (152 MB at a capacity of
+    //     100000, sent blocking on the HTTP thread), oldest first, sent as
+    //     the socket takes it (service() finishes it); the wake is asked.
+    {
+        World w(400, 86400); w.init();
+        for (uint64_t ts = 1; ts <= 400; ++ts) {
+            Sample s{};
+            s.timestamp_nanos = ts * 1000000000ULL;
+            s.level = Level::L3;
+            s.groups = kGroupsAll;
+            std::lock_guard<std::mutex> g(w.hot_mtx);
+            w.hot.push(s);
+        }
+        HttpRequest up = get("/api/ws");
+        up.headers.push_back({"Upgrade", "websocket"});
+        up.headers.push_back({"Connection", "Upgrade"});
+        up.headers.push_back({"Sec-WebSocket-Version", "13"});
+        up.headers.push_back({"Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ=="});
+        HttpResponse r = w.handler(up);
+        assert(static_cast<bool>(r.hijack));
+        int sv[2];
+        assert(::socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0);
+        r.hijack(sv[0]);
+        assert(w.ws.size() == 1 && w.wakes == 1);
+        std::string got;
+        char buf[65536];
+        for (int i = 0; i < 2000; ++i) {
+            const ssize_t n = ::recv(sv[1], buf, sizeof(buf), MSG_DONTWAIT);
+            if (n > 0) { got.append(buf, static_cast<size_t>(n)); continue; }
+            if (got.find("\"ts\":400000000000") != std::string::npos &&
+                got.find("]}") != std::string::npos) break;
+            w.ws.service();
+            ::usleep(1000);
+        }
+        assert(got.compare(0, 12, "HTTP/1.1 101") == 0);           // the handshake first
+        size_t count = 0;
+        for (size_t at = 0; (at = got.find("\"ts\":", at)) != std::string::npos; ++at) ++count;
+        assert(count == 300);
+        assert(got.find("\"ts\":101000000000") != std::string::npos);   // the newest 300: 101..400
+        assert(got.find("\"ts\":100000000000") == std::string::npos);
+        assert(got.find("\"ts\":400000000000") != std::string::npos);
+        w.ws.close_all();
+        ::close(sv[1]);
+    }
+
     // 7b. /api/ws from another site's page (CSWSH): a browser always sends
     //     Origin on a WebSocket, and one that is not the Host the request
     //     went to (or a proxy's X-Forwarded-Host) is refused with 403.
@@ -461,20 +508,23 @@ int main() {
         assert(w.handler(get("/api/samples", "budyk_session=nope")).status == 401);
     }
 
-    // 11. The WebSocket handshake and the catch-up frame go out within the
-    //     server's bounds (io_timeout_ms plus the size at min_send_rate),
-    //     as a response does. A client that does not read got a blocking
-    //     send(): the HTTP thread sat in it for as long as the client
-    //     cared to read a byte at a time. It is dropped now, its socket
-    //     closed, and the hub never sees it; one that reads gets both and
-    //     joins the hub.
+    // 11. The WebSocket handshake goes out within the server's bounds
+    //     (io_timeout_ms plus the size at min_send_rate), as a response
+    //     does; the catch-up frame goes through the hub, so the hijack is
+    //     back within those bounds whatever the client reads (a client
+    //     that read a byte at a time held the HTTP thread for the whole
+    //     frame). A client that does not read joins the hub with the frame
+    //     owed, and is dropped once it is kMaxBacklog behind, its socket
+    //     closed; one that reads gets the handshake and the newest 300
+    //     samples from the hijack itself, before any service() (left to
+    //     the ticks, the catch-up came two ticks after the connect).
     {
         World w(2000, 86400);
-        w.io_timeout_ms = 200;
+        w.io_timeout_ms = 500;
         w.min_send_rate = 4 * 1024 * 1024;
         w.init();
         Sample s{};
-        for (int i = 0; i < 2000; ++i) {          // a catch-up frame of over 1 MB
+        for (int i = 0; i < 2000; ++i) {          // the whole buffer was over 1 MB
             s.timestamp_nanos = 1000 + static_cast<uint64_t>(i);
             w.hot.push(s);
         }
@@ -493,28 +543,45 @@ int main() {
         const auto t0 = std::chrono::steady_clock::now();
         r.hijack(sp[0]);                           // the peer reads nothing
         const auto took = std::chrono::steady_clock::now() - t0;
-        assert(took < std::chrono::seconds(5));
-        assert(w.ws.size() == 0 && w.wakes == 0);
-        assert(::fcntl(sp[0], F_GETFD) == -1 && errno == EBADF);   // closed by the hijack
+        assert(took < std::chrono::seconds(1));
+        assert(w.ws.size() == 1 && w.wakes == 1);  // in the hub, the frame owed
+        assert(::fcntl(sp[0], F_GETFD) != -1);     // the hub owns the socket
         char head[64];
         const ssize_t n = ::read(sp[1], head, sizeof(head));
         assert(n >= 12 && std::memcmp(head, "HTTP/1.1 101", 12) == 0);
+        // Behind by more than kMaxBacklog once a megabyte more is owed:
+        // dropped, the socket closed.
+        w.ws.broadcast(std::string(WebSocketHub::kMaxBacklog, 'x'));
+        assert(w.ws.size() == 0);
+        assert(::fcntl(sp[0], F_GETFD) == -1 && errno == EBADF);
         ::close(sp[1]);
 
         r = w.handler(upgrade());
         assert(::socketpair(AF_UNIX, SOCK_STREAM, 0, sp) == 0);
+        // A small socket buffer, and a peer that starts reading 100 ms
+        // after the connect: the frame cannot go out in one write, so
+        // the hijack has to wait for the socket (within 500 ms plus the
+        // frame at 4 MiB/s), or the rest would wait for the ticks.
+        const int small = 8192;
+        ::setsockopt(sp[0], SOL_SOCKET, SO_SNDBUF, &small, sizeof(small));
+        ::setsockopt(sp[1], SOL_SOCKET, SO_RCVBUF, &small, sizeof(small));
         std::atomic<size_t> got{0};
         std::thread reader([&] {
+            ::usleep(100000);
             char b[4096];
             ssize_t k;
             while ((k = ::read(sp[1], b, sizeof(b))) > 0) got += static_cast<size_t>(k);
         });
-        r.hijack(sp[0]);                           // the peer reads it all
-        assert(w.ws.size() == 1 && w.wakes == 1);
+        r.hijack(sp[0]);                           // the peer reads it all, late
+        assert(w.ws.size() == 1 && w.wakes == 2);
+        for (int i = 0; i < 2000 && got.load() < 300000; ++i) {   // sent already: no service()
+            ::usleep(1000);
+        }
         w.ws.close_all();                          // the reader sees the end
         reader.join();
         ::close(sp[1]);
-        assert(got.load() > 1000000);              // the handshake and the whole catch-up
+        // The handshake and 300 samples (some 1.6 KB each), not 2000.
+        assert(got.load() > 300000 && got.load() < 1000000);
     }
 
     std::printf("test_router: PASS\n");

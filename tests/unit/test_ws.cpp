@@ -437,6 +437,98 @@ int main() {
         ::close(c_peer);
     }
 
+    // 13. add() with a first frame: the client is owed it before any
+    //     broadcast (the catch-up on connect), made under the hub's lock
+    //     as the client is registered, sent as the socket takes it. The
+    //     peer reads the first frame, then a broadcast's, in that order;
+    //     a first frame larger than the socket holds is finished by
+    //     service(), with the broadcast after it; a peer that closed before
+    //     the first send is not kept.
+    {
+        WebSocketHub hub;
+        int sv[2];
+        assert(::socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0);
+        int made = 0;
+        hub.add(sv[0], "", [&made] { ++made; return ws_text_frame("first"); });
+        assert(made == 1 && hub.size() == 1);
+        hub.broadcast("second");
+        char buf[256];
+        std::string got;
+        for (int i = 0; i < 20 && got.size() < 2 + 5 + 2 + 6; ++i) {
+            const ssize_t n = ::recv(sv[1], buf, sizeof(buf), MSG_DONTWAIT);
+            if (n > 0) got.append(buf, static_cast<size_t>(n));
+            else ::usleep(10000);
+        }
+        assert(got == ws_text_frame("first") + ws_text_frame("second"));
+        hub.close_all();
+        ::close(sv[1]);
+
+        // Larger than the socket takes at once: the rest waits in the
+        // client's outbuf and service() sends it, the broadcast behind it.
+        int big[2];
+        assert(::socketpair(AF_UNIX, SOCK_STREAM, 0, big) == 0);
+        const int small = 8192;
+        ::setsockopt(big[0], SOL_SOCKET, SO_SNDBUF, &small, sizeof(small));
+        ::setsockopt(big[1], SOL_SOCKET, SO_RCVBUF, &small, sizeof(small));
+        const std::string payload(200000, 'x');
+        hub.add(big[0], "", [&payload] { return ws_text_frame(payload); });
+        hub.broadcast("after");
+        std::string all;
+        const std::string want = ws_text_frame(payload) + ws_text_frame("after");
+        for (int i = 0; i < 2000 && all.size() < want.size(); ++i) {
+            const ssize_t n = ::recv(big[1], buf, sizeof(buf), MSG_DONTWAIT);
+            if (n > 0) { all.append(buf, static_cast<size_t>(n)); continue; }
+            hub.service();
+            ::usleep(1000);
+        }
+        assert(all == want);
+        assert(hub.size() == 1);
+        hub.close_all();
+        ::close(big[1]);
+
+        // The peer is gone before the frame is sent: not kept.
+        int gone[2];
+        assert(::socketpair(AF_UNIX, SOCK_STREAM, 0, gone) == 0);
+        ::close(gone[1]);
+        hub.add(gone[0], "", [] { return ws_text_frame("nobody"); });
+        assert(hub.size() == 0);
+
+        // flush_owed(): the HTTP thread waits for the socket within a
+        // bound. A peer that reads nothing: back once the bound is up (50
+        // ms here), the rest still owed, the client kept. A peer that
+        // reads: the whole frame goes out, no service() needed. A fd not
+        // in the hub: nothing owed.
+        int fo[2];
+        assert(::socketpair(AF_UNIX, SOCK_STREAM, 0, fo) == 0);
+        ::setsockopt(fo[0], SOL_SOCKET, SO_SNDBUF, &small, sizeof(small));
+        ::setsockopt(fo[1], SOL_SOCKET, SO_RCVBUF, &small, sizeof(small));
+        const std::string frame = ws_text_frame(payload);
+        hub.add(fo[0], "", [&frame] { return frame; });
+        assert(hub.size() == 1);
+        const auto t0 = std::chrono::steady_clock::now();
+        const size_t owed = hub.flush_owed(fo[0], 50, 0);
+        const auto took = std::chrono::steady_clock::now() - t0;
+        assert(owed > 0 && owed < frame.size());
+        assert(took >= std::chrono::milliseconds(40) && took < std::chrono::seconds(2));
+        assert(hub.size() == 1);
+        assert(hub.flush_owed(fo[1], 50, 0) == 0);           // not a client
+        std::string drained;
+        std::thread reader([&] {
+            char b[4096];
+            while (drained.size() < frame.size()) {
+                const ssize_t k = ::read(fo[1], b, sizeof(b));
+                if (k <= 0) break;
+                drained.append(b, static_cast<size_t>(k));
+            }
+        });
+        assert(hub.flush_owed(fo[0], 2000, 0) == 0);
+        reader.join();
+        assert(drained == frame);
+        assert(hub.size() == 1);
+        hub.close_all();
+        ::close(fo[1]);
+    }
+
     std::printf("test_ws: PASS\n");
     return 0;
 }

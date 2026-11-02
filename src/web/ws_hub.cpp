@@ -5,11 +5,14 @@
 #include "web/sha1_base64.h"
 
 #include <fcntl.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
 #include <algorithm>
 #include <cerrno>
+#include <chrono>
+#include <climits>
 #include <cstdint>
 #include <cstring>
 #include <utility>
@@ -121,6 +124,65 @@ void WebSocketHub::add(int fd, std::string session) {
     if (flags >= 0) ::fcntl(fd, F_SETFL, flags | O_NONBLOCK);
     std::lock_guard<std::mutex> g(mtx_);
     clients_.push_back(Client{fd, std::string(), 0, std::move(session), std::string()});
+}
+
+void WebSocketHub::add(int fd, std::string session,
+                       const std::function<std::string()>& first_frame) {
+    const int flags = ::fcntl(fd, F_GETFL, 0);
+    if (flags >= 0) ::fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    std::lock_guard<std::mutex> g(mtx_);
+    // The frame is made under the lock: a broadcast of the tick between
+    // its snapshot and this registration waits here, and then finds the
+    // client, so no tick is missed (it used to go to neither the
+    // snapshot nor the client).
+    clients_.push_back(Client{fd, std::string(), 0, std::move(session), first_frame()});
+    Client* c = &clients_.back();
+    if (!flush_out(c)) {                   // the socket failed already
+        ::close(fd);
+        clients_.pop_back();
+    }
+}
+
+size_t WebSocketHub::flush_owed(int fd, int timeout_ms, size_t min_rate) {
+    using Clock = std::chrono::steady_clock;
+    auto find = [this, fd]() -> std::vector<Client>::iterator {
+        return std::find_if(clients_.begin(), clients_.end(),
+                            [fd](const Client& c) { return c.fd == fd; });
+    };
+    size_t owed = 0;
+    {
+        std::lock_guard<std::mutex> g(mtx_);
+        const auto it = find();
+        if (it == clients_.end()) return 0;
+        owed = it->outbuf.size();
+    }
+    if (owed == 0) return 0;
+    // The bound a response has (send_bounded): the timeout, plus the
+    // bytes at the minimum rate a reader must keep.
+    const auto extra = min_rate > 0 ? std::chrono::milliseconds(owed * 1000 / min_rate)
+                                    : std::chrono::milliseconds(0);
+    const auto deadline = Clock::now() + std::chrono::milliseconds(timeout_ms) + extra;
+    for (;;) {
+        const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
+            deadline - Clock::now()).count();
+        if (left <= 0) return owed;
+        // Without the lock: a tick's broadcast and service() go on
+        // meanwhile (they may send what is owed, or drop the client).
+        struct pollfd pfd{fd, POLLOUT, 0};
+        const int pr = ::poll(&pfd, 1, static_cast<int>(left < INT_MAX ? left : INT_MAX));
+        if (pr < 0 && errno == EINTR) continue;
+        if (pr <= 0) return owed;                  // the deadline, or poll failed
+        std::lock_guard<std::mutex> g(mtx_);
+        const auto it = find();
+        if (it == clients_.end()) return 0;        // dropped meanwhile
+        if (!flush_out(&*it)) {                    // the socket failed
+            ::close(it->fd);
+            clients_.erase(it);
+            return 0;
+        }
+        owed = it->outbuf.size();
+        if (owed == 0) return 0;
+    }
 }
 
 size_t WebSocketHub::drop_sessions(const std::function<bool(const std::string&)>& valid) {

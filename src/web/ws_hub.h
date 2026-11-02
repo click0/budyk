@@ -65,6 +65,28 @@ public:
     /// release it. `session`: the session token the upgrade was
     /// authenticated with ("" with auth off), for drop_sessions().
     void  add(int fd, std::string session = std::string());
+    /// add() with a first frame the client is owed before any broadcast:
+    /// `first_frame` runs under the hub's lock and returns it (the
+    /// catch-up frame from the hot buffer), so a tick broadcast between
+    /// the snapshot and the client's registration cannot be missed: the
+    /// broadcast waits for the lock and finds the client. What the socket
+    /// does not take at once waits in the client's outbuf, sent by
+    /// service() and the broadcasts, in order, without blocking the HTTP
+    /// thread (a blocking send of the frame held it for a slow reader).
+    void  add(int fd, std::string session, const std::function<std::string()>& first_frame);
+    /// Send what the client `fd` is owed as its socket takes it, waiting
+    /// for the socket (poll) without the hub's lock, for at most
+    /// `timeout_ms` plus the bytes owed at `min_rate` bytes/s (0: the
+    /// timeout alone): the bounds a response is sent within. The HTTP
+    /// thread calls it after add() with a first frame: a catch-up frame
+    /// larger than a fresh socket's buffer (300 samples are some 500 KB,
+    /// FreeBSD's TCP buffer starts at 32 KB) otherwise waited for the
+    /// next ticks' service(), and a dashboard got its catch-up two ticks
+    /// after the connect (spec §5 item 5 wants it within 100 ms). What is
+    /// still owed past the bound stays for service() and the broadcasts;
+    /// a client gone meanwhile, or not in the hub, is nothing to do.
+    /// Returns the bytes still owed.
+    size_t flush_owed(int fd, int timeout_ms, size_t min_rate);
     /// Drop every client whose session token `valid` no longer accepts
     /// (logged out, expired). Clients without a token stay. `valid` runs
     /// without the hub's lock. Returns the number dropped.
