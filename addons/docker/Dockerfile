@@ -27,6 +27,7 @@ RUN apk add --no-cache libstdc++ lua5.4-libs yaml argon2-libs ncurses-libs curl 
  && chown -R budyk:budyk /var/db/budyk
 
 COPY --from=builder /src/build/src/budyk /usr/local/bin/budyk
+COPY addons/docker/budyk-health /usr/local/bin/budyk-health
 COPY config.example.yaml /etc/budyk/config.example.yaml
 COPY rules/ /usr/share/budyk/rules/
 # The rules where the example config's rules.path looks: the image had
@@ -42,8 +43,9 @@ EXPOSE 8080
 
 # budyk as PID 1 reaps only its own children: run with `--init` (compose:
 # `init: true`) so a helper an exec() command leaves behind is reaped.
+# The check reads the address from the config the daemon runs with.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
-    CMD curl -sf http://127.0.0.1:8080/api/health || exit 1
+    CMD /usr/local/bin/budyk-health
 
 ENTRYPOINT ["/usr/local/bin/budyk"]
 CMD ["serve", "--config", "/etc/budyk/config.example.yaml"]

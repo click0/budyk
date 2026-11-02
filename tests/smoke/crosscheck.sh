@@ -291,9 +291,11 @@ sys.exit(1 if fail else 0)
 EOF
 
 kill -TERM "$PID"
-wait "$PID" 2>/dev/null || true
+if ! wait "$PID"; then
+    echo "FAIL: daemon exited non-zero"; fail=1
+fi
 PID=
-if grep -q "ERROR: AddressSanitizer\|runtime error:" "$DIR/log"; then
+if grep -qE 'ERROR: (Address|Leak)Sanitizer|ThreadSanitizer|runtime error:' "$DIR/log"; then
     echo "FAIL: sanitizer report"; cat "$DIR/log"; fail=1
 fi
 [ "$fail" -eq 0 ] && echo "crosscheck smoke test: PASS" || { echo "crosscheck smoke test: FAIL"; exit 1; }

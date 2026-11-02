@@ -14,7 +14,11 @@ namespace budyk {
 /// writes this process's pid into it. Returns the descriptor to keep open
 /// for as long as the lock is wanted (close-on-exec), or -errno:
 /// -EWOULDBLOCK when another process holds it, with what that process
-/// wrote (its pid) in *holder.
+/// wrote (its pid) in *holder. The file must be a plain file with one
+/// name: a symbolic link or a hard link is refused (-ELOOP), anything
+/// else that is not a regular file too (-EINVAL), each said on stderr,
+/// and nothing is done to what it leads to (root ran `fsck --repair` on
+/// a data directory whose owner had made the lock a link to /etc/shadow).
 int lock_data_dir(const char* dir, std::string* holder);
 
 /// Whether another process holds the lock, without taking it (fsck when

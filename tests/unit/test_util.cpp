@@ -125,6 +125,54 @@ int main() {
         assert(lock_data_dir("/nonexistent/dir", &holder) == -ENOENT);
     }
 
+    // N0. The lock must be a plain file with one name: a symbolic link
+    //     (-ELOOP), a hard link (-ELOOP) or a fifo (-EINVAL) is refused
+    //     and what it leads to is left as it is (root followed the link,
+    //     gave the file to the directory's owner, truncated it and
+    //     wrote a pid into it). data_dir_locked() sees no lock there.
+    {
+        char tmpl[] = "/tmp/budyk_lock_XXXXXX";
+        const char* dir = ::mkdtemp(tmpl);
+        assert(dir != nullptr);
+        const std::string lock   = std::string(dir) + "/budyk.lock";
+        const std::string victim = std::string(dir) + "/victim";
+        FILE* v = std::fopen(victim.c_str(), "w");
+        assert(v != nullptr && std::fputs("precious\n", v) >= 0 && std::fclose(v) == 0);
+        assert(::chmod(victim.c_str(), 0600) == 0);
+        auto untouched = [&victim] {
+            struct stat st{};
+            char buf[32] = {0};
+            FILE* f = std::fopen(victim.c_str(), "r");
+            const bool same = f != nullptr && std::fread(buf, 1, sizeof(buf) - 1, f) == 9 &&
+                              std::string(buf) == "precious\n";
+            if (f != nullptr) std::fclose(f);
+            return same && ::stat(victim.c_str(), &st) == 0 && (st.st_mode & 0777) == 0600;
+        };
+        std::string holder;
+        assert(::symlink(victim.c_str(), lock.c_str()) == 0);
+        assert(lock_data_dir(dir, &holder) == -ELOOP);
+        assert(untouched());
+        assert(!data_dir_locked(dir, &holder));
+        assert(::unlink(lock.c_str()) == 0);
+
+        assert(::link(victim.c_str(), lock.c_str()) == 0);
+        assert(lock_data_dir(dir, &holder) == -ELOOP);
+        assert(untouched());
+        assert(::unlink(lock.c_str()) == 0);
+
+        assert(::mkfifo(lock.c_str(), 0600) == 0);
+        assert(lock_data_dir(dir, &holder) == -EINVAL);
+        assert(::unlink(lock.c_str()) == 0);
+
+        const int fd = lock_data_dir(dir, &holder);   // a plain file: as before
+        assert(fd >= 0);
+        ::close(fd);
+        assert(untouched());
+        ::unlink(lock.c_str());
+        ::unlink(victim.c_str());
+        ::rmdir(dir);
+    }
+
     // N+1. As root (`sudo budyk fsck --repair`), on a data directory
     //      another user owns: the lock file is that user's (it was made
     //      root's, 0600, and the service, running as that user, could not

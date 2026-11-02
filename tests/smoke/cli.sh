@@ -8,7 +8,8 @@
 #     "Generated from 0 samples", since only the L3 ring was read;
 #   - suggest-rules names a ring it cannot read, and why; watch-files
 #     with nothing to watch and hash-password with an argument or a full
-#     output fail (they exited 0);
+#     output fail (they exited 0); watch-files waits for a path that is
+#     not there yet (alone, it was refused);
 #   - suggest-rules says when its output cannot be written (/dev/full),
 #     and refuses a --window past a year however it is written (a huge
 #     number wrapped to some hours);
@@ -34,6 +35,14 @@ DIR=$(mktemp -d)
 PID=
 trap 'kill "$PID" 2>/dev/null || true; rm -rf "$DIR"' EXIT
 fail=0
+
+# A sanitizer's report from any process this script starts goes to
+# $DIR/san.<pid>, checked at the end: the one-shot commands' expected
+# failures accepted any non-zero exit with the message (an ASan abort
+# after it passed), and the TUI's output in a pty was read and dropped.
+export ASAN_OPTIONS="${ASAN_OPTIONS:+$ASAN_OPTIONS:}log_path=$DIR/san"
+export UBSAN_OPTIONS="${UBSAN_OPTIONS:+$UBSAN_OPTIONS:}log_path=$DIR/san"
+export TSAN_OPTIONS="${TSAN_OPTIONS:+$TSAN_OPTIONS:}log_path=$DIR/san"
 
 cat > "$DIR/config.yaml" <<EOF
 data_dir: $DIR/data
@@ -119,14 +128,23 @@ else
     echo "FAIL: suggest-rules on rings of another size: $(cat "$DIR/err")"; fail=1
 fi
 
-# watch-files with nothing it can watch, hash-password with an argument
-# or a full output: each a failure (each exited 0; watch-files waited out
-# its timeout first).
-if "$BIN" watch-files --timeout 100 "$DIR/no-such-file" > /dev/null 2> "$DIR/err"; then
+# watch-files with nothing it can watch (a path under a file), hash-password
+# with an argument or a full output: each a failure (each exited 0;
+# watch-files waited out its timeout first). A path that is not there
+# yet is watched, as security.file_watch watches it, and reported as
+# created when it appears (alone, it was "none of the paths can be
+# watched", though next to a path that existed it was watched).
+if "$BIN" watch-files --timeout 100 "$DIR/config.yaml/under-a-file" > /dev/null 2> "$DIR/err"; then
     echo "FAIL: watch-files on nothing it can watch exited 0"; fail=1
 elif grep -q "none of the paths can be watched" "$DIR/err"; then
     echo "ok   watch-files with nothing to watch is a failure"
 else echo "FAIL: watch-files on nothing: $(cat "$DIR/err")"; fail=1; fi
+( sleep 0.5; : > "$DIR/later" ) &
+if "$BIN" watch-files --timeout 5000 "$DIR/later" > "$DIR/out" 2> "$DIR/err" &&
+   grep -q "^created .*/later" "$DIR/out" && grep -q "1 not there yet" "$DIR/out"; then
+    echo "ok   watch-files waits for a path that is not there yet"
+else echo "FAIL: watch-files on a path not there yet: $(cat "$DIR/out" "$DIR/err")"; fail=1; fi
+wait
 if printf 'pw\n' | "$BIN" hash-password --rounds 3 > /dev/null 2> "$DIR/err"; then
     echo "FAIL: hash-password took an argument it does not have"; fail=1
 else echo "ok   hash-password refuses an argument"; fi
@@ -443,7 +461,7 @@ if "no longer accepted" not in text:
 print("ok   a rejected password is posted once, and the screen says so")
 EOF
 
-if grep -qE 'ERROR: (Address|Leak)Sanitizer|ThreadSanitizer|runtime error:' "$DIR/log"; then
-    echo "FAIL: sanitizer report"; fail=1
+if grep -qE 'ERROR: (Address|Leak)Sanitizer|ThreadSanitizer|runtime error:' "$DIR/log" "$DIR"/san.* 2>/dev/null; then
+    echo "FAIL: sanitizer report"; cat "$DIR"/san.* 2>/dev/null; fail=1
 fi
 [ "$fail" -eq 0 ] && echo "cli smoke test: PASS" || { echo "cli smoke test: FAIL"; exit 1; }

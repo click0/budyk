@@ -233,7 +233,22 @@ FreeBSD 15.1.
   installs and starts it end to end, as CI does on 14.4 and 15.1.
 - **Linux:** the packages above install a hardened systemd unit; for a
   binary installed by hand it is in
-  [`addons/linux/budyk.service`](addons/linux/budyk.service).
+  [`addons/linux/budyk.service`](addons/linux/budyk.service). The unit
+  runs as the user `budyk` and reads `/etc/budyk/config.yaml`, neither
+  of which `cmake --install` makes (it puts the example config under
+  `etc/budyk/` of the prefix): after it,
+
+  ```sh
+  sudo useradd -r -s /sbin/nologin -d /var/db/budyk budyk
+  sudo install -d -o root -g budyk -m 0750 /etc/budyk
+  sudo install -o root -g budyk -m 0640 config.example.yaml /etc/budyk/config.yaml
+  sudo install -o root -g budyk -m 0640 rules/examples.lua /usr/local/etc/budyk/rules.lua
+  sudo install -m 0644 addons/linux/budyk.service /etc/systemd/system/budyk.service
+  sudo systemctl daemon-reload && sudo systemctl enable --now budyk
+  ```
+
+  (the rules where the example config's `rules.path` looks; edit the
+  config first: `data_dir`, `listen`, `port`, the password hash).
 - **Docker:** a `Dockerfile` and `docker-compose.yml` are in
   [`addons/docker/`](addons/docker/). The compose file runs budyk with
   the host's network and process table and reads `config.yaml` next to

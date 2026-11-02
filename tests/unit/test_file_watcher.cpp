@@ -170,10 +170,10 @@ int main() {
         FileWatcher fw;
         assert(fw.init() == 0);
         assert(fw.add("/tmp/budyk_fw_does_not_exist_zzz") == 0);
-        assert(fw.count() == 0);
+        assert(fw.count() == 0 && fw.pending() == 1);
         const std::string f = make_tmp();
         assert(fw.add(f + "/under-a-file") == -ENOTDIR);
-        assert(fw.count() == 0);
+        assert(fw.count() == 0 && fw.pending() == 1);
         fw.shutdown();
         ::unlink(f.c_str());
     }

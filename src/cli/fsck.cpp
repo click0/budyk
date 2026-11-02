@@ -56,10 +56,13 @@ const char* ring_level(uint8_t tier) {
     }
 }
 
-// tier1..3.ring, then the level-*.ring files in name order.
-std::vector<std::string> ring_files(const char* dir) {
+// tier1..3.ring, then the level-*.ring files in name order. A directory
+// that cannot be listed sets *err (errno): it was passed over without a
+// word, and every ring was "missing" with exit 0 (clean).
+std::vector<std::string> ring_files(const char* dir, int* err) {
     std::vector<std::string> names = {"tier1.ring", "tier2.ring", "tier3.ring"};
     std::vector<std::string> custom;
+    *err = 0;
     if (DIR* d = ::opendir(dir)) {
         while (const dirent* e = ::readdir(d)) {
             const std::string n = e->d_name;
@@ -69,6 +72,8 @@ std::vector<std::string> ring_files(const char* dir) {
             }
         }
         ::closedir(d);
+    } else {
+        *err = errno;
     }
     std::sort(custom.begin(), custom.end());
     names.insert(names.end(), custom.begin(), custom.end());
@@ -241,11 +246,26 @@ int cmd_fsck(int argc, char* argv[]) {
     }
 
     const uint64_t now = now_realtime_ns();
-    int checked = 0, left = 0, repaired = 0;
-    for (const auto& name : ring_files(dir)) {
+    int list_err = 0;
+    const std::vector<std::string> names = ring_files(dir, &list_err);
+    if (list_err != 0) {
+        std::fprintf(stderr, "budyk fsck: cannot list '%s': %s\n", dir, std::strerror(list_err));
+        if (lock_fd >= 0) ::close(lock_fd);
+        return kExitFailed;
+    }
+    int checked = 0, left = 0, repaired = 0, unchecked = 0;
+    for (const auto& name : names) {
         const std::string path = std::string(dir) + "/" + name;
         if (::access(path.c_str(), F_OK) != 0) {
-            std::printf("%s: missing (budyk serve creates it)\n", name.c_str());
+            // Only a ring that is not there is "missing": one that cannot
+            // be reached (a data directory budyk's user alone may search)
+            // was "missing" too, and the check clean, exit 0.
+            if (errno == ENOENT) {
+                std::printf("%s: missing (budyk serve creates it)\n", name.c_str());
+            } else {
+                std::printf("%s: cannot check it: %s\n", name.c_str(), std::strerror(errno));
+                ++unchecked;
+            }
             continue;
         }
         RingCheck c;
@@ -263,6 +283,11 @@ int cmd_fsck(int argc, char* argv[]) {
 
     std::printf("budyk fsck: %s: %d ring%s checked, %d repaired, %d with problems left\n",
                 dir, checked, checked == 1 ? "" : "s", repaired, left);
+    if (unchecked > 0) {
+        std::fprintf(stderr, "budyk fsck: %d ring%s could not be checked\n",
+                     unchecked, unchecked == 1 ? "" : "s");
+        return kExitFailed;
+    }
     if (left > 0)     return kExitLeft;
     if (repaired > 0) return kExitRepaired;
     return kExitClean;

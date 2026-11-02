@@ -487,7 +487,12 @@ jobs:
           # The rules where the config looks (the image had none there),
           # and curl(1), which every alert channel runs.
           docker compose logs | grep "budyk serve: started" | grep -q "rules=[1-9]"
-          docker compose exec -T budyk curl --version | head -1
+          # Not piped into head: the pipeline's status was head's, so a
+          # missing curl (exit 127) passed.
+          docker compose exec -T budyk curl --version > /dev/null
+          # The HEALTHCHECK's script reads the address from the mounted
+          # config (it was 127.0.0.1:8080 whatever the config said).
+          docker compose exec -T budyk /usr/local/bin/budyk-health
 
       - name: Logs and clean-up
         if: always()

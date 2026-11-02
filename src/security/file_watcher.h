@@ -91,6 +91,9 @@ public:
     /// Number of paths watched right now: a path deleted or replaced is
     /// not counted until it is watched again.
     std::size_t count() const;
+    /// Number of paths waiting to exist (added while not there, or gone
+    /// since): each is watched, and reported as Created, once it is.
+    std::size_t pending() const;
 
     /// Block up to `timeout_ms` for at least one event, drain pending
     /// events, and append them to `out`. Returns the number appended,

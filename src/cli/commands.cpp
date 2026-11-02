@@ -500,16 +500,27 @@ int cmd_watch_files(int argc, char* argv[]) {
             std::fprintf(stderr,
                 "budyk watch-files: cannot watch '%s': %s\n",
                 p.c_str(), std::strerror(-rc));
+        } else if (rc == 0) {
+            // Not there yet: watched as the daemon's security.file_watch
+            // watches it, and reported as created once it exists. It was
+            // "none of the paths can be watched" alone, yet watched next
+            // to a path that existed.
+            std::fprintf(stderr,
+                "budyk watch-files: '%s' does not exist yet: reported as created when it does\n",
+                p.c_str());
         }
     }
     // Nothing to watch is a failure: it said "watching 0 file(s)", waited
     // out the timeout (for ever with -1) and exited 0.
-    if (fw.count() == 0) {
+    if (fw.count() + fw.pending() == 0) {
         std::fprintf(stderr, "budyk watch-files: none of the paths can be watched\n");
         return 1;
     }
-    std::printf("watching %zu file(s); timeout=%dms\n",
-                static_cast<std::size_t>(fw.count()), timeout_ms);
+    std::printf("watching %zu file(s)", static_cast<std::size_t>(fw.count()));
+    if (fw.pending() > 0) {
+        std::printf(", %zu not there yet", static_cast<std::size_t>(fw.pending()));
+    }
+    std::printf("; timeout=%dms\n", timeout_ms);
 
     std::vector<budyk::FileChangeEvent> events;
     const int n = fw.poll(timeout_ms, &events);

@@ -54,8 +54,13 @@
 // static lib. We use the C-shim Sample type for collector calls and copy
 // the relevant fields back into budyk::Sample for the rest of the pipeline.
 
-static volatile std::sig_atomic_t g_stop   = 0;
-static volatile std::sig_atomic_t g_reload = 0;
+// Atomics, not sig_atomic_t: a signal is taken by whichever thread does
+// not block it (the HTTP thread, in accept()), so the handler's store
+// and the main thread's reads are on different threads (ThreadSanitizer
+// reported the race once serve.sh looked at the signal runs' log). A
+// lock-free atomic is async-signal-safe.
+static std::atomic<int> g_stop{0};
+static std::atomic<int> g_reload{0};
 
 // Self-pipe that wakes the collection loop out of interruptible_sleep().
 // A dashboard or TUI that connects while the loop sleeps at L1 (up to

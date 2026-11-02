@@ -132,7 +132,10 @@ rules:
     # is in this list: the same file (after symlinks) under the same
     # name, since a multi-call binary such as BusyBox runs whatever its
     # name says. Empty list ⇒ any absolute path under the no-`..`
-    # traversal guard.
+    # traversal guard. Under the packaged systemd unit (NoNewPrivileges,
+    # no capabilities) a command runs as budyk and cannot gain more:
+    # sudo and set-uid helpers fail there; give budyk's user what the
+    # command needs instead.
     allow:
       - /usr/local/bin/budyk-alerter
       - /usr/bin/systemctl

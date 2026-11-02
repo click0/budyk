@@ -318,7 +318,8 @@ The gates a local build does not show:
    `TierManager::init()` also counts in a record that reached its slot but
    not the index (`count_unindexed()`), so a daemon crash loses no stored
    record (`tests/smoke/crash.sh`, `fsck.sh`). `budyk serve` holds an
-   flock on `<data_dir>/budyk.lock`: one daemon per data_dir. A fold
+   flock on `<data_dir>/budyk.lock`, a plain file with one name (a link
+   is refused: root ran `fsck --repair` on it): one daemon per data_dir. A fold
    window ends after its interval, when the level drops to the ring's
    own, or on shutdown — a SIGKILL loses the open windows, not the raw
    samples.

@@ -44,9 +44,10 @@ SystemCallArchitectures=native
 CapabilityBoundingSet=
 AmbientCapabilities=
 
-# Filesystem
+# Filesystem. The `-`: without /etc/budyk the unit failed in its
+# namespace setup (226/NAMESPACE) before budyk could say what is missing.
 ReadWritePaths=/var/db/budyk
-ReadOnlyPaths=/etc/budyk
+ReadOnlyPaths=-/etc/budyk
 
 # Resource limits
 LimitNOFILE=4096

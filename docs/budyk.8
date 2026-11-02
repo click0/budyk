@@ -76,7 +76,8 @@ counts in the records written past the index and never counted, which
 a crash between a record's write and the index update leaves; it needs
 the daemon stopped. A check without it can run while the daemon does.
 Exit status: 0 clean, 1 problems found and repaired, 4 problems left,
-8 the check could not run (usage, config, data directory, lock held).
+8 the check could not run (usage, config, a data directory or a ring
+out of reach, lock held).
 .TP
 .B version
 Print version and exit.
