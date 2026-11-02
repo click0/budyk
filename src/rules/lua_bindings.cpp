@@ -664,7 +664,11 @@ int bind_all(lua_State* L) {
     const auto* a = static_cast<const BindArgs*>(lua_touserdata(L, 1));
     lua_settop(L, 0);
     budyk_lua_bind_sample(L, *a->s, a->d);
-    if (a->files != nullptr) budyk_lua_bind_files(L, *a->files);
+    // `files` is there whether the watcher runs or not: with
+    // security.file_watch off it was nil, and a rules file shared with
+    // hosts that watch files errored on every tick here.
+    static const budyk::FileWatchState kNoFiles;
+    budyk_lua_bind_files(L, a->files != nullptr ? *a->files : kNoFiles);
     return 0;
 }
 

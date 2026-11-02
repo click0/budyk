@@ -79,7 +79,10 @@ public:
     void shutdown();
 
     /// Begin watching `path`. Returns a watch id (>0) on success,
-    /// -errno on failure. The id is opaque to the caller.
+    /// -errno on failure. The id is opaque to the caller. A path that does
+    /// not exist yet is 0: it is watched, and reported as Created, as soon
+    /// as it exists (a poll() finds it). A directory reports a change to
+    /// its entries too (one made, removed or moved in or out).
     int  add(const std::string& path);
 
     /// Stop watching `path`. No-op if unknown.

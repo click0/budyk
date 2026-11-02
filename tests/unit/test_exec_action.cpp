@@ -7,6 +7,7 @@
 #include <cassert>
 #include <csignal>
 #include <cstdio>
+#include <cstdlib>
 #include <thread>
 #include <pthread.h>
 #include <unistd.h>
@@ -136,6 +137,32 @@ int main() {
         ::signal(SIGXFSZ, SIG_DFL);
         assert(pthread_sigmask(SIG_SETMASK, &old, nullptr) == 0);
         ::signal(SIGPIPE, SIG_DFL);
+    }
+
+    // 7. The child's environment is what a command needs (PATH, the
+    //    proxy variables, the locale) and nothing else of the daemon's:
+    //    a `budyk serve` from an admin's shell handed every exec() command
+    //    and curl the shell's tokens. A command named without a path is
+    //    still found on PATH.
+    if (exists("/bin/sh")) {
+        ::setenv("FOO_SECRET", "hunter2", 1);
+        ::setenv("http_proxy", "http://proxy.test:3128", 1);
+        ::setenv("LC_ALL", "C", 1);
+        const char* env_argv[] = {"/bin/sh", "-c",
+            "[ -z \"$FOO_SECRET\" ] && [ -n \"$PATH\" ] && "
+            "[ \"$http_proxy\" = http://proxy.test:3128 ] && [ \"$LC_ALL\" = C ]", nullptr};
+        ExecResult r{};
+        assert(exec_command(env_argv, 5, &r) == 0);
+        assert(r.exit_status == 0 && r.signal == 0);
+        const char* by_path[] = {"sh", "-c", "exit 0", nullptr};
+        r = ExecResult{};
+        assert(exec_command(by_path, 5, &r) == 0);
+        assert(r.exit_status == 0);
+        // Not a leak the other way either: the daemon's own environment
+        // is as it was.
+        assert(std::getenv("FOO_SECRET") != nullptr);
+        ::unsetenv("FOO_SECRET");
+        ::unsetenv("http_proxy");
     }
 
     std::printf("test_exec_action: PASS\n");

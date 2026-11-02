@@ -364,6 +364,20 @@ int LuaEngine::init(bool enable_exec) {
     budyk_lua_register_stdlib(L, enable_exec);
     budyk_lua_register_collected(L);
 
+    // The sample globals (cpu, net, files, ...) exist from the start, as
+    // proxies of a sample with nothing collected: a rules file that reads
+    // one at load time (spec §3.6.2's `for name, iface in
+    // pairs(net.interfaces)`) is refused with "not collected", not with
+    // "attempt to index a nil value (global 'net')"; they were made on
+    // the first tick.
+    {
+        Sample empty{};
+        if (budyk_lua_bind(L, empty, nullptr, nullptr) != LUA_OK) {
+            lua_close(L);
+            return -3;
+        }
+    }
+
     lua_sethook(L, &LuaEngine::count_hook, LUA_MASKCOUNT, kHookInterval);
 
     L_ = L;

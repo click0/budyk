@@ -353,17 +353,22 @@ else
     echo "FAIL: a broken rules file on SIGHUP replaced the working rules"; fail=1
 fi
 
-# A rules file that is not there is said so: the FreeBSD port and the
-# Docker image left the config's rules.path empty, and the daemon ran
-# without rules without a word.
+# A SIGHUP while the rules file is not there (a deploy's `mv rules.lua
+# rules.lua.bak` and a HUP in between, a mount briefly gone) keeps the
+# rules loaded before, and names the file: it dropped every rule, in the
+# words of a start without rules ("running without rules").
 mv "$DIR/rules.lua" "$DIR/rules.lua.gone"
 kill -HUP "$PID"
 sleep 1
-if grep -q "rules file '$DIR/rules.lua': No such file or directory; running without rules" "$DIR/log"; then
-    echo "ok   a missing rules file is named in the log"
+beats=$(grep -c 'budyk alert: critical beat' "$DIR/log" || true)
+sleep 1.5
+if grep -q "SIGHUP — rules file '$DIR/rules.lua' failed to load: No such file or directory; keeping the 3 rule(s) loaded before" "$DIR/log" &&
+   [ "$(grep -c 'budyk alert: critical beat' "$DIR/log")" -gt "$beats" ]; then
+    echo "ok   a SIGHUP with the rules file gone keeps the rules running"
 else
-    echo "FAIL: no word on the missing rules file"; fail=1
+    echo "FAIL: a SIGHUP with the rules file gone dropped the rules, or said nothing"; fail=1
 fi
+mv "$DIR/rules.lua.gone" "$DIR/rules.lua"
 
 kill -TERM "$PID"
 if ! wait "$PID"; then

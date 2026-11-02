@@ -4,6 +4,9 @@
 #include "core/sample.h"
 #include "rules/lua_engine.h"
 
+#include <fcntl.h>
+#include <unistd.h>
+
 #include <cassert>
 #include <cstdio>
 #include <string>
@@ -282,6 +285,36 @@ int main() {
             "  action = alert })\n", &why) == -1);
         assert(contains(why, "'end' expected"));
         assert(check_suggested_rules("-- nothing\n", &why) == 0);
+    }
+
+    // 19. A reply's file-scope print() landed on stdout ahead of the
+    //     rules file (which then did not load), its alert() logged an
+    //     alert, and its escalate("L3") was refused by the scratch engine
+    //     (no level names): the check runs them in silence and knows the
+    //     built-in levels. Nothing reaches stdout.
+    {
+        int pipefd[2];
+        assert(::pipe(pipefd) == 0);
+        std::fflush(stdout);
+        const int saved = ::dup(STDOUT_FILENO);
+        assert(saved >= 0);
+        assert(::dup2(pipefd[1], STDOUT_FILENO) >= 0);
+        std::string why;
+        const int n = check_suggested_rules(
+            "print('LLM SAYS HELLO ON STDOUT')\n"
+            "alert('from_reply', 'critical', 'x')\n"
+            "escalate('L3', 60)\n"
+            "watch('x', { when = function() return cpu.total_percent > 90 end })\n", &why);
+        std::fflush(stdout);
+        assert(::dup2(saved, STDOUT_FILENO) >= 0);
+        ::close(saved);
+        ::close(pipefd[1]);
+        char buf[64];
+        assert(::fcntl(pipefd[0], F_SETFL, O_NONBLOCK) == 0);
+        const ssize_t got = ::read(pipefd[0], buf, sizeof(buf));
+        ::close(pipefd[0]);
+        assert(n == 1);
+        assert(got <= 0);
     }
 
     std::printf("test_suggest: PASS\n");

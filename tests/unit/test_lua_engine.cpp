@@ -115,11 +115,14 @@ int main() {
         LuaEngine e;
         assert(e.init(false) == 0);
 
+        // `load` is the load-average group (a table from the start, as
+        // every sample global is); the function of that name is not there.
         const char* script =
             "results = {}\n"
-            "for _, name in ipairs({'io','os','require','loadfile','dofile','load'}) do\n"
+            "for _, name in ipairs({'io','os','require','loadfile','dofile'}) do\n"
             "  results[#results + 1] = tostring(_G[name] == nil)\n"
             "end\n"
+            "results[#results + 1] = tostring(type(load) == 'table')\n"
             "all_nil = (table.concat(results, ',') == 'true,true,true,true,true,true')\n";
         assert(e.load_string(script) == 0);
 
@@ -1847,6 +1850,52 @@ int main() {
             "watch('t', { when = function() return bad0 and badneg and badfrac and badtbl and fine end })\n")
             == 0);
         assert(e.eval_tick(mk(0, 0, 0, 0)) == 1);
+        e.shutdown();
+    }
+
+    // 41. One rule per name: a second watch() of a name is refused at load
+    //     (the state file keeps one line per name, so two rules called
+    //     the same both read the second's zeros after a reload, and the
+    //     first re-fired mid-cooldown).
+    {
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        assert(e.load_string(
+            "watch('dup', { when = function() return true end })\n"
+            "watch('dup', { when = function() return false end })\n") != 0);
+        assert(e.last_error().find("watch(dup): a rule of that name is already registered")
+               != std::string::npos);
+        assert(e.rule_count() == 1);
+        e.shutdown();
+    }
+
+    // 42. `files` is a table whether the watcher runs or not: with
+    //     security.file_watch off it was nil, and a rules file shared with
+    //     hosts that watch files errored on every tick ("attempt to index
+    //     a nil value (global 'files')"). The rule is simply false.
+    {
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        assert(e.load_string(
+            "watch('tamper', { when = function()\n"
+            "  local f = files['/etc/sudoers']\n"
+            "  return f ~= nil and f.tampered\n"
+            "end })\n") == 0);
+        assert(e.eval_tick(mk(0, 0, 0, 0)) == 0);
+        assert(e.rules()[0].last_error.empty());
+        e.shutdown();
+    }
+
+    // 43. The sample globals exist at load time, as proxies of a sample
+    //     with nothing collected: a file-scope read (spec §3.6.2's
+    //     `pairs(net.interfaces)`) is refused as "not collected", not as
+    //     "attempt to index a nil value (global 'net')".
+    {
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        assert(e.load_string("for name, iface in pairs(net.interfaces) do end\n") != 0);
+        assert(e.last_error().find("nil value") == std::string::npos);
+        assert(e.last_error().find("collected") != std::string::npos);
         e.shutdown();
     }
 

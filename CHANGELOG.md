@@ -32,6 +32,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A SIGHUP while the rules file was missing or unreadable dropped every
+  rule.** A deploy's `mv rules.lua rules.lua.bak` with a HUP in between,
+  a mount briefly gone, a chmod mistake: the reload took "no file" as "no
+  rules" and the daemon ran ruleless until the next HUP, in the words of a
+  start without rules. On a reload such a file is a load that failed, and
+  the rules loaded before stay; at start it is still no rules, said so.
+- **In on-demand mode a watched file's change waited for a dashboard.** The
+  watcher was read only on a collecting tick, and without a client there
+  was none: a sudoers edit was reported when someone next connected, and
+  the kernel's event queue filled meanwhile (every path then read as
+  changed). The watcher is read on every tick, and when a file changed
+  the rules run on a sample of the file_watch group alone.
+- **A watched path that did not exist at start was never watched.** A
+  `sudoers.d` drop-in, a log file, a filesystem mounted later: `add()`
+  refused it for good, where a path lost after being watched was retried
+  every poll. It waits, and is watched, as Created, as soon as it exists.
+- **On Linux a watched directory missed a file moved in or removed.**
+  inotify reported only a write inside it, where kqueue reports the entry
+  too; `install x /etc/cron.d/` and `rm /etc/sudoers.d/x` gave nothing. A
+  directory reports an entry made, removed or moved in or out.
+- **Two rules of one name lost their saved state.** The state file keeps
+  one line per name, so after a reload or a restart both read the second
+  rule's zeros and the first re-fired mid-cooldown: a second `watch()` of
+  a name is refused when the file loads.
+- **`files` was nil with `security.file_watch` off**, so a rules file
+  shared with hosts that watch files errored on every tick ("attempt to
+  index a nil value (global 'files')"); it is an empty table there. The
+  sample globals (`cpu`, `net`, ...) exist at load time too, as proxies of
+  a sample with nothing collected: a file-scope read is refused as "not
+  collected at this level", not as "attempt to index a nil value".
+- **An `exec()` command and curl inherited the daemon's whole
+  environment**: a `budyk serve` from an admin's shell, `sudo -E` or an
+  env-rich container handed them every token in it (155 variables in a
+  test run). A child gets PATH, HOME, LANG, LC_*, TZ, TMPDIR, the proxy
+  variables and the CA bundle variables, nothing else. A child that was
+  killed on a timeout was not reaped when a signal interrupted the wait
+  (a zombie for the daemon's life).
+- **`suggest-rules --ai`: the reply's file-scope statements ran as the
+  check loaded it**: a `print()` landed on stdout ahead of the rules file,
+  which then did not load, an `alert()` logged an alert, and an
+  `escalate("L3")` was refused (the scratch engine knew no level names).
+  The check silences both and knows the built-in levels.
+- The login body's `password` was looked for anywhere in the JSON: with
+  `{"user":"password","x":"y","password":"abc"}` the password checked was
+  `y`. The key is taken where a key stands.
 - **An alert channel that could not send was registered without a word.**
   The config loader took any channel with a `type`; what the type needs
   (ntfy `url` and `topic`, discord `url`, telegram `token` and `topic`,

@@ -121,6 +121,14 @@ int l_watch(lua_State* L) {
     }
     const char* name = luaL_checkstring(L, 1);
     luaL_checktype(L, 2, LUA_TTABLE);
+    // One rule per name: the state file (cooldowns across a reload or a
+    // restart) keeps one line per name, and two rules called the same
+    // both read the second's line, so the first re-fired mid-cooldown.
+    for (const auto& r : eng->rules()) {
+        if (r.name == name) {
+            return luaL_error(L, "watch(%s): a rule of that name is already registered", name);
+        }
+    }
 
     // Validate every field before creating any registry ref or C++ object:
     // luaL_error longjmps, which would leak a ref and skip destructors.

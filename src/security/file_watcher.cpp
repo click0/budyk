@@ -7,6 +7,7 @@
 #if defined(BUDYK_LINUX)
 #include <poll.h>
 #include <sys/inotify.h>
+#include <sys/stat.h>
 #elif defined(BUDYK_FREEBSD)
 #include <fcntl.h>
 #include <sys/event.h>
@@ -70,6 +71,14 @@ int FileWatcher::add(const std::string& path) {
     auto it = path_to_id_.find(path);
     if (it != path_to_id_.end()) return it->second;
     const int id = sys_watch(path);
+    if (id == -ENOENT) {
+        // Not there yet (a sudoers.d drop-in, a log file, a filesystem
+        // mounted later): watched, as Created, as soon as it exists. It
+        // used to be refused for good, where a path lost after being
+        // watched was retried every poll.
+        pending_.insert(path);
+        return 0;
+    }
     if (id < 0) return id;
     bind(path, id);
     pending_.erase(path);
@@ -146,7 +155,15 @@ int FileWatcher::sys_watch(const std::string& path) {
     // IN_MODIFY: content writes. IN_ATTRIB: mode, owner, link count.
     // IN_DELETE_SELF + IN_MOVE_SELF: plain rm, and the old file of a
     // rename-over save. Another path to the same inode gets the same wd.
-    const uint32_t mask = IN_MODIFY | IN_DELETE_SELF | IN_MOVE_SELF | IN_ATTRIB;
+    // A directory also reports an entry made, removed or moved in or out
+    // (`install x /etc/cron.d/`, `rm /etc/sudoers.d/x`), as kqueue's
+    // NOTE_WRITE on a directory does on FreeBSD; a write inside it was
+    // all inotify gave.
+    uint32_t mask = IN_MODIFY | IN_DELETE_SELF | IN_MOVE_SELF | IN_ATTRIB;
+    struct stat st{};
+    if (::stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode)) {
+        mask |= IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO;
+    }
     const int wd = ::inotify_add_watch(fd_, path.c_str(), mask);
     return wd < 0 ? -errno : wd;
 }

@@ -520,7 +520,7 @@ Metrics are refreshed every tick as globals:
 | `clock` | `offset_ms`, `max_error_ms`, `synced`, `present` |
 | `self_` | `rss_bytes`, `peak_rss_bytes`, `cpu_user_seconds`, `cpu_system_seconds` |
 | `uptime_seconds` | number |
-| `files` | `files["/path"].modifies`, `.deletes`, `.tampered` (with `security.file_watch` on) |
+| `files` | `files["/path"].modifies`, `.deletes`, `.tampered` (with `security.file_watch` on; an empty table otherwise, so a shared rules file runs everywhere) |
 
 Inside some of them, the newest sample's per-entity detail as read-only
 collections: `cpu.cores` (an array: `#cpu.cores`, `cpu.cores[1].iowait_percent`;
