@@ -22,6 +22,14 @@ namespace budyk {
 
 namespace {
 
+// The newest samples of the hot buffer a WebSocket client gets on
+// connect. The dashboard draws the last one and the file-watch sparkline
+// from the tail; the whole buffer was sent (152 MB at a capacity of
+// 100000, three copies of it, ten minutes of the HTTP thread), and the
+// hub drops a client more than kMaxBacklog (1 MiB) behind, which the
+// frame must leave room under.
+constexpr size_t kCatchupSamples = 300;
+
 // The first entry of a header a chain of proxies may have appended to,
 // without the blanks around it.
 std::string first_entry(std::string v) {
@@ -419,30 +427,38 @@ HttpHandler make_router(const RouterDeps& d) {
             const std::string key = req.header("Sec-WebSocket-Key");
             const std::string handshake = budyk::ws_handshake_response(key);
 
-            // Snapshot the hot buffer right now so the new client gets
-            // history immediately on connect (catch-up frame).
-            std::vector<budyk::Sample> snap;
-            {
-                std::lock_guard<std::mutex> g(hot_mtx);
-                snap.resize(hot.size());
-                if (!snap.empty()) hot.dump(snap.data(), snap.size());
-            }
-            std::string catchup = budyk::ws_text_frame(
-                budyk::samples_to_json(snap.data(), snap.size()));
-
             budyk::HttpResponse r;
-            // Sent within the server's bounds, as a response is: a
-            // blocking send() to a client that read a byte every few
-            // seconds held the HTTP thread for the whole catch-up frame.
-            r.hijack = [handshake, catchup, session, &ws, wake = d.wake,
+            // The handshake within the server's bounds, as a response is.
+            // The catch-up frame, the newest kCatchupSamples of the hot
+            // buffer, goes through the hub: its snapshot is taken as the
+            // client is registered, under the hub's lock, so a tick
+            // broadcast meanwhile reaches the client (it went to neither
+            // the snapshot nor the client: every connect under L3 lost
+            // the ticks of the send), and the hub sends it as the socket
+            // takes it (a blocking send held the HTTP thread for a slow
+            // reader, ten minutes at a hot_buffer.capacity of 100000).
+            // The HTTP thread then waits for the socket within the
+            // bounds a response has (flush_owed): left to the ticks'
+            // service() alone, a frame larger than the socket's buffer
+            // reached the dashboard two ticks after the connect.
+            r.hijack = [handshake, session, &ws, &hot, &hot_mtx, wake = d.wake,
                         io = d.io_timeout_ms, rate = d.min_send_rate](int fd) {
-                if (budyk::send_bounded(fd, handshake.data(), handshake.size(), io, rate) < 0 ||
-                    budyk::send_bounded(fd, catchup.data(), catchup.size(), io, rate) < 0) {
+                if (budyk::send_bounded(fd, handshake.data(), handshake.size(), io, rate) < 0) {
                     ::close(fd);
                     return;
                 }
-                ws.add(fd, session);
+                ws.add(fd, session, [&hot, &hot_mtx]() {
+                    std::vector<budyk::Sample> snap;
+                    {
+                        std::lock_guard<std::mutex> g(hot_mtx);
+                        const size_t n = hot.size() < kCatchupSamples ? hot.size() : kCatchupSamples;
+                        snap.resize(n);
+                        if (n > 0) hot.dump_last(snap.data(), n);
+                    }
+                    return budyk::ws_text_frame(budyk::samples_to_json(snap.data(), snap.size()));
+                });
                 if (wake) wake();         // step up to L3 now, not after the sleep
+                ws.flush_owed(fd, io, rate);
             };
             return r;
         }

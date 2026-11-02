@@ -62,7 +62,8 @@ collection:
                            # disconnects
     metrics: full
   hot_buffer:
-    capacity: 300          # records held in RAM for WS catch-up
+    capacity: 300          # records held in RAM: /api/samples serves them,
+                           # a dashboard gets the newest 300 on connect
     warm_grace: 60         # seconds
 
   # Custom levels, in addition to L1/L2/L3 (at most 16). The active level

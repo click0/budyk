@@ -53,6 +53,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   SIGKILL that record was gone (spec §3.5 promises no stored record is
   lost on a crash). The conversion copies it too; `count_unindexed()`
   reads a ring with its own record size.
+- **A dashboard connecting while L3 ran missed the ticks of its
+  catch-up.** The hot buffer was snapshotted, encoded and sent, and the
+  client registered with the hub after that: a sample collected meanwhile
+  went to a buffer already copied and to a hub the client was not in, so
+  it reached the client from neither (some 30 ticks on a slow link in a
+  test). The catch-up frame is made as the client is registered, under
+  the hub's lock, so the tick's broadcast waits and finds the client; the
+  hub sends the frame as the socket takes it, the HTTP thread waiting
+  for the socket within the bounds a response has (a blocking send held
+  it for a slow reader for as long as the frame took), the rest owed to
+  the ticks. The frame carries the newest 300
+  samples, not the whole buffer (152 MB at `hot_buffer.capacity: 100000`,
+  three copies, ten minutes of the HTTP thread, which `http.stop()` then
+  waited for at shutdown); `/api/samples` still serves the buffer.
 - **Linux: a tick across a clock step read its rates as readings.** The
   collectors divide a counter's change by the wall-clock interval since
   their previous read; an NTP step at boot (a Pi with no RTC), a VM

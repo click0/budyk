@@ -114,7 +114,13 @@ There is no event-loop library (no libuv, kqueue or epoll). The daemon is:
   every request's Host must be one of budyk's names (an address,
   localhost, the hostname, `web.allowed_hosts`), or 403: DNS rebinding
   (`own_host()` in `router.cpp`).
-- **WebSocket hub:** client fds are non-blocking. `broadcast()` sends
+- **WebSocket hub:** client fds are non-blocking. A client is added with
+  its catch-up frame (the newest `kCatchupSamples`, 300, of the hot
+  buffer), made under the hub's lock as the client is registered, so a
+  tick broadcast meanwhile reaches it; the frame is sent as the socket
+  takes it, the HTTP thread waiting for the socket within the bounds a
+  response has (`flush_owed()`), what is left past them owed to the
+  ticks. `broadcast()` sends
   what each client's socket takes and keeps the rest for the next call
   (`WebSocketHub::kMaxBacklog`, 1 MiB, behind: dropped); `service()`,
   called by the main thread once per tick, sends what is owed, reads at
