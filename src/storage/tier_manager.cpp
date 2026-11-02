@@ -506,6 +506,7 @@ int TierManager::query_ring(const RingFile* ring, int override_level,
     if (cap == 0 || widx == 0) return 0;
 
     const uint64_t valid = widx < cap ? widx : cap;   // records still live
+    if (until_ns != 0 && since_ns > until_ns) return 0;   // an empty window: no walk
 
     // Walk newest → oldest so the time-window cutoff lets us stop early
     // and so an over-long window keeps the *newest* max_records. Records
@@ -516,7 +517,29 @@ int TierManager::query_ring(const RingFile* ring, int override_level,
     std::vector<Sample>  newest_first;
     newest_first.reserve(std::min<std::size_t>(max_records, valid));
 
-    for (uint64_t k = 0; k < valid && newest_first.size() < max_records; ++k) {
+    // The walk starts at the newest record within `until`, found by a
+    // binary search: a window in the past (`until` an hour ago, or
+    // since > until) walked the whole ring down to it, a second of the
+    // HTTP thread on a full 250 MB tier1 for every such request.
+    uint64_t start = widx;
+    if (until_ns != 0 && until_ns != UINT64_MAX) {
+        RingReader reader(ring);
+        start = reader.lower_bound(until_ns + 1);          // the first one past until
+        if (start > widx) start = widx;
+        if (start < widx - valid) start = widx - valid;
+    }
+
+    // Records are appended in timestamp order, so one older than since_ns
+    // means the rest are too, apart from a stretch out of order: the
+    // records of a clock step back (a run re-stamped before the ones
+    // under it), or a previous lap's records left under the write index
+    // by a power loss (the header's page reached the disk, theirs did
+    // not). Past such a stretch the window goes on, so the walk looks
+    // kDisorderLookback records further before it stops (it stopped at
+    // the first older record, and a window after a step read nothing).
+    constexpr uint64_t kDisorderLookback = 1024;
+    uint64_t older_run = 0;
+    for (uint64_t k = widx - start; k < valid && newest_first.size() < max_records; ++k) {
         const uint64_t logical = widx - 1 - k;
         const uint64_t slot    = logical % cap;
         if (ring->read_at(slot, buf.data(), rsize) != 0) continue;
@@ -527,7 +550,11 @@ int TierManager::query_ring(const RingFile* ring, int override_level,
         if (ring->write_begun() > logical + cap) break;
         Sample s{};
         if (record_decode(buf.data(), rsize, &s) != 0) continue;   // torn / CRC
-        if (s.timestamp_nanos < since_ns) break;                   // window floor
+        if (s.timestamp_nanos < since_ns) {                        // window floor
+            if (++older_run > kDisorderLookback) break;
+            continue;
+        }
+        older_run = 0;
         if (until_ns != 0 && s.timestamp_nanos > until_ns) continue;
         if (override_level > 0) s.level = static_cast<Level>(override_level);
         newest_first.push_back(s);
@@ -544,5 +571,6 @@ int TierManager::query_ring(const RingFile* ring, int override_level,
 uint64_t TierManager::tier1_count() const { return tier1_.count(); }
 uint64_t TierManager::tier2_count() const { return tier2_.count(); }
 uint64_t TierManager::tier3_count() const { return tier3_.count(); }
+uint64_t TierManager::tier1_reads() const { return tier1_.reads(); }
 
 } // namespace budyk

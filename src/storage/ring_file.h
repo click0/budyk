@@ -37,6 +37,12 @@ public:
     uint64_t count() const;
     uint64_t capacity() const;
     uint8_t  tier() const;
+    /// The size of this ring's records, as opened (an older ring's are
+    /// smaller than record_size_for_sample()).
+    uint32_t record_size() const;
+    /// Records read with read_at() since open(): the tests see how much
+    /// of a ring a query walked.
+    uint64_t reads() const;
 
     /// What a ring file's header says, read without opening it for
     /// writing (fsck learns tier, record size and capacity from it).
@@ -82,6 +88,7 @@ private:
     /// header too (append(), advance_write_index()).
     std::atomic<uint64_t> widx_{0};
     std::atomic<uint64_t> begun_{0};   ///< write_begun()
+    mutable std::atomic<uint64_t> reads_{0};   ///< reads()
 };
 
 } // namespace budyk

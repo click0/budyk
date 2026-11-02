@@ -270,6 +270,55 @@ int main() {
         rmrf(d);
     }
 
+    // 8b. A stretch out of order: after a clock step back (50 s here) the
+    //     records of the new run are stamped before the ones under them,
+    //     and a query whose window starts after the step found the first
+    //     older record at the very top and stopped: since=1190 was 0,
+    //     since=1160 the new run's 3 alone. The walk looks past such a
+    //     stretch (up to 1024 records) and finds the window's records.
+    {
+        const std::string d = mkdtmp();
+        TierManager tm;
+        assert(tm.init(d.c_str(), 1, 1, 1) == 0);
+        for (uint64_t ts = 1000; ts <= 1200; ts += 10) assert(tm.store(mk(Level::L3, ts)) == 0);
+        for (uint64_t ts = 1150; ts <= 1180; ts += 10) assert(tm.store(mk(Level::L3, ts)) == 0);
+        std::vector<Sample> out;
+        assert(tm.query(1, 1190, 0, 100, &out) == 2);
+        assert(out[0].timestamp_nanos == 1190 && out[1].timestamp_nanos == 1200);
+        out.clear();
+        assert(tm.query(1, 1160, 0, 100, &out) == 8);     // 1160..1200 (5) and 1160..1180 (3)
+        out.clear();
+        assert(tm.query(1, 1000, 1005, 100, &out) == 1);  // the oldest alone, past the stretch
+        tm.close();
+        rmrf(d);
+    }
+
+    // 8c. A window in the past (`until` before the newest record, or
+    //     since > until) walked the whole ring down to it, a second of the
+    //     HTTP thread on a full tier1: the walk starts at the newest record
+    //     within until, found by a binary search. 1500 records (a 1 MB
+    //     tier1 holds some 1900), a window among the oldest ten: a few
+    //     dozen reads, not 1500.
+    {
+        const std::string d = mkdtmp();
+        TierManager tm;
+        assert(tm.init(d.c_str(), 1, 1, 1) == 0);
+        for (uint64_t i = 0; i < 1500; ++i) assert(tm.store(mk(Level::L3, 10000 + i)) == 0);
+        const uint64_t before = tm.tier1_reads();
+        std::vector<Sample> out;
+        assert(tm.query(1, 10000, 10009, 100, &out) == 10);
+        assert(out.front().timestamp_nanos == 10000 && out.back().timestamp_nanos == 10009);
+        assert(tm.tier1_reads() - before < 100);
+        out.clear();
+        assert(tm.query(1, 10500, 10400, 100, &out) == 0);     // since > until: nothing, cheaply
+        assert(tm.tier1_reads() - before < 200);
+        out.clear();
+        assert(tm.query(1, 0, UINT64_MAX, 5, &out) == 5);      // no upper bound: the newest
+        assert(out.back().timestamp_nanos == 11499);
+        tm.close();
+        rmrf(d);
+    }
+
     // N. Custom-level rings: a sample at a custom level goes to its own
     //    level-<name>.ring and comes back through query_level(). The ring
     //    is found by name, so after a config reorder gives the level a new

@@ -215,10 +215,14 @@ int RingFile::read_at(uint64_t index, void* out, size_t len) const {
     if (index >= capacity_)                    return -3;
 
     off_t off = static_cast<off_t>(kHeaderSize + index * record_size_);
+    reads_.fetch_add(1, std::memory_order_relaxed);
     ssize_t r = ::pread(fd_, out, record_size_, off);
     if (r != static_cast<ssize_t>(record_size_)) return -4;
     return 0;
 }
+
+uint64_t RingFile::reads() const { return reads_.load(std::memory_order_relaxed); }
+uint32_t RingFile::record_size() const { return record_size_; }
 
 int RingFile::advance_write_index(uint64_t n) {
     if (fd_ < 0 || read_only_) return -1;
