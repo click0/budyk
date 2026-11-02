@@ -56,8 +56,12 @@ the code still differ, the code wins and this file says how.
   every mount look read-only); a mount point budyk cannot reach (EACCES
   as the service user) is counted in `budyk_fs_c::unreadable` and logged
   when the count changes; a filesystem hidden under another mount on the
-  same point is left out. `/proc` mounted `hidepid` leaves the process
-  group out (pid 1 unreadable means the rest are hidden). The rates are
+  same point is left out (FreeBSD too: `budyk_freebsd_mount_hidden()`,
+  or `statfs()` of the point asked the covering NFS server every tick).
+  `/proc` mounted `hidepid` leaves the process group out (pid 1
+  unreadable means the rest are hidden). FreeBSD's kernel processes
+  (P_SYSTEM) count as sleeping whatever their state, as Linux's kernel
+  threads do (`budyk_freebsd_proc_counted_state()`). The rates are
   changes over the wall-clock interval between reads: a tick across a
   clock step (the wall and the monotonic clock disagree by over a second,
   `CollectContext::mono_now_ns`) is a baseline for the rate groups.

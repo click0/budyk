@@ -27,6 +27,12 @@
 /* Per core from kern.cp_times: CPUSTATES longs per CPU id, up to the
  * highest id the kernel has (absent CPUs read all zero and are left
  * out). Parts in budyk_cpu_ctx_c.part order, the sum in [6]. */
+/* A cp_time counter as the kernel keeps it, an unsigned tick count: in
+ * a signed `long` of 32 bits (i386, armv7) the idle sum passes 2^31 in
+ * some 49 days, and cast as signed it read as 2^64 minus its magnitude
+ * (one tick of 0 % CPU stored, another at the wrap back). */
+static uint64_t cp(long v) { return (uint64_t)(unsigned long)v; }
+
 static void collect_cores(budyk_detail_c* d) {
     d->ncores = 0;
     size_t len = 0;
@@ -38,10 +44,10 @@ static void collect_cores(budyk_detail_c* d) {
     for (size_t id = 0; id < n && id < BUDYK_MAX_CORES; ++id) {
         const long* c = t + id * CPUSTATES;
         const uint64_t now[7] = {
-            (uint64_t)c[CP_USER] + (uint64_t)c[CP_NICE], (uint64_t)c[CP_SYS], 0,
-            (uint64_t)c[CP_INTR], 0, (uint64_t)c[CP_IDLE],
-            (uint64_t)c[CP_USER] + (uint64_t)c[CP_NICE] + (uint64_t)c[CP_SYS] +
-            (uint64_t)c[CP_INTR] + (uint64_t)c[CP_IDLE],
+            cp(c[CP_USER]) + cp(c[CP_NICE]), cp(c[CP_SYS]), 0,
+            cp(c[CP_INTR]), 0, cp(c[CP_IDLE]),
+            cp(c[CP_USER]) + cp(c[CP_NICE]) + cp(c[CP_SYS]) +
+            cp(c[CP_INTR]) + cp(c[CP_IDLE]),
         };
         if (now[6] == 0) continue;                    /* no such CPU */
         budyk_core_c* out = &d->cores[d->ncores++];
@@ -90,17 +96,17 @@ int budyk_collect_cpu_freebsd_ex(budyk_cpu_ctx_c* ctx, budyk_sample_c* s, budyk_
     if (ncpu < 1) ncpu = 1;
     s->cpu.count = (uint32_t)ncpu;
 
-    const uint64_t busy  = (uint64_t)cp_time[CP_USER]
-                         + (uint64_t)cp_time[CP_NICE]
-                         + (uint64_t)cp_time[CP_SYS]
-                         + (uint64_t)cp_time[CP_INTR];
-    const uint64_t total = busy + (uint64_t)cp_time[CP_IDLE];
+    const uint64_t busy  = cp(cp_time[CP_USER])
+                         + cp(cp_time[CP_NICE])
+                         + cp(cp_time[CP_SYS])
+                         + cp(cp_time[CP_INTR]);
+    const uint64_t total = busy + cp(cp_time[CP_IDLE]);
     /* The parts, in budyk_cpu_ctx_c.part order. FreeBSD has no iowait
      * or steal state: those stay 0. */
     const uint64_t part[6] = {
-        (uint64_t)cp_time[CP_USER] + (uint64_t)cp_time[CP_NICE],
-        (uint64_t)cp_time[CP_SYS], 0, (uint64_t)cp_time[CP_INTR], 0,
-        (uint64_t)cp_time[CP_IDLE],
+        cp(cp_time[CP_USER]) + cp(cp_time[CP_NICE]),
+        cp(cp_time[CP_SYS]), 0, cp(cp_time[CP_INTR]), 0,
+        cp(cp_time[CP_IDLE]),
     };
 
     double pct[6] = { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };

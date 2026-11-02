@@ -58,6 +58,9 @@ int budyk_collect_disk_freebsd_ex(budyk_disk_ctx_c* ctx, budyk_sample_c* s, budy
     if (stats.dinfo == NULL) return -ENOMEM;
 
     if (devstat_getdevs(NULL, &stats) < 0) {
+        /* libdevstat allocates mem_ptr before the sysctl that can fail
+         * and leaves it: every failing tick leaked a device's worth. */
+        free(stats.dinfo->mem_ptr);
         free(stats.dinfo);
         return -EIO;
     }

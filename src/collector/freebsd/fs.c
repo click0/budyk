@@ -34,6 +34,14 @@ int budyk_collect_fs_freebsd(budyk_sample_c* s) {
     return budyk_collect_fs_freebsd_ex(s, NULL);
 }
 
+int budyk_freebsd_mount_hidden(const struct statfs* list, int n, int i) {
+    if (list == NULL || i < 0 || i >= n) return 0;
+    for (int j = i + 1; j < n; ++j) {
+        if (strcmp(list[j].f_mntonname, list[i].f_mntonname) == 0) return 1;
+    }
+    return 0;
+}
+
 int budyk_collect_fs_freebsd_ex(budyk_sample_c* s, budyk_detail_c* d) {
     if (s == NULL) return -EINVAL;
     memset(&s->fs, 0, sizeof(s->fs));
@@ -45,6 +53,10 @@ int budyk_collect_fs_freebsd_ex(budyk_sample_c* s, budyk_detail_c* d) {
     for (int i = 0; i < n; ++i) {
         if ((mounts[i].f_flags & MNT_RDONLY) != 0) continue;
         if (skipped_type(mounts[i].f_fstypename)) continue;
+        /* Under a later mount on the same point: statfs() of the point
+         * reaches that one (an NFS server asked on every tick, or a
+         * tmpfs counted twice), as on Linux. */
+        if (budyk_freebsd_mount_hidden(mounts, n, i)) continue;
         /* A mount point the daemon cannot reach (EACCES: a dataset or a
          * jail's root under a 0700 directory, and budyk is not root) was
          * left out without a word; the list's own numbers, as of

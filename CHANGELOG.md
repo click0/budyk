@@ -126,6 +126,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that text.
 - **The "queue full" alert log line printed the rule's name raw**, so a
   line break in it (a process name's) forged a log line.
+- **FreeBSD: `proc.blocked` counted every sleeping kernel process.** A
+  kernel process sleeps without PCATCH, so its idle sleep read as D
+  (uninterruptible) and some 20 of them (`[kernel]`, `[cam]`,
+  `[pagedaemon]`, `[syncer]`, `[zfskern]`) were "blocked" on an idle
+  host for its whole life, the idle process "running": a rule such as
+  `proc.blocked > 5` fired at once and never cleared. They count as
+  sleeping, as Linux's kernel threads do.
+- **FreeBSD: a filesystem hidden under another mount on the same point
+  was read through the top one.** The skip checks looked at the hidden
+  entry (a ZFS dataset), `statfs()` of its point reached the covering
+  one (an NFS mount of `/home`): the NFS server was asked on every tick,
+  the main thread blocked on a hard mount with the server down, and the
+  export was listed as local; a tmpfs over a dataset was counted twice.
+  A mount under a later one on the same point is left out, as on Linux.
+- **FreeBSD: a failed `devstat_getdevs()` leaked libdevstat's device
+  buffer** on every failing tick.
+- **FreeBSD on a 32-bit CPU: `kern.cp_time`'s counters read as signed**,
+  so once the idle sum passed 2^31 (some 49 days) one tick read 0 % CPU,
+  and another at the wrap back. Read as unsigned.
 - **Two budyks on one host name shared one session cookie.** Cookies are
   not kept apart by port, so two dashboards reached through SSH tunnels
   (`localhost:8081`, `localhost:8082`) or one reverse proxy's paths
