@@ -257,7 +257,11 @@ std::string session_cookie(const std::string& headers) {
         if (v == std::string::npos) continue;
         const auto semi = line.find(';', v);
         const std::string pair = line.substr(v, semi == std::string::npos ? std::string::npos : semi - v);
-        if (pair.compare(0, 14, "budyk_session=") == 0 && pair.size() > 14) return pair;
+        // `budyk_session=` or, one name per budyk, `budyk_session_<tag>=`.
+        if (pair.compare(0, 13, "budyk_session") != 0) continue;
+        const auto eq = pair.find('=');
+        if (eq == std::string::npos || eq + 1 >= pair.size()) continue;
+        if (eq == 13 || pair[13] == '_') return pair;
     }
     return std::string();
 }

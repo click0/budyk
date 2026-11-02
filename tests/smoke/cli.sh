@@ -57,11 +57,14 @@ EOF
 PID=$!
 sleep 6
 
-# A client that connects and sends nothing, then the TUI (in a pty).
+# A client that connects and sends the start of a request, then
+# nothing more (one that sent nothing at all is cut off after a second
+# now), then the TUI (in a pty).
 python3 - "$BIN" "$PORT" <<'EOF' || fail=1
 import os, pty, select, signal, socket, sys, time
 binary, port = sys.argv[1], sys.argv[2]
 idle = socket.create_connection(("127.0.0.1", int(port)))
+idle.sendall(b"GET /api/health HTTP/1.1\r\n")
 time.sleep(0.2)
 t = time.time()
 pid, fd = pty.fork()

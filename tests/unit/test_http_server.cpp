@@ -584,6 +584,69 @@ int main() {
         s.stop();
     }
 
+    // 14. A connection that sends nothing is closed after kFirstByteMs
+    //     (1 s), not after the whole request budget: a browser's
+    //     speculative connection, or a few silent ones opened on purpose,
+    //     held the thread for io_timeout_ms each (6 of them: 30 s), and
+    //     the dashboard, the login and the TUI waited behind them. One
+    //     that has sent a byte gets the budget (its request may be slow).
+    {
+        HttpServer s;
+        s.set_io_timeout_ms(4000);
+        assert(s.start("127.0.0.1", 0, [](const HttpRequest&) {
+                           return HttpResponse{200, "text/plain", "ok\n"};
+                       }) == 0);
+        auto connect_to = [&s] {
+            const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+            assert(fd >= 0);
+            sockaddr_in sa{};
+            sa.sin_family = AF_INET;
+            sa.sin_port   = htons(static_cast<uint16_t>(s.bound_port()));
+            ::inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr);
+            assert(::connect(fd, reinterpret_cast<sockaddr*>(&sa), sizeof(sa)) == 0);
+            return fd;
+        };
+        auto closed_after = [](int fd) {          // seconds until the server closes it
+            const auto t0 = std::chrono::steady_clock::now();
+            char b[16];
+            while (::recv(fd, b, sizeof(b), 0) > 0) {}
+            ::close(fd);
+            return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        };
+        const double silent = closed_after(connect_to());
+        assert(silent >= 0.9 && silent < 2.5);
+        const int partial = connect_to();
+        assert(::send(partial, "GET ", 4, 0) == 4);   // a byte sent: the full budget
+        const double slow = closed_after(partial);
+        assert(slow >= 3.5 && slow < 6.0);
+        s.stop();
+    }
+
+    // 15. stop() shuts down the connection being served: a stop came
+    //     back after that response's bound (minutes for a slow reader of
+    //     /api/samples at a large hot_buffer.capacity; systemd then
+    //     killed budyk before the fold windows were written).
+    {
+        HttpServer s;
+        s.set_io_timeout_ms(4000);
+        assert(s.start("127.0.0.1", 0, [](const HttpRequest&) {
+                           return HttpResponse{200, "text/plain", "ok\n"};
+                       }) == 0);
+        const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+        sockaddr_in sa{};
+        sa.sin_family = AF_INET;
+        sa.sin_port   = htons(static_cast<uint16_t>(s.bound_port()));
+        ::inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr);
+        assert(::connect(fd, reinterpret_cast<sockaddr*>(&sa), sizeof(sa)) == 0);
+        assert(::send(fd, "GET ", 4, 0) == 4);     // the server waits for the rest, up to 4 s
+        ::usleep(200 * 1000);
+        const auto t0 = std::chrono::steady_clock::now();
+        s.stop();
+        const double took = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        assert(took < 1.5);
+        ::close(fd);
+    }
+
     std::printf("test_http_server: PASS\n");
     return 0;
 }

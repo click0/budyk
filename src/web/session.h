@@ -27,7 +27,9 @@ public:
     /// Empty string on entropy-source failure.
     std::string create();
 
-    /// True when `token` is present and not yet expired.
+    /// True when `token` is present and not yet expired. A deadline past
+    /// `now + TTL` (the clock stepped back since it was set) is brought
+    /// down to that: every session grew by the step.
     bool        verify(const std::string& token);
 
     /// verify(), and a session in use is kept going (sliding expiration,
@@ -50,18 +52,32 @@ public:
     // --- Persistence -----------------------------------------------------
     /// Enable autosave to `path`: create()/revoke()/expiry-eviction will
     /// rewrite the file. Pass "" to disable. Does not itself read or
-    /// write — call load() once at startup after setting this.
+    /// write — call load() once at startup after setting this. A save
+    /// that fails is logged when its error changes (a full disk, a file
+    /// left root's: nothing was saved, nothing said, and every browser
+    /// signed in again after the restart).
     void        set_persist_path(const std::string& path);
 
-    /// Load entries from `path`, skipping any already past their deadline.
-    /// A missing file is a no-op success (fresh install). Returns 0 on
-    /// success, negative on a malformed file. Merges into the current
-    /// table rather than replacing it.
-    int         load(const char* path);
+    /// The credential the sessions are made under: a fingerprint of the
+    /// password hash goes into the file, and load() drops a file made
+    /// under another one. A password change ended no session: whoever
+    /// had the old password kept the dashboard, for ever with the
+    /// sliding expiration. Set before load(); "" (the default) writes
+    /// and takes a file without one.
+    void        set_credential(const std::string& password_hash);
 
-    /// Atomically write the live table to `path` (temp + rename, 0600).
-    /// Returns 0 on success, -errno on failure. Normally invoked
-    /// automatically via the persist path; exposed for tests.
+    /// Load entries from `path`, skipping any already past their deadline
+    /// and capping one past `now + TTL`. A missing file is a no-op
+    /// success (fresh install); a file that cannot be read is -errno. A
+    /// file made under another credential (see set_credential()) is
+    /// left out whole, and `*stale` (may be null) says so when it held
+    /// sessions. Merges into the current table rather than replacing it.
+    int         load(const char* path, bool* stale = nullptr);
+
+    /// Atomically write the live table to `path` (temp + rename, 0600,
+    /// fsync'd: a power cut after a login left an empty file). Returns
+    /// 0 on success, -errno on failure. Normally invoked automatically
+    /// via the persist path; exposed for tests.
     int         save(const char* path) const;
 
 private:
@@ -79,6 +95,8 @@ private:
     uint64_t           ttl_ns_;
     std::map<std::string, uint64_t> deadline_;   ///< token → expires_at_ns
     std::string        persist_path_;            ///< empty = RAM-only
+    std::string        credential_;              ///< the hash's fingerprint, "" for none
+    mutable int        last_save_rc_ = 0;        ///< the last autosave's result, logged on change
 };
 
 } // namespace budyk

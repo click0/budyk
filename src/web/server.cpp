@@ -246,9 +246,17 @@ ssize_t send_all(int fd, const void* data, size_t len, Deadline deadline, int io
 // all within io_timeout_ms plus the body's size at min_rate bytes/s: a
 // client that reads slower (a little per send timeout, each time in
 // time) held the one HTTP thread for as long as it liked.
+// The time a body's size at the minimum rate allows, in 64 bits: in
+// size_t on a 32-bit host, size * 1000 wrapped past 4.3 MB (a 9 MB
+// /api/range got 2.7 s instead of 35).
+std::chrono::milliseconds rate_allowance(size_t size, size_t min_rate) {
+    const uint64_t ms = static_cast<uint64_t>(size) * 1000 / (min_rate > 0 ? min_rate : 1);
+    return std::chrono::milliseconds(static_cast<int64_t>(ms));
+}
+
 ssize_t send_response(int fd, const HttpResponse& r, int io_timeout_ms, size_t min_rate) {
     const Deadline deadline = Clock::now() + std::chrono::milliseconds(io_timeout_ms) +
-        std::chrono::milliseconds(r.body.size() * 1000 / min_rate);
+        rate_allowance(r.body.size(), min_rate);
     // Built as a string: a fixed buffer and snprintf()'s return taken as
     // the length read past the buffer for a content type over ~200 bytes.
     std::string head;
@@ -280,9 +288,8 @@ ssize_t send_response(int fd, const HttpResponse& r, int io_timeout_ms, size_t m
 } // namespace
 
 ssize_t send_bounded(int fd, const void* data, size_t len, int io_timeout_ms, size_t min_rate) {
-    if (min_rate == 0) min_rate = 1;
     const Deadline deadline = Clock::now() + std::chrono::milliseconds(io_timeout_ms) +
-        std::chrono::milliseconds(len * 1000 / min_rate);
+        rate_allowance(len, min_rate);
     return send_all(fd, data, len, deadline, io_timeout_ms);
 }
 
@@ -369,6 +376,11 @@ void HttpServer::stop() {
             ::close(listen_fd_);
             listen_fd_ = -1;
         }
+        // The connection being served: its recv() or send() fails at
+        // once. (A number the loop has closed and another thread has
+        // reused by now is a file, not a socket: ENOTSOCK, nothing done.)
+        const int sfd = serving_fd_.load();
+        if (sfd >= 0) ::shutdown(sfd, SHUT_RDWR);
     }
     if (loop_started_) {
         ::pthread_join(loop_, nullptr);
@@ -435,7 +447,9 @@ void HttpServer::run_loop() {
         last_accept_errno_ = 0;
         char peer[INET_ADDRSTRLEN] = "";
         ::inet_ntop(AF_INET, &cli.sin_addr, peer, sizeof(peer));
+        serving_fd_.store(cfd);
         const bool hijacked = handle_client(cfd, peer);
+        serving_fd_.store(-1);                     // before the close: never a stale number
         if (!hijacked) ::close(cfd);
     }
 }
@@ -454,6 +468,24 @@ bool HttpServer::handle_client(int client_fd, const char* peer) {
     auto reply = [this, client_fd](const HttpResponse& r) {
         send_response(client_fd, r, io_timeout_ms_, min_send_rate_);
     };
+
+    // Nothing sent at all within kFirstByteMs: not a request (a
+    // browser's speculative connection, a probe, a silent client), and
+    // the thread is wanted elsewhere; a request's first bytes come with
+    // the connection. Once something is here, the whole budget applies.
+    {
+        const Deadline first = Clock::now() + std::chrono::milliseconds(kFirstByteMs);
+        for (;;) {
+            const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
+                first - Clock::now()).count();
+            if (left <= 0) return false;
+            struct pollfd pfd{client_fd, POLLIN, 0};
+            const int pr = ::poll(&pfd, 1, static_cast<int>(left));
+            if (pr > 0) break;
+            if (pr < 0 && errno == EINTR) continue;
+            return false;
+        }
+    }
 
     std::vector<char> buf;
     ssize_t hdr_end = read_until_headers(client_fd, &buf, deadline, io_timeout_ms_);

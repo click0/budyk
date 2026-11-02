@@ -46,6 +46,11 @@ int main() {
                == "budyk_session=t2");
         assert(session_cookie("Set-Cookie: budyk_session=; Max-Age=0").empty());
         assert(session_cookie("X-Set-Cookie: budyk_session=no").empty());
+        // One cookie name per budyk: `budyk_session_<tag>`.
+        assert(session_cookie("Set-Cookie: budyk_session_1a2b3c4d=t3; HttpOnly; Path=/")
+               == "budyk_session_1a2b3c4d=t3");
+        assert(session_cookie("Set-Cookie: budyk_session_1a2b3c4d=; Max-Age=0").empty());
+        assert(session_cookie("Set-Cookie: budyk_sessions=t4").empty());
         assert(session_cookie("").empty());
     }
 
