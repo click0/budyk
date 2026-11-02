@@ -228,6 +228,16 @@ int check_suggested_rules(const std::string& lua, std::string* error) {
         if (error != nullptr) *error = "the rules engine did not start";
         return -1;
     }
+    // The reply's file-scope statements run as the check loads it: a
+    // print() landed on stdout ahead of the rules file (which then did
+    // not load), an alert() logged an alert, and an escalate("L3") was
+    // refused (the scratch engine knew no level names). Both are
+    // silenced for the check, and the built-in levels are known.
+    e.set_level_names({"L1", "L2", "L3"});
+    if (e.load_string("print = function() end\nalert = function() end\n") != 0) {
+        if (error != nullptr) *error = e.last_error();
+        return -1;
+    }
     if (e.load_string(lua.c_str()) != 0) {
         if (error != nullptr) *error = e.last_error();
         return -1;

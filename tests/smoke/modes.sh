@@ -61,6 +61,10 @@ cat > "$DIR/rules.lua" <<'EOF'
 watch("tick", { when = function() return true end, action = "log", message = "tick" })
 watch("io", { when = function() return disk.read_bytes_per_sec >= 0 end,
               action = "log", message = "io" })
+watch("tamper", { when = function()
+    for _, f in pairs(files) do if f.tampered then return true end end
+    return false
+end, action = "log", message = "tampered" })
 EOF
 
 # 1. adaptive with metric sets ---------------------------------------------
@@ -175,17 +179,29 @@ data_dir: $DIR/ondemand
 listen: 127.0.0.1
 port: $PORT
 rules: { path: $DIR/rules.lua }
+security: { file_watch: { enabled: true, paths: [$DIR/watched_od] } }
 collection:
   mode: on-demand
   l1: { interval: 1 }
   l3: { interval: 1, grace_period: 1 }
 EOF
+: > "$DIR/watched_od"
 start ondemand
 sleep 2
 if [ "$(ticks ondemand)" = 0 ]; then
     echo "ok   on-demand: nothing collected without a client"
 else
     echo "FAIL: on-demand collected $(ticks ondemand) tick(s) with no client"; fail=1
+fi
+# A watched file's change is reported with no client connected: the
+# watcher was read only on a collecting tick, so it waited for a
+# dashboard (and the kernel's event queue filled meanwhile).
+echo changed >> "$DIR/watched_od"
+sleep 2.5
+if grep -q '^\[budyk\] tampered$' "$DIR/ondemand.log"; then
+    echo "ok   on-demand: a watched file's change is reported with no client"
+else
+    echo "FAIL: on-demand: a watched file's change waited for a client"; fail=1
 fi
 check "on-demand: L1 and L2 do not collect" \
       "[l['collects'] for l in doc[:3]] == [False, False, True]" /api/levels

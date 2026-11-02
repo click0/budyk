@@ -48,7 +48,9 @@ size_t entries(const std::string& dir) {
 
 // The stand-in: records its argv as [arg][arg]..., the -H file (the
 // real one is unlinked once curl exits) and that file's mode, then acts
-// out $FAKE_CURL_MODE: a good response, a curl failure, an API error.
+// out the mode in the record's .mode file (a child's environment is
+// budyk's minimal one, so an environment variable would not reach it):
+// a good response, a curl failure, an API error.
 constexpr const char* kFakeCurl = R"SH(#!/bin/sh
 for a in "$@"; do printf '[%s]' "$a" >> 'REC'; done
 printf '\n' >> 'REC'
@@ -63,7 +65,7 @@ while [ $# -gt 0 ]; do
 done
 printf 'HDR:' >> 'REC'; cat "$hdr" >> 'REC'
 printf 'MODE:%s\n' "$(stat -c %a "$hdr" 2>/dev/null || stat -f %Lp "$hdr")" >> 'REC'
-case "$FAKE_CURL_MODE" in
+case "$(cat 'REC'.mode 2>/dev/null)" in
   ok)     printf '%s' '{"content":[{"type":"text","text":"```lua\nwatch(\"x\", {})\n```"}],"stop_reason":"end_turn"}' > "$out" ;;
   fail)   echo 'curl: (6) Could not resolve host: api.anthropic.com' > "$err"; exit 6 ;;
   apierr) printf '%s' '{"type":"error","error":{"type":"authentication_error"}}' > "$out" ;;
@@ -164,6 +166,12 @@ int main() {
         const std::string dir  = dir_c;
         const std::string bin  = dir + "/bin";
         const std::string rec  = dir + "/record";
+        auto set_mode = [&rec](const char* mode) {
+            FILE* f = std::fopen((rec + ".mode").c_str(), "w");
+            assert(f != nullptr);
+            std::fputs(mode, f);
+            std::fclose(f);
+        };
         const std::string tmp  = dir + "/tmp dir;$(touch PWNED);`touch PWNED2`" + std::string(150, 'x');
         assert(::mkdir(bin.c_str(), 0700) == 0);
         assert(::mkdir(tmp.c_str(), 0700) == 0);
@@ -188,7 +196,7 @@ int main() {
         ::setenv("TMPDIR", tmp.c_str(), 1);
 
         std::string out, why;
-        ::setenv("FAKE_CURL_MODE", "ok", 1);
+        set_mode("ok");
         assert(suggest_rules_llm("SECRET_KEY", "summary", &out, &why) == 0);
         assert(out == "watch(\"x\", {})\n");
         const std::string record = slurp(rec);
@@ -201,18 +209,18 @@ int main() {
         assert(entries(tmp) == 0);                     // all four unlinked
         assert(::access("PWNED", F_OK) != 0 && ::access("PWNED2", F_OK) != 0);
 
-        ::setenv("FAKE_CURL_MODE", "fail", 1);
+        set_mode("fail");
         assert(suggest_rules_llm("SECRET_KEY", "summary", &out, &why) == -4);
         assert(contains(why, "status 6") && contains(why, "Could not resolve host"));
         assert(entries(tmp) == 0);
 
-        ::setenv("FAKE_CURL_MODE", "apierr", 1);
+        set_mode("apierr");
         assert(suggest_rules_llm("SECRET_KEY", "summary", &out, &why) == -5);
         assert(contains(why, "authentication_error"));
 
         // A reply cut off at max_tokens is refused: it ends mid-rule, and
         // was written out as it was.
-        ::setenv("FAKE_CURL_MODE", "cut", 1);
+        set_mode("cut");
         out.clear();
         assert(suggest_rules_llm("SECRET_KEY", "summary", &out, &why) == -6);
         assert(contains(why, "max_tokens") && out.empty());
@@ -221,7 +229,7 @@ int main() {
         // Cancelled (the CLI's handler for Ctrl-C raises the flag): curl
         // is killed rather than waited for, and the files, the one with
         // the key among them, are gone.
-        ::setenv("FAKE_CURL_MODE", "slow", 1);
+        set_mode("slow");
         const std::atomic<bool> cancel{true};
         assert(suggest_rules_llm("SECRET_KEY", "summary", &out, &why, &cancel) == -7);
         assert(why == "cancelled");
@@ -241,7 +249,7 @@ int main() {
         ::setenv("PATH", saved_path.c_str(), 1);
         if (old_tmp != nullptr) ::setenv("TMPDIR", saved_tmp.c_str(), 1);
         else                    ::unsetenv("TMPDIR");
-        ::unsetenv("FAKE_CURL_MODE");
+        ::unlink((rec + ".mode").c_str());
         assert(::chdir(cwd) == 0);
         ::unlink((bin + "/curl").c_str());
         ::unlink(rec.c_str());

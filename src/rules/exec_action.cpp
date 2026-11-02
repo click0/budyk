@@ -10,6 +10,11 @@
 
 #include <cerrno>
 #include <cstdlib>
+#include <cstring>
+#include <string>
+#include <vector>
+
+extern char** environ;
 
 namespace budyk {
 
@@ -75,7 +80,10 @@ int wait_with_timeout(pid_t pid, int timeout_seconds, ExecResult* out,
         kill(-pid, SIGKILL);
         kill( pid, SIGKILL);
         int s = 0;
-        waitpid(pid, &s, 0);
+        // A SIGHUP or SIGTERM taken by this thread (no SA_RESTART) ended
+        // the wait with EINTR, and the child was never reaped: a zombie
+        // for the daemon's life.
+        while (waitpid(pid, &s, 0) < 0 && errno == EINTR) {}
         out->signal          = WIFSIGNALED(s) ? WTERMSIG(s) : 0;
         out->elapsed_seconds = monotonic_seconds() - start;
     };
@@ -111,6 +119,42 @@ int wait_with_timeout(pid_t pid, int timeout_seconds, ExecResult* out,
 
 } // namespace
 
+namespace {
+
+// The environment a child gets: what a command needs to run and reach
+// the network, and nothing else of the daemon's. A `budyk serve` from an
+// admin's shell, `sudo -E` or an env-rich container handed every exec()
+// command and curl the shell's tokens (155 variables in a test run).
+bool child_env_keeps(const char* name) {
+    static const char* const kKeep[] = {
+        "PATH", "HOME", "LANG", "TZ", "TMPDIR",
+        "http_proxy", "https_proxy", "ftp_proxy", "no_proxy",
+        "HTTP_PROXY", "HTTPS_PROXY", "FTP_PROXY", "NO_PROXY",
+        "CURL_CA_BUNDLE", "SSL_CERT_FILE", "SSL_CERT_DIR",
+    };
+    for (const char* k : kKeep) {
+        if (std::strcmp(name, k) == 0) return true;
+    }
+    return std::strncmp(name, "LC_", 3) == 0;
+}
+
+std::vector<std::string> child_environment() {
+    std::vector<std::string> env;
+    bool path = false;
+    for (char** e = environ; e != nullptr && *e != nullptr; ++e) {
+        const char* eq = std::strchr(*e, '=');
+        if (eq == nullptr) continue;
+        const std::string name(*e, static_cast<size_t>(eq - *e));
+        if (!child_env_keeps(name.c_str())) continue;
+        env.emplace_back(*e);
+        if (name == "PATH") path = true;
+    }
+    if (!path) env.emplace_back("PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin");
+    return env;
+}
+
+} // namespace
+
 int exec_command(const char* const argv[], int timeout_seconds, ExecResult* out,
                  const std::atomic<bool>* cancel) {
     if (argv == nullptr || argv[0] == nullptr) return -1;
@@ -119,9 +163,19 @@ int exec_command(const char* const argv[], int timeout_seconds, ExecResult* out,
 
     *out = ExecResult{};
 
+    // Made before the fork: the child must not allocate.
+    const std::vector<std::string> env = child_environment();
+    std::vector<char*> envp;
+    envp.reserve(env.size() + 1);
+    for (const auto& e : env) envp.push_back(const_cast<char*>(e.c_str()));
+    envp.push_back(nullptr);
+
     pid_t pid = fork();
     if (pid < 0)  return -4;
-    if (pid == 0) prepare_child_and_exec(argv, timeout_seconds);
+    if (pid == 0) {
+        environ = envp.data();   // execvp() reads PATH from here
+        prepare_child_and_exec(argv, timeout_seconds);
+    }
 
     return wait_with_timeout(pid, timeout_seconds, out, cancel);
 }

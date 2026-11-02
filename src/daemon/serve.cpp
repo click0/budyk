@@ -384,12 +384,20 @@ int cmd_serve(int argc, char* argv[], const char* version) {
     // *err. No rules file (or none readable) is no rules: 0, and said so
     // (the FreeBSD port and the Docker image put the rules where the
     // config did not look, and the daemon ran without any, in silence).
-    auto load_rules_into = [&cfg](budyk::LuaEngine& e, std::string* err) -> int {
+    // On a reload a file that is not there, or cannot be read, is a load
+    // that failed, and the rules stay (a deploy's `mv rules.lua
+    // rules.lua.bak` followed by a HUP, a mount briefly gone, a chmod
+    // mistake dropped every rule in silence); at start it is no rules.
+    auto load_rules_into = [&cfg](budyk::LuaEngine& e, std::string* err, bool reload) -> int {
         if (cfg.rules_path[0] == '\0') {
             std::fprintf(stderr, "budyk serve: rules.path is empty; running without rules\n");
             return 0;
         }
         if (::access(cfg.rules_path, R_OK) != 0) {
+            if (reload) {
+                *err = std::strerror(errno);
+                return -1;
+            }
             std::fprintf(stderr, "budyk serve: rules file '%s': %s; running without rules\n",
                          cfg.rules_path, std::strerror(errno));
             return 0;
@@ -441,7 +449,7 @@ int cmd_serve(int argc, char* argv[], const char* version) {
         }
         {
             std::string err;
-            if (load_rules_into(engine, &err) != 0) {
+            if (load_rules_into(engine, &err, /*reload=*/false) != 0) {
                 // Loading stops at the first error; rules defined above it
                 // stay registered, so report how many are actually active.
                 std::fprintf(stderr,
@@ -506,7 +514,7 @@ int cmd_serve(int argc, char* argv[], const char* version) {
             budyk::LuaEngine probe;
             std::string err;
             int rc = init_engine(probe);
-            if (rc == 0) rc = load_rules_into(probe, &err);
+            if (rc == 0) rc = load_rules_into(probe, &err, /*reload=*/true);
             probe.shutdown();
             if (rc != 0) {
                 std::fprintf(stderr,
@@ -687,6 +695,47 @@ int cmd_serve(int argc, char* argv[], const char* version) {
     const bool on_demand = sched.mode() == budyk::CollectionMode::OnDemand;
     std::string store_error;   // the last failed store's, until one succeeds
 
+    // The file watcher drained into the engine, and the sample told what
+    // it saw: on a collecting tick with that tick's sample, and on an
+    // idle tick (on-demand mode without a client) with a sample of the
+    // file_watch group alone, so a watched file's change is reported
+    // when it happens, not when a dashboard next connects (the inotify
+    // queue filled meanwhile, and every path read as changed).
+    // apply() always clears the tampered set first, so a tick with zero
+    // events drops `files[p].tampered` back to false (one-shot).
+    auto drain_file_watch = [&](budyk::Sample* sp) {
+        std::vector<budyk::FileChangeEvent> events;
+        const int n = file_watcher.poll(/*timeout_ms=*/0, &events);
+        if (n < 0) {
+            std::fprintf(stderr,
+                "budyk serve: file_watcher.poll failed: %s\n", std::strerror(-n));
+        }
+        file_state.apply(events);
+        engine.set_file_state(file_state);
+        sp->file_watch.events_this_tick =
+            static_cast<uint32_t>(file_state.tampered_this_tick.size());
+        sp->file_watch.watched_count = static_cast<uint32_t>(file_watcher.count());
+        sp->file_watch.present = true;
+        sp->groups |= budyk::kGroupFileWatch;
+    };
+    // What the rules asked for: a level from escalate(), and the alerts,
+    // which go to the dashboards as they happen (spec §3.6.4) and stay
+    // for /api/alerts.
+    auto publish_rule_results = [&] {
+        for (const auto& e : engine.take_escalations()) {
+            const uint64_t from = now_realtime_ns();
+            sched.request_by_name(e.level, from + static_cast<uint64_t>(e.seconds) * kNsPerSec, from);
+        }
+        if (std::vector<budyk::AlertEvent> fired = engine.take_alerts(); !fired.empty()) {
+            {
+                std::lock_guard<std::mutex> g(hot_mtx);
+                for (auto& a : fired) recent_alerts.push_back(a);
+                while (recent_alerts.size() > budyk::kRecentAlerts) recent_alerts.pop_front();
+            }
+            if (ws.size() > 0) ws.broadcast(budyk::alerts_to_json(fired.data(), fired.size()));
+        }
+    };
+
     while (!g_stop) {
         // SIGHUP latched in the handler — process it at a clean tick
         // boundary so an in-flight eval_tick / store can't race with
@@ -744,32 +793,28 @@ int cmd_serve(int argc, char* argv[], const char* version) {
             if (idle_due != UINT64_MAX && idle_due / 1000000 + 1 < static_cast<uint64_t>(idle_ms)) {
                 idle_ms = static_cast<int>(idle_due / 1000000 + 1);
             }
+            // The watched files are read on this tick too, and when one
+            // changed the rules run on a sample of the file_watch group
+            // alone (the rules reading metrics are skipped, as on any
+            // sample lacking them).
+            if (fw_active) {
+                budyk::Sample fs{};
+                fs.timestamp_nanos = s.timestamp_nanos;
+                drain_file_watch(&fs);
+                if (fs.file_watch.events_this_tick > 0) {
+                    engine.eval_tick(fs, nullptr);
+                    publish_rule_results();
+                }
+            }
             interruptible_sleep(idle_ms, reload_rules);
             continue;
         }
         collect_one(&s, &collect_ctx, sched.metrics(collect_at));
 
         // File-watch drain — non-blocking poll so the tick cadence is
-        // unchanged. apply() always clears the tampered set first, so
-        // a tick with zero events drops `files[p].tampered` back to
-        // false (one-shot semantics). Done before tm.store/hot.push so
-        // the persisted + broadcast sample carries this tick's counts.
-        if (fw_active) {
-            std::vector<budyk::FileChangeEvent> events;
-            const int n = file_watcher.poll(/*timeout_ms=*/0, &events);
-            if (n < 0) {
-                std::fprintf(stderr,
-                    "budyk serve: file_watcher.poll failed: %s\n", std::strerror(-n));
-            }
-            file_state.apply(events);
-            engine.set_file_state(file_state);
-            s.file_watch.events_this_tick =
-                static_cast<uint32_t>(file_state.tampered_this_tick.size());
-            s.file_watch.watched_count =
-                static_cast<uint32_t>(file_watcher.count());
-            s.file_watch.present = true;
-            s.groups |= budyk::kGroupFileWatch;
-        }
+        // unchanged. Done before tm.store/hot.push so the persisted +
+        // broadcast sample carries this tick's counts.
+        if (fw_active) drain_file_watch(&s);
 
         // Custom levels whose `when` holds on this sample stay requested
         // for their hold time (0 = this tick only).
@@ -816,20 +861,7 @@ int cmd_serve(int argc, char* argv[], const char* version) {
         }
 
         engine.eval_tick(s, collect_ctx.detail.get());
-        for (const auto& e : engine.take_escalations()) {
-            const uint64_t from = now_realtime_ns();
-            sched.request_by_name(e.level, from + static_cast<uint64_t>(e.seconds) * kNsPerSec, from);
-        }
-        // Alerts go to the dashboards as they happen (spec §3.6.4) and
-        // stay for /api/alerts.
-        if (std::vector<budyk::AlertEvent> fired = engine.take_alerts(); !fired.empty()) {
-            {
-                std::lock_guard<std::mutex> g(hot_mtx);
-                for (auto& a : fired) recent_alerts.push_back(a);
-                while (recent_alerts.size() > budyk::kRecentAlerts) recent_alerts.pop_front();
-            }
-            if (ws.size() > 0) ws.broadcast(budyk::alerts_to_json(fired.data(), fired.size()));
-        }
+        publish_rule_results();
 
         housekeeping();
 

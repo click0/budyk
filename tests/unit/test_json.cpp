@@ -248,6 +248,13 @@ int main() {
 
         assert(!json_get_string("{\"user\":\"x\"}", "password", &v));
         assert(!json_get_string("{\"password\":123}", "password", &v));
+        // The key inside an earlier value is a value, not the key: the
+        // first match took "y" as the password here.
+        assert(json_get_string("{\"user\":\"password\",\"x\":\"y\",\"password\":\"abc\"}", "password", &v));
+        assert(v == "abc");
+        assert(json_get_string("{\"a\":\"\\\"password\\\":\",\n \"password\" : \"z\"}", "password", &v));
+        assert(v == "z");
+        assert(!json_get_string("{\"user\":\"password\"}", "password", &v));
         assert(!json_get_string("{\"password\":\"unterminated", "password", &v));
         assert(!json_get_string("{\"password\":\"esc\\\"", "password", &v));
         assert(!json_get_string("{}", nullptr, &v));

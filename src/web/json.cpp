@@ -362,10 +362,25 @@ bool json_get_string(const std::string& body, const char* key, std::string* out)
     std::string needle = "\"";
     needle.append(key);
     needle.append("\"");
-    const auto kpos = body.find(needle);
-    if (kpos == std::string::npos) return false;
-    const auto colon = body.find(':', kpos + needle.size());
-    if (colon == std::string::npos) return false;
+    // The key where a key stands: after `{` or `,` and before `:`. The
+    // first match anywhere took `{"user":"password","x":"y","password":
+    // "abc"}` as password "y" (the key inside the earlier value).
+    auto blank = [](char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; };
+    size_t kpos  = 0;
+    size_t colon = std::string::npos;
+    while (colon == std::string::npos) {
+        kpos = body.find(needle, kpos);
+        if (kpos == std::string::npos) return false;
+        size_t before = kpos;
+        while (before > 0 && blank(body[before - 1])) --before;
+        size_t after = kpos + needle.size();
+        while (after < body.size() && blank(body[after])) ++after;
+        if ((before == 0 || body[before - 1] == '{' || body[before - 1] == ',') &&
+            after < body.size() && body[after] == ':') {
+            colon = after;
+        }
+        ++kpos;
+    }
     // Only whitespace may sit between the colon and the opening quote;
     // anything else means the value isn't a string.
     size_t open = colon + 1;

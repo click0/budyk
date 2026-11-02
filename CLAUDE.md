@@ -113,8 +113,11 @@ There is no event-loop library (no libuv, kqueue or epoll). The daemon is:
   `exec()`. Bounded FIFO of 256 jobs, started on first use, cancelled on
   shutdown after a grace period. Both survive a SIGHUP rules reload.
 - **Children:** `exec_command()` forks with `/dev/null` stdio, a new
-  process group, rlimits, a timeout and a cancel flag. Every descriptor the
-  daemon opens is close-on-exec; `tests/smoke/serve.sh` checks that.
+  process group, rlimits, a timeout, a cancel flag and a minimal
+  environment (PATH, HOME, LANG, LC_*, TZ, TMPDIR, the proxy and the CA
+  variables: nothing else of the daemon's reaches an `exec()` command or
+  curl). Every descriptor the daemon opens is close-on-exec;
+  `tests/smoke/serve.sh` checks that.
 - **Shared state:** the hot buffer under a mutex; the ring files via
   `pread`/`pwrite` plus the write index, an atomic in `RingFile` (`widx_`)
   that the writer also copies into the mmap'd header after each `pwrite`

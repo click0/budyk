@@ -11,6 +11,7 @@
 #include <unistd.h>
 
 #include <cassert>
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -162,14 +163,19 @@ int main() {
         ::unlink(p.c_str());
     }
 
-    // 6. add() on a non-existent path fails with -errno.
+    // 6. add() on a path that does not exist is 0 and not counted (it
+    //    waits; test 13 sees it watched once it exists); one that cannot
+    //    be reached for another reason is -errno.
     {
         FileWatcher fw;
         assert(fw.init() == 0);
-        const int rc = fw.add("/tmp/budyk_fw_does_not_exist_zzz");
-        assert(rc < 0);
+        assert(fw.add("/tmp/budyk_fw_does_not_exist_zzz") == 0);
+        assert(fw.count() == 0);
+        const std::string f = make_tmp();
+        assert(fw.add(f + "/under-a-file") == -ENOTDIR);
         assert(fw.count() == 0);
         fw.shutdown();
+        ::unlink(f.c_str());
     }
 
     // 7. shutdown() is idempotent + safe to call before init().
@@ -357,6 +363,52 @@ int main() {
         }
     }
 #endif
+
+    // 13. A path that does not exist yet is taken (0, not counted) and
+    //     watched, as Created, once it exists; a change to it after that
+    //     is Modified. add() refused it for good (-ENOENT), where a path
+    //     lost after being watched was retried every poll.
+    {
+        FileWatcher fw;
+        assert(fw.init() == 0);
+        const std::string later = make_tmp() + ".later";
+        assert(fw.add(later) == 0);
+        assert(fw.count() == 0);
+        std::vector<FileChangeEvent> events;
+        assert(fw.poll(0, &events) == 0 && events.empty());
+        touch(later, "now");
+        assert(wait_for(fw, later, FileChangeKind::Created, &events));
+        assert(fw.count() == 1);
+        events.clear();
+        touch(later, "more");
+        assert(wait_for(fw, later, FileChangeKind::Modified, &events));
+        fw.shutdown();
+        ::unlink(later.c_str());
+    }
+
+    // 14. A watched directory reports an entry moved in (install(1), a
+    //     package manager) and one removed, as a change to the directory:
+    //     inotify gave only a write inside it, where kqueue gave both.
+    {
+        char tmpl[] = "/tmp/budyk_fwd_XXXXXX";
+        assert(::mkdtemp(tmpl) != nullptr);
+        const std::string dir = tmpl;
+        FileWatcher fw;
+        assert(fw.init() == 0);
+        assert(fw.add(dir) > 0);
+        std::vector<FileChangeEvent> events;
+        const std::string outside = make_tmp();
+        assert(::rename(outside.c_str(), (dir + "/moved-in").c_str()) == 0);
+        assert(wait_for(fw, dir, FileChangeKind::Modified, &events));
+        events.clear();
+        fw.poll(0, &events);
+        events.clear();
+        assert(::unlink((dir + "/moved-in").c_str()) == 0);
+        assert(wait_for(fw, dir, FileChangeKind::Modified, &events));
+        assert(fw.count() == 1);
+        fw.shutdown();
+        ::rmdir(dir.c_str());
+    }
 
     std::printf("test_file_watcher: PASS\n");
     return 0;

@@ -229,7 +229,12 @@ rules:
 # The service (the packages' unit, the FreeBSD rc.d script) runs as the
 # user budyk, and a file it cannot read cannot be watched: /etc/sudoers
 # is 0440 root. The log says so ("cannot watch '/etc/sudoers': Permission
-# denied"); give budyk read access (setfacl) for such a file.
+# denied"); give budyk read access (setfacl) for such a file. A path that
+# does not exist yet is watched, and reported as changed, as soon as it
+# does; a directory reports a file made, removed or moved in or out of it
+# (/etc/sudoers.d, /etc/cron.d); a symlink is followed once, at the file
+# it names then. In on-demand mode the files are read on every tick, with
+# or without a client, and a change runs the rules.
 #
 # security:
 #   file_watch:

@@ -189,7 +189,8 @@ and
 .I fire_count
 are preserved across the swap by name, so rules in mid-cooldown stay
 quiet. Rules removed from the new file are dropped; rules added pick
-up zero state. The HTTP server, scheduler, alert channels, and
+up zero state. A file that does not load, or is not there, leaves the
+rules as they were. The HTTP server, scheduler, alert channels, and
 storage rings are untouched. Config-level changes (listen, data_dir,
 collection cadence) still require a full restart.
 .SH LICENSE
