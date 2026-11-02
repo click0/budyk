@@ -412,6 +412,9 @@ for run in 1 2 3 4 5 6; do
     until curl -s -o /dev/null "http://127.0.0.1:$PORT/api/health"; do
         i=$((i + 1)); [ "$i" -lt 100 ] || break; sleep 0.1
     done
+    # A daemon that never started "ended at once" (kill -0 was false)
+    # and its exit status, a sanitizer's among them, was not looked at.
+    if [ "$i" -ge 100 ]; then echo "FAIL: run $run: the daemon did not start"; fail=1; fi
     sleep 0.5                              # into the L1 sleep
     if [ "$run" -le 4 ]; then
         kill -HUP "$PID"; kill -TERM "$PID"
@@ -423,11 +426,14 @@ for run in 1 2 3 4 5 6; do
     if kill -0 "$PID" 2>/dev/null; then
         slow="$slow $run"; kill -KILL "$PID"
     fi
-    wait "$PID" 2>/dev/null || true
+    if ! wait "$PID"; then echo "FAIL: run $run: the daemon exited non-zero"; fail=1; fi
     PID=
 done
 if [ -z "$slow" ]; then echo "ok   SIGTERM ends an L1 sleep at once, during a reload too (6 runs)"
 else echo "FAIL: SIGTERM waited out the L1 sleep in run(s)$slow"; fail=1; fi
+if grep -qE 'ERROR: (Address|Leak)Sanitizer|ThreadSanitizer|runtime error:' "$DIR/sig.log"; then
+    echo "FAIL: sanitizer report in the signal runs"; cat "$DIR/sig.log"; fail=1
+fi
 
 if [ "$fail" -ne 0 ]; then
     echo "--- daemon log ---"; cat "$DIR/log"

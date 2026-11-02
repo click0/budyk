@@ -33,14 +33,43 @@ std::string read_holder(int fd) {
 int lock_data_dir(const char* dir, std::string* holder) {
     if (dir == nullptr) return -EINVAL;
     const std::string path = lock_path(dir);
-    const int fd = ::open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
-    if (fd < 0) return -errno;
+    // The lock is a plain file with one name, or nothing is done with
+    // it: the data directory's owner (the service user) decides what
+    // `budyk.lock` is, and root (`sudo budyk fsck --repair`, a `sudo
+    // budyk serve`) followed it, gave the file it led to away to that
+    // owner, truncated it and wrote a pid into it. A symlink or a hard
+    // link to /etc/shadow was a local root. O_NOFOLLOW refuses the
+    // symlink (ELOOP; EMLINK on FreeBSD), fstat() the rest.
+    const int fd = ::open(path.c_str(), O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0600);
+    if (fd < 0) {
+        const int err = errno;
+        if (err == ELOOP || err == EMLINK) {
+            std::fprintf(stderr,
+                "budyk: '%s' is a symbolic link; the lock must be a plain file: remove it\n",
+                path.c_str());
+            return -ELOOP;
+        }
+        return -err;
+    }
+    struct stat fst{}, dst{};
+    if (::fstat(fd, &fst) != 0) {
+        const int err = errno;
+        ::close(fd);
+        return -err;
+    }
+    if (!S_ISREG(fst.st_mode) || fst.st_nlink != 1) {
+        std::fprintf(stderr,
+            "budyk: '%s' is %s; the lock must be a plain file with one name: remove it\n",
+            path.c_str(), S_ISREG(fst.st_mode) ? "a hard link" : "not a regular file");
+        ::close(fd);
+        return S_ISREG(fst.st_mode) ? -ELOOP : -EINVAL;
+    }
     // Root (`sudo budyk fsck --repair`) leaves the lock file the data
     // directory's owner's: made root's, 0600, it kept the service, which
     // runs as that owner (budyk), from starting ("cannot lock: Permission
-    // denied"). One a run of that left behind is given back the same way.
-    struct stat fst{}, dst{};
-    if (::geteuid() == 0 && ::fstat(fd, &fst) == 0 && ::stat(dir, &dst) == 0 &&
+    // denied"). One a run of that left behind is given back the same
+    // way. Only a file that is root's: the owner's own is left as it is.
+    if (::geteuid() == 0 && fst.st_uid == 0 && ::stat(dir, &dst) == 0 &&
         (fst.st_uid != dst.st_uid || fst.st_gid != dst.st_gid)) {
         if (::fchown(fd, dst.st_uid, dst.st_gid) != 0) {
             std::fprintf(stderr, "budyk: cannot give '%s' to the owner of '%s': %s\n",
@@ -67,7 +96,7 @@ int lock_data_dir(const char* dir, std::string* holder) {
 bool data_dir_locked(const char* dir, std::string* holder) {
     if (dir == nullptr) return false;
     const std::string path = lock_path(dir);
-    const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+    const int fd = ::open(path.c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
     if (fd < 0) return false;
     bool locked = false;
     if (::flock(fd, LOCK_SH | LOCK_NB) != 0) {

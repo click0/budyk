@@ -75,6 +75,10 @@ id budyk
 [ -f "$CONF/config.yaml" ] || fail "no $CONF/config.yaml from its sample"
 [ -f "$CONF/rules.lua" ]   || fail "no $CONF/rules.lua from its sample"
 [ "$(stat -f %Su:%Sg /var/db/budyk)" = budyk:budyk ] || fail "/var/db/budyk is not budyk's"
+# The config holds the alert channels' secrets and the password hash:
+# root:budyk 0640, as the Linux packages install it (it was 0644).
+[ "$(stat -f %Su:%Sg:%Lp "$CONF/config.yaml")" = root:budyk:640 ] ||
+    fail "$CONF/config.yaml is $(stat -f %Su:%Sg:%Lp "$CONF/config.yaml"), not root:budyk:640"
 [ -f /usr/local/share/man/man8/budyk.8.gz ] || fail "no man page"
 pkg info -D budyk | grep -q "$CONF/config.yaml" && ! pkg info -D budyk | grep -q "%%" ||
     fail "the pkg-message: $(pkg info -D budyk)"

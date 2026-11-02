@@ -1,5 +1,5 @@
 bin/budyk
-@sample etc/budyk/config.yaml.sample
+@sample(root,budyk,0640) etc/budyk/config.yaml.sample
 @sample etc/budyk/rules.lua.sample
 share/budyk/rules/examples.lua
 share/budyk/rules/freebsd-defaults.lua

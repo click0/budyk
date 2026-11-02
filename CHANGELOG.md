@@ -30,8 +30,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `rule_state.tsv`, `sessions.tsv` and the rc.d pid file, and `proc.top`
   under `full`; the port's pkg-descr points at the sample the port installs.
 
+### Security
+
+- **Root followed a link planted as the data directory's lock file.**
+  `sudo budyk fsck --repair` (and a `budyk serve` run as root) opened
+  `<data_dir>/budyk.lock` through a symbolic or hard link, gave the file
+  it led to away to the directory's owner, truncated it and wrote a pid
+  into it: the service user, who owns the directory, could point the
+  name at `/etc/shadow`. The lock is opened with `O_NOFOLLOW` and must be
+  a regular file with one name; a link is refused, said so, and nothing
+  is done to what it leads to. Root gives the lock away only when the
+  file is root's own.
+- **The FreeBSD port installed `config.yaml` world-readable.** It holds
+  the alert channels' tokens and the password hash; the package now
+  installs it root:budyk 0640, as the Linux packages do
+  (`addons/freebsd/test-port.sh` checks the mode).
+
 ### Fixed
 
+- **`budyk fsck` on a data directory it could not reach said every ring
+  was missing, and exited 0.** A directory it cannot list, or a ring it
+  cannot reach (budyk's own 0750 directory checked by another user), is
+  "cannot list" / "cannot check it" with the reason, exit 8, as budyk(8)
+  says; only a ring that is not there is "missing".
+- **`budyk watch-files` refused a path that was not there yet when it
+  was the only one**, yet watched it next to a path that existed. It is
+  watched as `security.file_watch` watches it ("does not exist yet:
+  reported as created when it does"; "N not there yet" in the count).
+- **The Docker image's HEALTHCHECK asked 127.0.0.1:8080 whatever the
+  config said**, so a container on another port was "unhealthy" for
+  ever (an orchestrator acting on that restarted a working daemon in a
+  loop). The check reads `listen` and `port` from the config the daemon
+  runs with (`/usr/local/bin/budyk-health`); CI runs it.
+- **The hand-installed systemd unit failed before budyk could say what
+  was missing.** Without `/etc/budyk`, `ReadOnlyPaths=` failed the
+  unit's namespace setup (226/NAMESPACE); it is `-/etc/budyk` now, and
+  the README gives the steps `cmake --install` does not do (the `budyk`
+  user, the config at `/etc/budyk/config.yaml` 0640, the rules).
+- **Tests that could not fail.** CI's check that the Docker image has
+  curl was piped into `head` (the pipeline's status was head's, so a
+  missing curl passed); the six SIGHUP+SIGTERM runs of `serve.sh` never
+  looked at their log or exit status (a daemon that did not start
+  passed); `cli.sh` accepted any non-zero exit with the expected message,
+  an ASan abort included, and discarded the TUI's output; `crosscheck.sh`
+  ignored the daemon's exit and a leak report. Each checks now, and the
+  first run found what the signal runs' log had held all along: the
+  stop and reload flags were `sig_atomic_t`, written by the handler on
+  the HTTP thread (which takes the signal in `accept()`) and read by the
+  main thread, a data race ThreadSanitizer reports. They are atomics.
 - **A query whose window started after a stretch out of order read
   nothing.** After a clock step back the records of the new run are
   stamped before the ones under them, and a power loss can leave a

@@ -119,6 +119,19 @@ expect_fsck 4 "1 damaged record (slot 2): skipped on read, cannot be repaired" "
 expect_fsck 4 "1 with problems left" --repair "$DIR/data"
 expect_fsck 8 "not a directory" "$DIR/config.yaml"
 
+# A data directory the caller cannot list, or cannot reach the rings
+# in (budyk's own, 0750, checked by another user): the check could not
+# run (exit 8), not "every ring missing" and clean (exit 0). Root reaches
+# everything: not checked as root.
+if [ "$(id -u)" -ne 0 ]; then
+    mkdir "$DIR/shut"
+    chmod 0 "$DIR/shut"
+    expect_fsck 8 "cannot list" "$DIR/shut"
+    chmod 400 "$DIR/shut"                     # listed, its entries out of reach
+    expect_fsck 8 "tier1.ring: cannot check it: Permission denied" "$DIR/shut"
+    chmod 700 "$DIR/shut"
+fi
+
 # A header of zero bytes (the L1 ring's) and an empty file (the L2 ring):
 # budyk serve makes both anew and counts in the records after the blank
 # header, so fsck says so, not "move it aside" (which threw them away).

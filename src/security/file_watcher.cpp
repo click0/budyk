@@ -43,6 +43,7 @@ FileWatcher::FileWatcher() = default;
 FileWatcher::~FileWatcher() { shutdown(); }
 
 std::size_t FileWatcher::count() const { return path_to_id_.size(); }
+std::size_t FileWatcher::pending() const { return pending_.size(); }
 
 // ---------------------------------------------------------------------------
 // Path bookkeeping, the same on both kernels. A watch id (an inotify wd, a

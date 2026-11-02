@@ -1,0 +1,18 @@
+#!/bin/sh
+# SPDX-License-Identifier: BSD-3-Clause
+#
+# The image's HEALTHCHECK: /api/health at the address the daemon listens
+# on, read from the config it runs with (compose mounts config.yaml; the
+# image's own command reads the example config). It was 127.0.0.1:8080
+# whatever the config said, so a container with another port was
+# "unhealthy" for ever, and an orchestrator acting on that restarted a
+# working daemon in a loop.
+cfg=/etc/budyk/config.yaml
+[ -f "$cfg" ] || cfg=/etc/budyk/config.example.yaml
+listen=$(awk '$1 == "listen:" { gsub(/["'"'"']/, "", $2); print $2 }' "$cfg" | tail -n 1)
+port=$(awk '$1 == "port:" { gsub(/["'"'"']/, "", $2); print $2 }' "$cfg" | tail -n 1)
+case "$listen" in
+    ""|0.0.0.0|"::") listen=127.0.0.1 ;;
+    *:*)             listen="[$listen]" ;;
+esac
+exec curl -sf "http://$listen:${port:-8080}/api/health" > /dev/null
