@@ -204,9 +204,13 @@ size_t WebSocketHub::drop_sessions(const std::function<bool(const std::string&)>
         if (std::find(gone.begin(), gone.end(), it->fd) != gone.end()) {
             // A close frame first (1008, policy violation), as far as the
             // socket takes it: the page can tell a session that ended
-            // from a dropped connection.
-            const std::string frame = ws_control_frame(kOpClose, std::string("\x03\xf0", 2));
-            send_some(it->fd, frame.data(), frame.size());
+            // from a dropped connection. Only when nothing is owed: sent
+            // behind a frame the socket had taken part of, its bytes
+            // landed inside that frame (the browser saw 1006 or 1007).
+            if (it->outbuf.empty()) {
+                const std::string frame = ws_control_frame(kOpClose, std::string("\x03\xf0", 2));
+                send_some(it->fd, frame.data(), frame.size());
+            }
             ::close(it->fd);
             it = clients_.erase(it);
             ++dropped;
@@ -307,10 +311,14 @@ bool WebSocketHub::consume_frames(Client* c) {
             b.erase(0, hdr + static_cast<size_t>(len));
             if (opcode == kOpClose) {
                 // Echo the status code (first two bytes), if any, and
-                // let the peer see the close before the fd goes.
-                const std::string reply = ws_control_frame(
-                    kOpClose, payload.size() >= 2 ? payload.substr(0, 2) : std::string());
-                send_some(c->fd, reply.data(), reply.size());
+                // let the peer see the close before the fd goes; not
+                // into the middle of a frame still owed (then the peer,
+                // which asked to close, just sees the connection end).
+                if (c->outbuf.empty()) {
+                    const std::string reply = ws_control_frame(
+                        kOpClose, payload.size() >= 2 ? payload.substr(0, 2) : std::string());
+                    send_some(c->fd, reply.data(), reply.size());
+                }
                 return false;
             }
             if (opcode == kOpPing) {

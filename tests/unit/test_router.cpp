@@ -90,12 +90,14 @@ HttpRequest get(const char* target, const std::string& cookie = "") {
     return r;
 }
 
-HttpRequest post(const char* target, const std::string& body, const std::string& peer = "127.0.0.1") {
+HttpRequest post(const char* target, const std::string& body, const std::string& peer = "127.0.0.1",
+                 const char* content_type = "application/json") {
     HttpRequest r;
     r.method = "POST";
     split_target(target, &r.path, &r.query);
     r.body   = body;
     r.peer   = peer;
+    if (content_type != nullptr) r.headers.push_back({"Content-Type", content_type});
     return r;
 }
 
@@ -105,6 +107,12 @@ std::string header(const HttpResponse& r, const char* name) {
 }
 
 bool has(const std::string& s, const char* needle) { return s.find(needle) != std::string::npos; }
+
+// The session cookie's name from a Set-Cookie value: one per budyk
+// (`budyk_session_<tag>`), so the tests take it from the login.
+std::string cookie_name(const std::string& set_cookie) {
+    return set_cookie.substr(0, set_cookie.find('='));
+}
 
 } // namespace
 
@@ -164,14 +172,53 @@ int main() {
         r = w.handler(post("/api/auth/login", "{\"password\":\"hunter2\"}", "10.0.0.2"));
         assert(r.status == 200);
         const std::string set = header(r, "Set-Cookie");
-        assert(has(set, "budyk_session=") && has(set, "HttpOnly") && has(set, "SameSite=Strict"));
-        const std::string tok = cookie_value(set, "budyk_session");
+        // One cookie name per budyk (this host's name and the port):
+        // two budyks on one host name shared `budyk_session`, and a
+        // login to one signed you out of the other.
+        const std::string name = cookie_name(set);
+        assert(name.compare(0, 14, "budyk_session_") == 0 && name.size() == 22);
+        assert(has(set, "HttpOnly") && has(set, "SameSite=Strict"));
+        const std::string tok = cookie_value(set, name.c_str());
         assert(!tok.empty());
-        const std::string cookie = "budyk_session=" + tok;
+        const std::string cookie = name + "=" + tok;
+        assert(cookie_value(cookie, "budyk_session").empty());   // the old name is not it
 
         assert(w.handler(get("/api/samples", cookie)).status == 200);
         assert(w.handler(get("/api/levels", cookie)).status  == 200);
-        assert(w.handler(get("/api/samples", "budyk_session=forged")).status == 401);
+        assert(w.handler(get("/api/samples", name + "=forged")).status == 401);
+
+        // The login takes the dashboard's own page only, with a JSON
+        // body: a page on any site posted to it without a preflight (a
+        // no-cors fetch, text/plain), five a minute, and the admin's
+        // own address was throttled out of the login for as long as the
+        // page stayed open. Origin against Host; a Content-Type with
+        // parameters is fine; the TUI sends none of the three headers
+        // but application/json.
+        HttpRequest cross = post("/api/auth/login", "{\"password\":\"hunter2\"}", "10.0.0.5");
+        cross.headers.push_back({"Origin", "http://evil.example"});
+        cross.headers.push_back({"Host", "127.0.0.1:8080"});
+        assert(w.handler(cross).status == 403);
+        HttpRequest same = post("/api/auth/login", "{\"password\":\"hunter2\"}", "10.0.0.5");
+        same.headers.push_back({"Origin", "http://127.0.0.1:8080"});
+        same.headers.push_back({"Host", "127.0.0.1:8080"});
+        assert(w.handler(same).status == 200);
+        assert(w.handler(post("/api/auth/login", "{\"password\":\"hunter2\"}", "10.0.0.6",
+                              "text/plain")).status == 415);
+        assert(w.handler(post("/api/auth/login", "{\"password\":\"hunter2\"}", "10.0.0.6",
+                              nullptr)).status == 415);
+        assert(w.handler(post("/api/auth/login", "{\"password\":\"hunter2\"}", "10.0.0.6",
+                              "Application/JSON; charset=utf-8")).status == 200);
+        // Neither 403 counted as a failure: the address is not throttled.
+        assert(w.handler(post("/api/auth/login", "{\"password\":\"hunter2\"}", "10.0.0.5")).status == 200);
+        // On loopback, the login must be sent to one of budyk's names
+        // with a password on too: a page that rebound its own name to
+        // 127.0.0.1 could post guesses and read the answer.
+        HttpRequest rebound = post("/api/auth/login", "{\"password\":\"hunter2\"}", "10.0.0.7");
+        rebound.headers.push_back({"Host", "evil.example"});
+        assert(w.handler(rebound).status == 403);
+        HttpRequest api = get("/api/samples", cookie);
+        api.headers.push_back({"Host", "evil.example"});
+        assert(w.handler(api).status == 200);                    // the rest as before: a session is needed
 
         // Plain HTTP: no Secure (the browser would drop the cookie).
         assert(!has(set, "Secure"));
@@ -198,7 +245,7 @@ int main() {
         r = w.handler(lo);
         assert(r.status == 200 && has(header(r, "Set-Cookie"), "Max-Age=0"));
         assert(has(header(r, "Set-Cookie"), "; Secure"));
-        assert(has(header(r, "Set-Cookie"), "budyk_session=;"));
+        assert(has(header(r, "Set-Cookie"), (name + "=;").c_str()));
         assert(w.handler(get("/api/samples", cookie)).status == 401);   // revoked
         // Logout without a cookie is harmless.
         assert(w.handler(post("/api/auth/logout", "")).status == 200);
@@ -499,13 +546,14 @@ int main() {
         w.cfg.auth_enabled = true;
         std::snprintf(w.cfg.password_hash, sizeof(w.cfg.password_hash), "%s", "$argon2id$v=19$dummy");
         w.init();
-        const std::string cookie = "budyk_session=" + w.sessions.create();
+        const std::string name   = session_cookie_name("db\"1", w.cfg.listen_port);
+        const std::string cookie = name + "=" + w.sessions.create();
         assert(w.handler(get("/api/samples", cookie)).status == 200);
         std::this_thread::sleep_for(std::chrono::milliseconds(600));   // past an eighth of the TTL
         assert(w.handler(get("/api/samples", cookie)).status == 200);  // slid: ends at 2.6 s now
         std::this_thread::sleep_for(std::chrono::milliseconds(1600));  // 2.2 s: past the login's TTL
         assert(w.handler(get("/api/samples", cookie)).status == 200);
-        assert(w.handler(get("/api/samples", "budyk_session=nope")).status == 401);
+        assert(w.handler(get("/api/samples", name + "=nope")).status == 401);
     }
 
     // 11. The WebSocket handshake goes out within the server's bounds

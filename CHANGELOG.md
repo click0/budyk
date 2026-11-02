@@ -32,6 +32,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **A password change ended no session.** The sessions file held only
+  tokens and deadlines, so after `hash-password` and a restart whoever
+  had logged in with the leaked password kept the dashboard and the
+  API, for ever with the sliding expiration. The file carries a
+  fingerprint of the password hash; one made under another is dropped at
+  start, said in the log, and every dashboard signs in again.
+- **Any web page could post to the login.** A page on another site sent
+  `POST /api/auth/login` without a preflight (a no-cors fetch with a
+  `text/plain` body), and five of those a minute throttled the admin's
+  own address, the same 127.0.0.1 on a loopback listen or an SSH tunnel,
+  out of the login and the TUI's for as long as the page stayed open;
+  with DNS rebinding it could post guesses and read the answer. The login
+  takes the dashboard's own page only (`Origin` against `Host`, 403
+  otherwise) with `application/json` (415 otherwise), and on loopback it
+  must be sent to one of budyk's names with a password on too.
 - **Root followed a link planted as the data directory's lock file.**
   `sudo budyk fsck --repair` (and a `budyk serve` run as root) opened
   `<data_dir>/budyk.lock` through a symbolic or hard link, gave the file
@@ -48,6 +63,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Two budyks on one host name shared one session cookie.** Cookies are
+  not kept apart by port, so two dashboards reached through SSH tunnels
+  (`localhost:8081`, `localhost:8082`) or one reverse proxy's paths
+  replaced each other's `budyk_session`: signing in to one signed you
+  out of the other. The cookie is `budyk_session_<tag>`, the tag from
+  the host's name and the port; the TUI takes either name.
+- **A clock stepped back lengthened every session by the step.**
+  Deadlines are wall-clock time plus the TTL and were never capped: a
+  session made while the clock ran a day ahead lasted two days once NTP
+  stepped it back. A deadline past `now + TTL` is brought down to that on
+  load, on verify and on touch.
+- **The sessions file's errors were never reported**, nor is it fsync'd
+  before the rename. A full disk, a `.tmp` that cannot be made or a file
+  left root's saved nothing and said nothing, and every browser signed in
+  again after the restart; a power cut right after a login could leave
+  the file empty. A save that fails is logged when its error changes, a
+  file that cannot be read at start too, and the file reaches the disk
+  before it replaces the old one.
+- **The dashboard drew one of the 300 catch-up samples.** Since 0.8.5 the
+  page's backfill asked `api/samples?last=1` and the WebSocket's catch-up
+  frame was rendered as its last sample alone, so the file-watch
+  sparkline started from one tick on every reload and reconnect. It is
+  drawn from the catch-up frame.
+- **A stop waited out the response being served.** `HttpServer::stop()`
+  closed the listening socket and joined the thread, which was in the
+  middle of a response bounded by its size at the minimum rate: minutes
+  for a slow reader of `/api/samples` at a large `hot_buffer.capacity`,
+  past systemd's stop timeout, so budyk was killed before the fold
+  windows were written. The connection being served is shut down too.
+- **A connection that sent nothing held the HTTP thread for the whole
+  request budget** (5 s): a browser's speculative connections, or six
+  silent ones opened on purpose, made the dashboard, the login and the
+  TUI wait half a minute. One that has sent nothing by 1 s
+  (`HttpServer::kFirstByteMs`) is closed; one that has sent a byte keeps
+  the budget.
+- **A close frame could land inside a frame the client was still owed.**
+  A session's end (1008) and the echo of a client's close were sent past
+  what the socket still held, and the browser saw 1006 or 1007. A client
+  with bytes owed is closed without one.
+- **On a 32-bit host the response bound wrapped past 4.3 MB** (the size
+  times 1000 in `size_t`): a 9 MB `/api/range` got 2.7 s instead of 35.
+  Computed in 64 bits.
 - **`budyk fsck` on a data directory it could not reach said every ring
   was missing, and exited 0.** A directory it cannot list, or a ring it
   cannot reach (budyk's own 0750 directory checked by another user), is

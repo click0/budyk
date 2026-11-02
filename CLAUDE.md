@@ -105,15 +105,22 @@ There is no event-loop library (no libuv, kqueue or epoll). The daemon is:
   only sleeps, and nothing is stored.
 - **HTTP thread:** one blocking accept-handle-close loop. Every connection
   is bounded by `HttpServer::set_io_timeout_ms` (5 s) so a stalled client
-  cannot hold it: the request by that, the response by that plus its size
-  at `set_min_send_rate` (256 KiB/s), so a slow reader is cut off. An
-  accept() that fails (EMFILE, ECONNABORTED) is retried, logged once,
-  never the end of the loop. A WebSocket upgrade hands the fd to the hub:
-  same origin only (Origin against Host / X-Forwarded-Host), at most
-  `WebSocketHub::kMaxClients` (64). On loopback without a password,
-  every request's Host must be one of budyk's names (an address,
-  localhost, the hostname, `web.allowed_hosts`), or 403: DNS rebinding
-  (`own_host()` in `router.cpp`).
+  cannot hold it for longer: the request by that (one that has sent
+  nothing at all by `kFirstByteMs`, 1 s), the response by that plus its
+  size at `set_min_send_rate` (256 KiB/s), so a slow reader is cut off;
+  connections queue behind the one served (the listen backlog is 64),
+  and `stop()` shuts the served one down. An accept() that fails
+  (EMFILE, ECONNABORTED) is retried, logged once, never the end of the
+  loop. A WebSocket upgrade hands the fd to the hub: same origin only
+  (Origin against Host / X-Forwarded-Host), at most
+  `WebSocketHub::kMaxClients` (64); the login too, with a JSON body. On
+  loopback, every request's Host must be one of budyk's names (an
+  address, localhost, the hostname, `web.allowed_hosts`), or 403: DNS
+  rebinding (`own_host()` in `router.cpp`); with a password on, the
+  login's alone. The session cookie is named per budyk
+  (`session_cookie_name()`: the hostname and the port), and the
+  sessions file carries a fingerprint of the password hash
+  (`SessionStore::set_credential()`): a password change drops them.
 - **WebSocket hub:** client fds are non-blocking. A client is added with
   its catch-up frame (the newest `kCatchupSamples`, 300, of the hot
   buffer), made under the hub's lock as the client is registered, so a

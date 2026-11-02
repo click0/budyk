@@ -168,7 +168,9 @@ start
 .I /var/db/budyk/sessions.tsv
 The dashboard's live sessions (mode 0600: the file holds bearer
 tokens), kept across a restart
-.RB ( web.auth.persist_sessions ).
+.RB ( web.auth.persist_sessions );
+made under another password hash than the config's, they are dropped
+at start.
 .TP
 .I /var/run/budyk/budyk.pid
 The pid file the FreeBSD rc.d script keeps.

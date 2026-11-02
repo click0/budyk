@@ -65,4 +65,10 @@ constexpr size_t kRecentAlerts = 100;
 /// levels, alerts and the WebSocket upgrade.
 HttpHandler make_router(const RouterDeps& deps);
 
+/// The session cookie's name, one per budyk: `budyk_session_` and a
+/// digest of this host's name and the listen port (two budyks on one
+/// host name shared `budyk_session`, and a login to one signed you out
+/// of the other). The TUI takes any `budyk_session*` cookie.
+std::string session_cookie_name(const std::string& hostname, int port);
+
 } // namespace budyk

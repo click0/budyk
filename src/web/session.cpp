@@ -3,6 +3,7 @@
 #include "core/clock.h"
 
 #include "web/auth.h"
+#include "web/sha1_base64.h"
 
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -18,6 +19,7 @@ namespace budyk {
 
 namespace {
 
+constexpr const char kCredentialLine[] = "# credential ";
 
 } // namespace
 
@@ -29,6 +31,18 @@ void SessionStore::set_persist_path(const std::string& path) {
     persist_path_ = path;
 }
 
+void SessionStore::set_credential(const std::string& password_hash) {
+    std::lock_guard<std::mutex> g(mtx_);
+    if (password_hash.empty()) {
+        credential_.clear();
+        return;
+    }
+    // A fingerprint, not the hash: the file is 0600, but it need not
+    // hold what argon2 verifies against.
+    const std::string digest = sha1(password_hash.data(), password_hash.size());
+    credential_ = base64_encode(digest.data(), digest.size());
+}
+
 void SessionStore::autosave() const {
     // Snapshot the path under the lock; the actual write re-locks
     // inside save() to copy the table, so no file I/O happens while a
@@ -38,7 +52,22 @@ void SessionStore::autosave() const {
         std::lock_guard<std::mutex> g(mtx_);
         path = persist_path_;
     }
-    if (!path.empty()) save(path.c_str());
+    if (path.empty()) return;
+    const int rc = save(path.c_str());
+    // Said once per error, not on every login: the result was dropped,
+    // and a file that could not be written (a full disk, one left
+    // root's by a `sudo budyk serve`) cost every browser its session at
+    // the next restart without a word in the log.
+    if (rc != last_save_rc_) {
+        if (rc != 0) {
+            std::fprintf(stderr, "budyk serve: cannot save the sessions to '%s': %s\n",
+                         path.c_str(), std::strerror(-rc));
+        } else {
+            std::fprintf(stderr, "budyk serve: the sessions are saved to '%s' again\n",
+                         path.c_str());
+        }
+        last_save_rc_ = rc;
+    }
 }
 
 std::string SessionStore::create() {
@@ -67,6 +96,9 @@ bool SessionStore::verify(const std::string& token) {
             evicted = true;
         } else {
             ok = true;
+            // A deadline past now + TTL: the clock stepped back since it
+            // was set, and the session had the step on top of its TTL.
+            if (it->second > now + ttl_ns_) it->second = now + ttl_ns_;
         }
     }
     if (evicted) autosave();   // the file should reflect the eviction
@@ -88,10 +120,12 @@ bool SessionStore::touch(const std::string& token) {
             evicted = true;
         } else {
             ok = true;
-            // Only forward: a clock stepped back would otherwise cut the
-            // session short.
+            // Forward once an eighth of the TTL has passed; and back down
+            // to now + TTL after a clock step back (a session in use gets
+            // the whole TTL from now, not the step on top of it).
             const uint64_t fresh = now + ttl_ns_;
-            if (fresh > it->second && fresh - it->second >= ttl_ns_ / 8) {
+            if ((fresh > it->second && fresh - it->second >= ttl_ns_ / 8) ||
+                it->second > fresh) {
                 it->second = fresh;
                 slid = true;
             }
@@ -126,28 +160,53 @@ size_t SessionStore::size() const {
     return deadline_.size();
 }
 
-int SessionStore::load(const char* path) {
+int SessionStore::load(const char* path, bool* stale) {
+    if (stale != nullptr) *stale = false;
     if (path == nullptr) return -EINVAL;
     std::FILE* f = std::fopen(path, "re");
-    if (f == nullptr) return 0;   // no sessions yet — fresh install, fine
+    if (f == nullptr) return errno == ENOENT ? 0 : -errno;   // none yet: a fresh install
 
     const uint64_t now = now_realtime_ns();
     char line[256];
-    std::lock_guard<std::mutex> g(mtx_);
+    std::string file_credential;
+    std::map<std::string, uint64_t> got;
     while (std::fgets(line, sizeof(line), f) != nullptr) {
-        if (line[0] == '#' || line[0] == '\n') continue;
+        if (line[0] == '#') {
+            if (std::strncmp(line, kCredentialLine, sizeof(kCredentialLine) - 1) == 0) {
+                file_credential = line + sizeof(kCredentialLine) - 1;
+                while (!file_credential.empty() &&
+                       (file_credential.back() == '\n' || file_credential.back() == '\r')) {
+                    file_credential.pop_back();
+                }
+            }
+            continue;
+        }
+        if (line[0] == '\n') continue;
         char* tab = std::strchr(line, '\t');
         if (tab == nullptr) continue;
         *tab = '\0';
         const char* tok_str = line;
         char* endp = nullptr;
-        const unsigned long long dl = std::strtoull(tab + 1, &endp, 10);
+        unsigned long long dl = std::strtoull(tab + 1, &endp, 10);
         if (endp == tab + 1)            continue;   // unparsable deadline
         if (tok_str[0] == '\0')         continue;
         if (dl <= now)                  continue;   // already expired
-        deadline_[std::string(tok_str)] = static_cast<uint64_t>(dl);
+        if (dl > now + ttl_ns_) dl = now + ttl_ns_; // a clock step back: no more than the TTL
+        got[std::string(tok_str)] = static_cast<uint64_t>(dl);
     }
+    const int read_err = std::ferror(f) ? (errno != 0 ? errno : EIO) : 0;
     std::fclose(f);
+    if (read_err != 0) return -read_err;
+
+    std::lock_guard<std::mutex> g(mtx_);
+    // Made under another password (or none on record, an older file):
+    // not a session of this one. The file is rewritten at the next
+    // change, under the credential of now.
+    if (!credential_.empty() && file_credential != credential_) {
+        if (stale != nullptr) *stale = !got.empty();
+        return 0;
+    }
+    for (const auto& kv : got) deadline_[kv.first] = kv.second;
     return 0;
 }
 
@@ -159,9 +218,11 @@ int SessionStore::save(const char* path) const {
     // taken under mtx_, the I/O done without it.
     std::lock_guard<std::mutex> one(save_mtx_);
     std::map<std::string, uint64_t> snap;
+    std::string credential;
     {
         std::lock_guard<std::mutex> g(mtx_);
-        snap = deadline_;
+        snap       = deadline_;
+        credential = credential_;
     }
 
     std::string tmp = path;
@@ -174,15 +235,18 @@ int SessionStore::save(const char* path) const {
     std::FILE* f = ::fdopen(fd, "w");
     if (f == nullptr) { ::close(fd); ::unlink(tmp.c_str()); return -errno; }
 
-    std::fputs("# budyk sessions v1\n", f);
+    std::fputs("# budyk sessions v2\n", f);
+    if (!credential.empty()) std::fprintf(f, "%s%s\n", kCredentialLine, credential.c_str());
     std::fputs("# token\tdeadline_ns\n", f);
     for (const auto& kv : snap) {
         std::fprintf(f, "%s\t%llu\n", kv.first.c_str(),
                      static_cast<unsigned long long>(kv.second));
     }
     // A file that could not be written whole (a full disk) does not
-    // replace the one there.
-    const bool flushed = std::fflush(f) == 0 && std::ferror(f) == 0;
+    // replace the one there; and it reaches the disk before it does (a
+    // power cut after a login otherwise left an empty file under the
+    // name, on a filesystem that writes the rename first).
+    const bool flushed = std::fflush(f) == 0 && std::ferror(f) == 0 && ::fsync(fd) == 0;
     const int  werr    = flushed ? 0 : errno;
     if (std::fclose(f) != 0 || !flushed) {
         const int e = werr != 0 ? werr : errno;

@@ -80,7 +80,10 @@ public:
     int  start(const char* listen_addr, int port, HttpHandler handler);
 
     /// Bring the loop down. Closes the listening socket — any in-flight
-    /// accept returns EBADF and the loop exits — then joins the thread.
+    /// accept returns EBADF and the loop exits — and shuts down the
+    /// connection being served, so the loop is back at once rather
+    /// than after that response's bound (minutes for a slow reader of
+    /// a large reply: a stop waited them out), then joins the thread.
     void stop();
 
     /// Real bound port (useful when start was called with port == 0).
@@ -100,9 +103,14 @@ public:
     /// 5000. A connection that is still sending its request when the
     /// budget runs out is closed without a response, so one client that
     /// opens a connection and goes quiet holds the single I/O thread for
-    /// at most this long, not forever. Set before start().
+    /// at most this long, not forever. Set before start(). A connection
+    /// that has sent nothing at all is given kFirstByteMs, not this: a
+    /// browser's speculative connection, or a few silent ones opened on
+    /// purpose, held the thread for the whole budget each, and the
+    /// dashboard, the login and the TUI waited behind them.
     void set_io_timeout_ms(int ms);
     int  io_timeout_ms() const;
+    static constexpr int kFirstByteMs = 1000;
     /// A response may take io_timeout_ms() plus its body's size at this
     /// many bytes per second (default 256 KiB/s, so a few MB of
     /// /api/range gets a few more seconds); a client reading slower is
@@ -114,6 +122,9 @@ private:
     /// Written by start() and stop() on the caller's thread, read by the
     /// loop thread: atomic so the two never race (ThreadSanitizer).
     std::atomic<int>       listen_fd_{-1};
+    /// The connection the loop serves right now (-1 between two), for
+    /// stop() to shut down.
+    std::atomic<int>       serving_fd_{-1};
     int                    bound_port_  = 0;
     int                    io_timeout_ms_ = 5000;
     size_t                 min_send_rate_ = 256 * 1024;

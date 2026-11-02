@@ -293,7 +293,16 @@ makes every client one address). With `enabled: true` and no
 nobody could have logged in.
 A session lasts 24 hours from its last request: the dashboard's reloads
 and the TUI's polls keep it going, an open dashboard that only receives
-the stream does not. Signing out ends it at once.
+the stream does not. Signing out ends it at once, and so does a change
+of the password (the sessions file carries a fingerprint of the hash:
+one made under another password is dropped at start). The login takes
+the dashboard's own page only (its `Origin` against `Host`) with a JSON
+body, so a page on another site cannot post guesses, or failures that
+throttle the admin's own address; on `listen: 127.0.0.1` it must also
+be sent to one of budyk's names (below). The session cookie is
+`budyk_session_<tag>`, the tag from the host's name and the port: two
+budyks reached through SSH tunnels or one reverse proxy keep their
+sessions apart.
 
 budyk speaks plain HTTP. To reach the dashboard from another machine,
 keep `listen: 127.0.0.1` and put a TLS reverse proxy in front that sets
@@ -308,14 +317,15 @@ proxy may serve it under a path: `location /budyk/ { proxy_pass
 http://127.0.0.1:8080/; }` (the trailing slashes matter), with the
 WebSocket's `Upgrade` headers passed on.
 
-Without a password, on `listen: 127.0.0.1`, budyk answers only to its
-own names in `Host`: an IP address, `localhost` (and `*.localhost`),
-the host's name, and those in `web.allowed_hosts`. Anything else gets
-403. Otherwise a site open in the browser could point a name of its own
-at 127.0.0.1 (DNS rebinding) and read the API as if budyk were that
-site; an SSH tunnel to the dashboard is open to it the same way. A
-proxy that passes its public name in `Host` to an unprotected budyk
-needs that name in the list:
+On `listen: 127.0.0.1`, budyk answers only to its own names in `Host`:
+an IP address, `localhost` (and `*.localhost`), the host's name, and
+those in `web.allowed_hosts`; without a password every request, with
+one the login. Anything else gets 403. Otherwise a site open in the
+browser could point a name of its own at 127.0.0.1 (DNS rebinding) and
+read the API as if budyk were that site, or post guesses at the
+password; an SSH tunnel to the dashboard is open to it the same way. A
+proxy that passes its public name in `Host` to budyk needs that name in
+the list:
 
 ```yaml
 web:
@@ -666,7 +676,7 @@ line's "registered N alert channel(s)" counts channels that can send.
 | Method | Path | Auth | Returns |
 |--------|------|------|---------|
 | `GET` | `/api/health` | no | status, version, hostname |
-| `POST` | `/api/auth/login` | no | body `{"password": "..."}`; sets the `budyk_session` cookie |
+| `POST` | `/api/auth/login` | no | body `{"password": "..."}` as `application/json`, same origin; sets the `budyk_session_<tag>` cookie |
 | `POST` | `/api/auth/logout` | no | clears the session |
 | `GET` | `/api/samples` | yes | recent samples from the in-memory buffer; `?last=N` the newest N |
 | `GET` | `/api/range` | yes | stored history: `since`, `until` (nanoseconds since the epoch), `limit` (up to 5000), and either `level` (`L1`–`L3`, a custom level's name, or `all` for every level merged and thinned over the window) or `tier` (`1` = L3 samples, `2` = L2, `3` = L1) |

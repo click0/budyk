@@ -755,6 +755,11 @@ function openWs() {
       const doc = JSON.parse(e.data);
       if (doc.alerts) { addAlerts(doc.alerts); return; }
       const arr = doc.samples || [];
+      // More than one sample: the catch-up on (re)connect, the newest
+      // 300 of the hot buffer. The file-watch sparkline is drawn from
+      // them (it started from one tick on every reload, and the
+      // backfill from api/samples?last=1 held one sample).
+      if (arr.length > 1) backfillFileWatch(arr.slice(0, -1));
       if (arr.length) render(arr[arr.length - 1]);
       renderDetail(doc.detail);
     } catch (_) { /* ignore parse errors */ }
@@ -809,28 +814,28 @@ async function start() {
   // Wire the history chart (independent of the live WS feed); it loads
   // once the catch-up sample has given the server's clock.
   wireHistoryControls();
-  // Render the catch-up snapshot first, then go live. Backfill the
-  // file-watch sparkline from the same snapshot so a page reload
-  // doesn't reset the timeline visible to the operator.
+  // Render the newest sample first, then go live: the WebSocket's
+  // catch-up frame backfills the file-watch sparkline (onmessage).
   try {
     const doc = await r.json();
     const arr = doc.samples || [];
-    const tail = arr.slice(-FW_HIST_MAX);
-    for (const s of tail) {
-      if (s.file_watch?.present) {
-        fileWatchHist.push(s.file_watch.events_this_tick ?? 0);
-      }
-    }
-    if (fileWatchHist.length > FW_HIST_MAX) {
-      fileWatchHist = fileWatchHist.slice(-FW_HIST_MAX);
-    }
-    // render() will push the latest sample's value again, so trim one.
-    if (fileWatchHist.length > 0) fileWatchHist.pop();
     if (arr.length) render(arr[arr.length - 1]);
     renderDetail(doc.detail);
   } catch (_) {}
   loadHistory();
   openWs();
+}
+
+// The file-watch sparkline from the samples before the one render()
+// draws next (which pushes its own value): the newest FW_HIST_MAX of
+// them, in order.
+function backfillFileWatch(arr) {
+  fileWatchHist = [];
+  for (const s of arr.slice(-FW_HIST_MAX)) {
+    if (s.file_watch?.present) {
+      fileWatchHist.push(s.file_watch.events_this_tick ?? 0);
+    }
+  }
 }
 
 document.addEventListener("DOMContentLoaded", start);

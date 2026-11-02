@@ -565,7 +565,20 @@ int cmd_serve(int argc, char* argv[], const char* version) {
     if (cfg.auth_persist_sessions) {
         const std::string session_path =
             std::string(cfg.data_dir) + "/sessions.tsv";
-        sessions.load(session_path.c_str());
+        // The file carries a fingerprint of the password hash: one made
+        // under another password is dropped, so a password change ends
+        // every session (it ended none, and with the sliding expiration
+        // whoever had the old password kept the dashboard for ever).
+        if (cfg.auth_enabled) sessions.set_credential(cfg.password_hash);
+        bool stale = false;
+        if (const int rc = sessions.load(session_path.c_str(), &stale); rc != 0) {
+            std::fprintf(stderr, "budyk serve: cannot read the sessions from '%s': %s\n",
+                         session_path.c_str(), std::strerror(-rc));
+        } else if (stale) {
+            std::fprintf(stderr,
+                "budyk serve: '%s' holds sessions made under another password: dropped, "
+                "every dashboard signs in again\n", session_path.c_str());
+        }
         sessions.set_persist_path(session_path);   // autosave on mutation
     }
 

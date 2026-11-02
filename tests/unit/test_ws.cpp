@@ -14,6 +14,7 @@
 #include <thread>
 #include <vector>
 
+#include <fcntl.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -527,6 +528,47 @@ int main() {
         assert(hub.size() == 1);
         hub.close_all();
         ::close(fo[1]);
+    }
+
+    // 14. A client dropped while a frame is still owed (drop_sessions(),
+    //     a close frame from the peer) gets no close frame of its own:
+    //     sent behind the part the socket had taken, its bytes landed
+    //     inside that frame, and the browser saw 1006 or 1007, not 1008.
+    //     What the peer reads is a prefix of the frame, then the end.
+    {
+        WebSocketHub hub;
+        int sv[2];
+        assert(::socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0);
+        const int small = 8192;
+        ::setsockopt(sv[0], SOL_SOCKET, SO_SNDBUF, &small, sizeof(small));
+        ::setsockopt(sv[1], SOL_SOCKET, SO_RCVBUF, &small, sizeof(small));
+        hub.add(sv[0], "ended");
+        const std::string big = ws_text_frame(std::string(200000, 'y'));
+        hub.broadcast(std::string(200000, 'y'));   // part taken, the rest owed
+        // The peer reads what the socket holds, so it has room again for
+        // a close frame: it went into that room, in the middle of the frame.
+        std::string got;
+        char buf[4096];
+        ::fcntl(sv[1], F_SETFL, ::fcntl(sv[1], F_GETFL, 0) | O_NONBLOCK);
+        ssize_t n;
+        while ((n = ::read(sv[1], buf, sizeof(buf))) > 0) got.append(buf, static_cast<size_t>(n));
+        assert(n < 0 && errno == EAGAIN && !got.empty());
+        assert(hub.drop_sessions([](const std::string&) { return false; }) == 1);
+        while ((n = ::read(sv[1], buf, sizeof(buf))) > 0) got.append(buf, static_cast<size_t>(n));
+        assert(n == 0);                                   // the end, nothing more
+        assert(got.size() < big.size());
+        assert(big.compare(0, got.size(), got) == 0);   // a prefix: no close frame inside
+        ::close(sv[1]);
+
+        // Nothing owed: the close frame (1008) comes, as before.
+        int cv[2];
+        assert(::socketpair(AF_UNIX, SOCK_STREAM, 0, cv) == 0);
+        hub.add(cv[0], "ended");
+        assert(hub.drop_sessions([](const std::string&) { return false; }) == 1);
+        const ssize_t m = ::read(cv[1], buf, sizeof(buf));
+        assert(m == 4 && static_cast<uint8_t>(buf[0]) == 0x88 && buf[1] == 2 &&
+               buf[2] == '\x03' && buf[3] == '\xf0');
+        ::close(cv[1]);
     }
 
     std::printf("test_ws: PASS\n");

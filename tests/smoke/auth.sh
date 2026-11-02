@@ -111,20 +111,40 @@ import base64, os, socket, sys, time, urllib.request
 port = int(sys.argv[1])
 base = "http://127.0.0.1:%d" % port
 
-def request(method, path, body=None, cookie=None):
+def request(method, path, body=None, cookie=None, headers=None):
     req = urllib.request.Request(base + path, data=body, method=method)
     if cookie:
         req.add_header("Cookie", cookie)
+    for k, v in (headers or {}).items():
+        req.add_header(k, v)
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
             return r.status, r.headers
     except urllib.error.HTTPError as e:
         return e.code, e.headers
 
-status, headers = request("POST", "/api/auth/login", b'{"password":"smoke-pass"}')
+# The login takes the dashboard's own page only (Origin against Host)
+# and a JSON body: a page on any site posted to it without a preflight
+# (a no-cors fetch, text/plain), and five of those a minute throttled
+# the admin's own address out of the login. Neither counts as a failure.
+json_ct = {"Content-Type": "application/json"}
+status, _ = request("POST", "/api/auth/login", b'{"password":"smoke-pass"}',
+                    headers={"Origin": "http://evil.example", **json_ct})
+if status != 403:
+    sys.exit("a cross-origin login: %d, not 403" % status)
+status, _ = request("POST", "/api/auth/login", b'{"password":"smoke-pass"}',
+                    headers={"Content-Type": "text/plain"})
+if status != 415:
+    sys.exit("a text/plain login: %d, not 415" % status)
+print("ok   a cross-origin login is refused (403), a non-JSON one too (415)")
+
+status, headers = request("POST", "/api/auth/login", b'{"password":"smoke-pass"}',
+                          headers={"Origin": "http://127.0.0.1:%d" % port, **json_ct})
 if status != 200:
     sys.exit("login: %d" % status)
 cookie = headers["Set-Cookie"].split(";", 1)[0]
+if not cookie.startswith("budyk_session_"):
+    sys.exit("the session cookie is %r, not budyk_session_<tag>" % cookie)
 if request("GET", "/api/samples", cookie=cookie)[0] != 200:
     sys.exit("/api/samples with the session is not 200")
 print("ok   login gives a session the API takes")

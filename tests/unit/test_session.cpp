@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #include "web/session.h"
+#include "core/clock.h"
 
 #include <sys/stat.h>
 #include <unistd.h>
 
 #include <atomic>
 #include <cassert>
+#include <cerrno>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -216,6 +218,75 @@ int main() {
         assert(!a.verify(idle));                    // left alone: ended at 2 s
         assert(!a.touch(idle));
         assert(!a.touch("not-a-real-token-deadbeef"));
+        ::unlink(path.c_str());
+    }
+
+    // 13. The credential: a file made under another password hash is
+    //     dropped whole (a password change ended no session, and with
+    //     the sliding expiration whoever had the old password kept the
+    //     dashboard); one without a credential line (an older file) too
+    //     when a credential is set; the same hash loads; a store with
+    //     no credential takes any file.
+    {
+        const std::string path = mktmp();
+        SessionStore a(/*ttl_s*/ 3600);
+        a.set_credential("$argon2id$v=19$m=65536,t=3,p=4$old$hash");
+        a.set_persist_path(path);
+        const std::string t = a.create();
+        assert(slurp(path).find("# credential ") != std::string::npos);
+        assert(slurp(path).find("$argon2id$") == std::string::npos);   // a fingerprint, not the hash
+        bool stale = true;
+        SessionStore same(3600);
+        same.set_credential("$argon2id$v=19$m=65536,t=3,p=4$old$hash");
+        assert(same.load(path.c_str(), &stale) == 0 && !stale && same.verify(t));
+        SessionStore changed(3600);
+        changed.set_credential("$argon2id$v=19$m=65536,t=3,p=4$new$hash");
+        assert(changed.load(path.c_str(), &stale) == 0 && stale && changed.size() == 0);
+        SessionStore any(3600);
+        assert(any.load(path.c_str(), &stale) == 0 && !stale && any.verify(t));
+        // An older file, no credential line, a credential set: dropped.
+        SessionStore v1(3600);
+        v1.set_persist_path(path);
+        v1.create();
+        assert(slurp(path).find("# credential ") == std::string::npos);
+        assert(changed.load(path.c_str(), &stale) == 0 && stale && changed.size() == 0);
+        // An empty file under another credential is nothing to report.
+        SessionStore none(3600);
+        none.set_credential("x");
+        none.set_persist_path(path);
+        none.revoke("nothing");
+        assert(none.save(path.c_str()) == 0);
+        assert(changed.load(path.c_str(), &stale) == 0 && !stale);
+        ::unlink(path.c_str());
+    }
+
+    // 14. A deadline past now + TTL (the clock stepped back since it was
+    //     set) is brought down to that: on load, by verify() and by
+    //     touch(). Every session had the step on top of its TTL.
+    {
+        const std::string path = mktmp();
+        {
+            FILE* f = std::fopen(path.c_str(), "w");
+            assert(f != nullptr);
+            std::fprintf(f, "# budyk sessions v2\n# token\tdeadline_ns\nfar\t%llu\n",
+                         static_cast<unsigned long long>(now_realtime_ns() + 10ULL * 365 * 86400 * 1000000000ULL));
+            std::fclose(f);
+        }
+        SessionStore a(/*ttl_s*/ 1);
+        assert(a.load(path.c_str()) == 0 && a.size() == 1);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+        assert(!a.verify("far"));                   // the TTL from the load, not ten years
+        ::unlink(path.c_str());
+    }
+
+    // 15. load() says when the file cannot be read (it was 0 for every
+    //     fopen failure, a root-owned file after a `sudo budyk serve`
+    //     among them), and save() when it cannot be written.
+    {
+        const std::string path = mktmp();
+        SessionStore a;
+        assert(a.load((path + "/under-a-file").c_str()) == -ENOTDIR);
+        assert(a.save((path + "/under-a-file").c_str()) == -ENOTDIR);
         ::unlink(path.c_str());
     }
 

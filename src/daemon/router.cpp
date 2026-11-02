@@ -8,6 +8,7 @@
 #include "web/json.h"
 #include "web/spa.h"
 
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -24,11 +25,24 @@ namespace {
 
 // The newest samples of the hot buffer a WebSocket client gets on
 // connect. The dashboard draws the last one and the file-watch sparkline
-// from the tail; the whole buffer was sent (152 MB at a capacity of
-// 100000, three copies of it, ten minutes of the HTTP thread), and the
-// hub drops a client more than kMaxBacklog (1 MiB) behind, which the
-// frame must leave room under.
+// from the ones before it; the whole buffer was sent (152 MB at a
+// capacity of 100000, three copies of it, ten minutes of the HTTP
+// thread), and the hub drops a client more than kMaxBacklog (1 MiB)
+// behind, which the frame must leave room under.
 constexpr size_t kCatchupSamples = 300;
+
+// The media type of a request's body, without parameters, in lower
+// case: "application/json; charset=utf-8" is "application/json".
+std::string media_type(const HttpRequest& req) {
+    std::string ct = req.header("Content-Type");
+    const size_t semi = ct.find(';');
+    if (semi != std::string::npos) ct.resize(semi);
+    while (!ct.empty() && (ct.back() == ' ' || ct.back() == '\t')) ct.pop_back();
+    for (char& c : ct) {
+        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+    }
+    return ct;
+}
 
 // The first entry of a header a chain of proxies may have appended to,
 // without the blanks around it.
@@ -96,11 +110,15 @@ std::string host_name(std::string h) {
 // Host. budyk's names are an IP address, localhost and *.localhost
 // (which browsers keep to loopback), this host's name and the names in
 // web.allowed_hosts (a reverse proxy's). X-Forwarded-Host does not count:
-// the page sets it as it likes. No Host (not a browser) is let in. With
-// a password on (a page under another name has no session), or on a
-// network address (open to the network anyway), any name is.
-bool own_host(const HttpRequest& req, const Config& cfg, const std::string& hostname) {
-    if (cfg.auth_enabled || std::strncmp(cfg.listen_addr, "127.", 4) != 0) return true;
+// the page sets it as it likes. No Host (not a browser) is let in. On a
+// network address (open to the network anyway) any name is; with a
+// password on, any name but for the login (`login`): a page under
+// another name has no session, but it could post guesses at the
+// password and read the answer (401 or 200), five a minute.
+bool own_host(const HttpRequest& req, const Config& cfg, const std::string& hostname,
+              bool login) {
+    if (std::strncmp(cfg.listen_addr, "127.", 4) != 0) return true;
+    if (cfg.auth_enabled && !login) return true;
     const std::string raw = req.header("Host");
     if (raw.empty()) return true;
     const std::string h = host_name(raw);
@@ -129,6 +147,22 @@ std::string cookie_attrs(const HttpRequest& req) {
 
 } // namespace
 
+std::string session_cookie_name(const std::string& hostname, int port) {
+    // Cookies are not kept apart by port (RFC 6265 §8.5), so two budyks
+    // reached through SSH tunnels (localhost:8081, localhost:8082) or a
+    // reverse proxy's paths shared one `budyk_session` cookie: signing
+    // in to one signed you out of the other.
+    const std::string key = hostname + ":" + std::to_string(port);
+    uint32_t h = 2166136261u;                         // FNV-1a
+    for (const char c : key) {
+        h ^= static_cast<uint8_t>(c);
+        h *= 16777619u;
+    }
+    char tag[16];
+    std::snprintf(tag, sizeof(tag), "%08x", h);
+    return std::string("budyk_session_") + tag;
+}
+
 HttpHandler make_router(const RouterDeps& d) {
     return [d](const HttpRequest& req) -> HttpResponse {
         const Config&   cfg           = *d.cfg;
@@ -139,8 +173,9 @@ HttpHandler make_router(const RouterDeps& d) {
         LoginLimiter&   login_limiter = *d.limiter;
         WebSocketHub&   ws            = *d.ws;
         const Scheduler& sched        = *d.sched;
+        const bool login = req.method == "POST" && req.path == "/api/auth/login";
 
-        if (!own_host(req, cfg, d.hostname)) {
+        if (!own_host(req, cfg, d.hostname, login)) {
             return budyk::HttpResponse{
                 403, "text/plain",
                 "budyk: this Host is not one of budyk's names; add it to web.allowed_hosts\n"};
@@ -149,11 +184,12 @@ HttpHandler make_router(const RouterDeps& d) {
         // touch(): a session in use is kept going (sliding expiration);
         // one left alone for the TTL ends. The dashboard's reloads and
         // the TUI's polls are such use; an open WebSocket alone is not.
-        auto authed = [&cfg, &sessions](const HttpRequest& r) -> bool {
+        const std::string cookie_name = session_cookie_name(d.hostname, cfg.listen_port);
+        auto authed = [&cfg, &sessions, &cookie_name](const HttpRequest& r) -> bool {
             if (!cfg.auth_enabled) return true;
             const std::string c = r.header("Cookie");
             if (c.empty())        return false;
-            const std::string tok = cookie_value(c, "budyk_session");
+            const std::string tok = cookie_value(c, cookie_name.c_str());
             return !tok.empty() && sessions.touch(tok);
         };
 
@@ -183,10 +219,27 @@ HttpHandler make_router(const RouterDeps& d) {
             return r;
         }
 
-        if (req.method == "POST" && req.path == "/api/auth/login") {
+        if (login) {
             if (!cfg.auth_enabled || cfg.password_hash[0] == '\0') {
                 return budyk::HttpResponse{
                     403, "text/plain", "auth disabled\n"};
+            }
+            // The dashboard's own page only (its Origin against Host), and
+            // a JSON body: a page on any site could post to the login
+            // without a preflight (a no-cors fetch with a text/plain
+            // body), and five of those a minute kept the admin's address,
+            // the same 127.0.0.1 on a loopback listen or an SSH tunnel,
+            // throttled out of the login (and the TUI's) for as long as
+            // the page stayed open. The TUI and the dashboard both send
+            // application/json.
+            if (!same_origin(req)) {
+                return budyk::HttpResponse{
+                    403, "application/json", "{\"error\":\"cross-origin login\"}\n"};
+            }
+            if (media_type(req) != "application/json") {
+                return budyk::HttpResponse{
+                    415, "application/json",
+                    "{\"error\":\"the login wants a JSON body (Content-Type: application/json)\"}\n"};
             }
             // Throttled before the body is even looked at, so a blocked
             // client costs no Argon2 run. The windows are on the monotonic
@@ -232,19 +285,19 @@ HttpHandler make_router(const RouterDeps& d) {
             r.content_type = "application/json";
             r.body         = "{\"ok\":true}\n";
             r.extra_headers.push_back({"Set-Cookie",
-                "budyk_session=" + tok + cookie_attrs(req)});
+                cookie_name + "=" + tok + cookie_attrs(req)});
             return r;
         }
 
         if (req.method == "POST" && req.path == "/api/auth/logout") {
             const std::string c = req.header("Cookie");
             if (!c.empty()) {
-                const std::string tok = cookie_value(c, "budyk_session");
+                const std::string tok = cookie_value(c, cookie_name.c_str());
                 if (!tok.empty()) sessions.revoke(tok);
             }
             budyk::HttpResponse r{200, "application/json", "{\"ok\":true}\n"};
             r.extra_headers.push_back({"Set-Cookie",
-                "budyk_session=" + cookie_attrs(req) + "; Max-Age=0"});
+                cookie_name + "=" + cookie_attrs(req) + "; Max-Age=0"});
             return r;
         }
 
@@ -423,7 +476,7 @@ HttpHandler make_router(const RouterDeps& d) {
             // The session it was let in with: the hub drops the client
             // when that session ends (logout, expiry).
             const std::string session =
-                cfg.auth_enabled ? cookie_value(req.header("Cookie"), "budyk_session") : std::string();
+                cfg.auth_enabled ? cookie_value(req.header("Cookie"), cookie_name.c_str()) : std::string();
             const std::string key = req.header("Sec-WebSocket-Key");
             const std::string handshake = budyk::ws_handshake_response(key);
 
