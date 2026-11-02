@@ -432,16 +432,20 @@ int cmd_serve(int argc, char* argv[], const char* version) {
         if (!cfg.rules_exec_allow.empty()) e.set_exec_allowlist(cfg.rules_exec_allow);
         e.set_freeze_enabled(cfg.rules_enable_freeze);
         if (!cfg.rules_freeze_allow.empty()) e.set_freeze_allowlist(cfg.rules_freeze_allow);
+        // The names escalate() accepts: here, for the probe engine of a
+        // reload too (it knew none, so a file with escalate("L3") at file
+        // scope loaded at start and was refused at every SIGHUP).
+        std::vector<std::string> names = {"L1", "L2", "L3"};
+        for (const auto& lv : cfg.scheduler.custom_levels) names.push_back(lv.name);
+        e.set_level_names(std::move(names));
         return 0;
     };
     auto setup_engine = [&](const char* restore_path, bool register_channels) -> int {
         if (init_engine(engine) != 0) return -1;
         {
-            // Names escalate() accepts, and the custom levels' `when`
-            // conditions. Re-applied on reload: shutdown() drops both.
-            std::vector<std::string> names = {"L1", "L2", "L3"};
+            // The custom levels' `when` conditions. Re-applied on reload:
+            // shutdown() drops them.
             for (const auto& lv : cfg.scheduler.custom_levels) {
-                names.push_back(lv.name);
                 if (lv.when.empty()) continue;
                 if (engine.add_level_condition(lv.id, lv.when) != 0) {
                     std::fprintf(stderr,
@@ -450,7 +454,6 @@ int cmd_serve(int argc, char* argv[], const char* version) {
                         lv.name.c_str(), engine.last_error().c_str());
                 }
             }
-            engine.set_level_names(std::move(names));
         }
         {
             std::string err;
@@ -519,6 +522,7 @@ int cmd_serve(int argc, char* argv[], const char* version) {
             budyk::LuaEngine probe;
             std::string err;
             int rc = init_engine(probe);
+            probe.set_probe(true);              // a check: nothing it loads goes out
             if (rc == 0) rc = load_rules_into(probe, &err, /*reload=*/true);
             probe.shutdown();
             if (rc != 0) {

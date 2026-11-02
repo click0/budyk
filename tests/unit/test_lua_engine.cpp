@@ -4,6 +4,11 @@
 #include "rules/lua_engine.h"
 #include "rules/alert.h"
 
+extern "C" {
+#include <lauxlib.h>
+#include <lua.h>
+}
+
 #include <cassert>
 #include <cerrno>
 #include <memory>
@@ -1896,6 +1901,165 @@ int main() {
         assert(e.load_string("for name, iface in pairs(net.interfaces) do end\n") != 0);
         assert(e.last_error().find("nil value") == std::string::npos);
         assert(e.last_error().find("collected") != std::string::npos);
+        e.shutdown();
+    }
+
+    // 44. collectgarbage() is charged with the heap it walks: a loop of
+    //     full collections ran under the instruction limit (one CALL
+    //     each) and held the tick for minutes on a large heap. "count"
+    //     reads; "stop" (collection off for every later tick) is refused.
+    {
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        assert(e.load_string(
+            "t = {}\n"
+            "for i = 1, 20000 do t[i] = { i } end\n"
+            "watch('gc', { when = function()\n"
+            "  for i = 1, 1000 do collectgarbage() end\n"
+            "  return false\n"
+            "end })\n"
+            "watch('count', { when = function() return collectgarbage('count') > 0 end })\n"
+            "watch('stop', { when = function() collectgarbage('stop') return false end })\n") == 0);
+        e.set_limits(100000, LuaEngine::kDefaultMemoryLimit);    // the heap is a megabyte: 6 collections
+        assert(e.eval_tick(mk(0, 0, 0, 0)) == 1);                 // 'count' fired
+        assert(e.rules()[0].last_error.find("instruction limit") != std::string::npos);
+        assert(e.rules()[1].last_error.empty());
+        assert(e.rules()[2].last_error.find("not available") != std::string::npos);
+        e.shutdown();
+    }
+
+    // 45. print() is charged with the bytes it writes: print(big) in a
+    //     loop wrote gigabytes to the log in one tick under the limit.
+    {
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        e.set_limits(20000, LuaEngine::kDefaultMemoryLimit);
+        assert(e.load_string(
+            "big = string.rep('x', 100000)\n"
+            "watch('p', { when = function()\n"
+            "  for i = 1, 100 do print(big) end\n"
+            "  return false\n"
+            "end })\n") == 0);
+        assert(e.eval_tick(mk(0, 0, 0, 0)) == 0);
+        assert(e.rules()[0].last_error.find("instruction limit") != std::string::npos);
+        e.shutdown();
+    }
+
+    // 46. An alert's name and message are cut to kMaxAlertNameBytes /
+    //     kMaxAlertMessageBytes (copies of them live outside the Lua
+    //     heap's limit: the queue, the channels' jobs, the dashboard's
+    //     frame), and past kMaxPendingAlerts a tick the rest are counted.
+    {
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        assert(e.load_string(
+            "watch('big', { when = function()\n"
+            "  alert(string.rep('n', 1000), 'warning', string.rep('m', 10000))\n"
+            "  for i = 1, 299 do alert('many', 'info', 'x') end\n"
+            "  return false\n"
+            "end })\n") == 0);
+        assert(e.eval_tick(mk(0, 0, 0, 0)) == 0);
+        const std::vector<AlertEvent> got = e.take_alerts();
+        assert(got.size() == LuaEngine::kMaxPendingAlerts);
+        assert(e.alerts_dropped() == 300 - LuaEngine::kMaxPendingAlerts);
+        assert(got[0].rule.size() < LuaEngine::kMaxAlertNameBytes + 32);
+        assert(got[0].rule.find(" bytes cut)") != std::string::npos);
+        assert(got[0].message.size() < LuaEngine::kMaxAlertMessageBytes + 32);
+        assert(got[0].message.compare(0, 10, "mmmmmmmmmm") == 0);
+        assert(got[0].message.find("(5904 bytes cut)") != std::string::npos);
+        assert(got[1].message == "x");
+        e.shutdown();
+    }
+
+    // 47. A rules file is text: Lua does not verify bytecode, and a
+    //     precompiled chunk could do what no sandbox prevents. string.dump
+    //     is gone with it.
+    {
+        // Real bytecode, from a plain Lua state of this test's own: a
+        // chunk that defines a rule, as `luac` would write it.
+        std::string chunk;
+        {
+            lua_State* L = luaL_newstate();
+            assert(L != nullptr);
+            assert(luaL_loadstring(L, "watch('compiled', { when = function() return true end })") == LUA_OK);
+            auto writer = [](lua_State*, const void* p, size_t sz, void* ud) -> int {
+                static_cast<std::string*>(ud)->append(static_cast<const char*>(p), sz);
+                return 0;
+            };
+            assert(lua_dump(L, writer, &chunk, 0) == 0);
+            lua_close(L);
+        }
+        assert(chunk.size() > 4 && chunk[0] == '\x1b');
+        char tmpl[] = "/tmp/budyk_rules_bin_XXXXXX";
+        const int fd = ::mkstemp(tmpl);
+        assert(fd >= 0);
+        assert(::write(fd, chunk.data(), chunk.size()) == static_cast<ssize_t>(chunk.size()));
+        ::close(fd);
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        assert(e.load_file(tmpl) != 0);                          // it loaded, and the rule ran
+        assert(e.last_error().find("binary chunk") != std::string::npos);
+        assert(e.rule_count() == 0);
+        assert(e.load_string("assert(string.dump == nil)") == 0);
+        e.shutdown();
+        ::unlink(tmpl);
+    }
+
+    // 48. `files` and its entries are read-only, as the sample tables are:
+    //     a rule could set files[p].tampered = false and hide the event
+    //     from the rule after it.
+    {
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        FileWatchState st;
+        st.modifies["/etc/x"] = 1;
+        st.tampered_this_tick.insert("/etc/x");
+        e.set_file_state(st);
+        assert(e.load_string(
+            "watch('hide', { when = function() files['/etc/x'].tampered = false return false end })\n"
+            "watch('add',  { when = function() files.y = 1 return false end })\n"
+            "watch('read', { when = function() return files['/etc/x'].tampered and files['/etc/x'].modifies == 1 end })\n"
+            "watch('iter', { when = function() local n = 0 for p, f in pairs(files) do n = n + f.modifies end return n == 1 end })\n") == 0);
+        assert(e.eval_tick(mk(0, 0, 0, 0)) == 2);
+        assert(e.rules()[0].last_error.find("read-only") != std::string::npos);
+        assert(e.rules()[1].last_error.find("read-only") != std::string::npos);
+        assert(e.rules()[2].last_error.empty() && e.rules()[3].last_error.empty());
+        e.shutdown();
+    }
+
+    // 49. A probe engine (the reload's check of the new file): alert()
+    //     at file scope queues nothing and sends nothing (it went out
+    //     twice per reload), and escalate() needs the level names, which
+    //     the daemon gives the probe too.
+    {
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        e.set_probe(true);
+        e.set_level_names({"L1", "L2", "L3"});
+        assert(e.load_string("alert('boot', 'info', 'loaded')\nescalate('L3', 5)\n") == 0);
+        assert(e.take_alerts().empty());
+        assert(e.take_escalations().size() == 1);
+        e.shutdown();
+    }
+
+    // 50. exec()'s arguments together are bounded (64 KiB): a queued job
+    //     keeps a copy outside the Lua heap's limit.
+    {
+        LuaEngine e;
+        assert(e.init(true) == 0);
+        assert(e.load_string(
+            "watch('huge', { when = function()\n"
+            "  exec({ '/bin/true', string.rep('a', 70000) })\n"
+            "  return false\n"
+            "end })\n"
+            "watch('fine', { when = function()\n"
+            "  local r = exec({ '/bin/true', string.rep('a', 1000) })\n"
+            "  return r.queued\n"
+            "end })\n") == 0);
+        assert(e.eval_tick(mk(0, 0, 0, 0)) == 1);
+        assert(e.rules()[0].last_error.find("over 65536") != std::string::npos);
+        assert(e.rules()[1].last_error.empty());
+        e.exec_worker().stop(2000);
         e.shutdown();
     }
 

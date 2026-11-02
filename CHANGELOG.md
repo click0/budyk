@@ -32,6 +32,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **A rule could hold the collector tick for minutes, or write
+  gigabytes to the log, under the instruction limit.** `collectgarbage()`
+  and `print()` work in C with nothing allocated, so neither the count
+  hook nor the allocator charged them: a loop of full collections on a
+  large heap, or `print(big)` in a loop, ran within one tick's budget.
+  `collectgarbage()` is charged with the heap it walks ("stop" and the
+  tuning options are refused), `print()` with the bytes it writes.
+- **What a rule handed to `alert()` and `exec()` lived outside the memory
+  limit.** `rules.limits.memory_mb` bounds the Lua heap; a string held
+  there once was copied, whole, into the alert queue, each channel's
+  job, the daemon's recent alerts and a WebSocket frame, and into a
+  queued `exec()` job: 256 alerts of 15 MiB held gigabytes. An alert's
+  name is cut to 256 bytes and its message to 4096 (marked `… (N bytes
+  cut)`), `exec()`'s arguments together to 64 KiB, and the first alert
+  past the 256 a tick keeps is logged.
+- **A rules file could be precompiled bytecode**, which Lua does not
+  verify and no sandbox survives. It is loaded as text only, and
+  `string.dump` is gone from the sandbox.
+- **`files` was writable.** A rule could set `files[p].tampered = false`
+  and hide the event from the rule after it; the table and its entries
+  are read-only proxies, as the sample tables are.
 - **A password change ended no session.** The sessions file held only
   tokens and deadlines, so after `hash-password` and a restart whoever
   had logged in with the leaked password kept the dashboard and the
@@ -63,6 +84,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A SIGHUP refused a rules file that calls `escalate()` at file
+  scope**, though the same file loaded at start: the engine that checks
+  the new file first knew no level names ("unknown level 'L3'"), so no
+  edit of such a file could be applied without a restart. The check
+  engine gets the names, and it is a probe: a file-scope `alert()` or
+  `freeze()` ran there for real, so each reload sent the alert and
+  stopped the process a second time.
+- **An `exec()` that could not start was logged as a bare `rc=-4`**, and
+  the inline form's `error` was that number. The log says what failed
+  and why ("fork: Resource temporarily unavailable"), and `error` is
+  that text.
+- **The "queue full" alert log line printed the rule's name raw**, so a
+  line break in it (a process name's) forged a log line.
 - **Two budyks on one host name shared one session cookie.** Cookies are
   not kept apart by port, so two dashboards reached through SSH tunnels
   (`localhost:8081`, `localhost:8082`) or one reverse proxy's paths

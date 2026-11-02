@@ -97,7 +97,7 @@ int wait_with_timeout(pid_t pid, int timeout_seconds, ExecResult* out,
             else if (WIFSIGNALED(status)) out->signal     = WTERMSIG(status);
             return 0;
         }
-        if (r < 0 && errno != EINTR) return -5;
+        if (r < 0 && errno != EINTR) { out->err = errno; return -5; }
 
         if (cancel != nullptr && cancel->load()) {
             kill_and_reap();
@@ -155,6 +155,18 @@ std::vector<std::string> child_environment() {
 
 } // namespace
 
+const char* exec_describe(int rc) {
+    switch (rc) {
+        case 0:  return "ok";
+        case -1: return "no command";
+        case -2: return "no timeout";
+        case -3: return "no result slot";
+        case -4: return "fork";
+        case -5: return "waitpid";
+        default: return "unknown error";
+    }
+}
+
 int exec_command(const char* const argv[], int timeout_seconds, ExecResult* out,
                  const std::atomic<bool>* cancel) {
     if (argv == nullptr || argv[0] == nullptr) return -1;
@@ -171,7 +183,7 @@ int exec_command(const char* const argv[], int timeout_seconds, ExecResult* out,
     envp.push_back(nullptr);
 
     pid_t pid = fork();
-    if (pid < 0)  return -4;
+    if (pid < 0) { out->err = errno; return -4; }
     if (pid == 0) {
         environ = envp.data();   // execvp() reads PATH from here
         prepare_child_and_exec(argv, timeout_seconds);

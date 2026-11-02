@@ -716,5 +716,18 @@ void budyk_lua_bind_files(lua_State* L, const budyk::FileWatchState& s) {
         set_boolean(L, "tampered", true);
         lua_pop(L, 1);
     }
+    // Read-only, as the sample tables are: every entry, then `files`
+    // itself. A rule could set files[p].tampered = false and hide the
+    // event from the rule after it.
+    lua_pushnil(L);
+    while (lua_next(L, files) != 0) {                     // files, key, entry
+        push_ro_proxy(L, -1, "files[...]");               // files, key, entry, proxy
+        lua_pushvalue(L, -3);                             // files, key, entry, proxy, key
+        lua_insert(L, -2);                                // files, key, entry, key, proxy
+        lua_rawset(L, files);                             // files, key, entry
+        lua_pop(L, 1);                                    // files, key
+    }
+    push_ro_proxy(L, files, "files");                     // files, proxy
+    lua_remove(L, files);                                 // proxy
     set_global(L, "files");
 }

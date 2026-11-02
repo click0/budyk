@@ -11,7 +11,13 @@ struct ExecResult {
     bool   timed_out;         ///< true → we SIGKILL'd on timeout expiry
     bool   cancelled;         ///< true → we SIGKILL'd because *cancel was raised
     double elapsed_seconds;
+    int    err;               ///< errno of a failure exec_command() returns (0 otherwise)
 };
+
+/// What a code exec_command() returns means ("fork"); the errno is in
+/// ExecResult::err, so a log line says "fork: Resource temporarily
+/// unavailable", not "rc=-4".
+const char* exec_describe(int rc);
 
 /// Spawn argv[0] with argv as arguments under a sandbox:
 ///   * new process group (kill -pgid on timeout),

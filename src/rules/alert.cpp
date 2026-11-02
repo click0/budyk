@@ -593,8 +593,9 @@ int AlertDispatcher::dispatch(AlertSeverity sev,
             }
         });
     if (!ok) {
+        // One line whatever the name holds (a process name's bytes).
         std::fprintf(stderr, "budyk alert: queue full, alert for rule '%s' dropped\n",
-                     rule_name.c_str());
+                     header_value(rule_name).c_str());
         return 0;
     }
     return queued;

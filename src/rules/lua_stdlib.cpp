@@ -22,6 +22,10 @@ namespace {
 
 constexpr const char* kEngineRegKey = "budyk.engine";
 
+// The bytes exec()'s arguments may hold together (a queued job keeps a
+// copy outside the Lua heap's limit).
+constexpr size_t kMaxExecArgvBytes = 64 * 1024;
+
 budyk::LuaEngine* engine_from(lua_State* L) {
     lua_getfield(L, LUA_REGISTRYINDEX, kEngineRegKey);
     auto* eng = static_cast<budyk::LuaEngine*>(lua_touserdata(L, -1));
@@ -394,11 +398,21 @@ int exec_impl(lua_State* L, budyk::LuaEngine* eng, ExecOutcome* out, char* err,
     // allowlist's name check reads: "/bin/sh\0/usr/bin/logger" resolved to
     // the BusyBox an allowed /usr/bin/logger is, was named logger, and ran
     // as sh.
+    size_t argv_bytes = 0;
     for (size_t i = 0; i < argv_storage.size(); ++i) {
         if (argv_storage[i].find('\0') != std::string::npos) {
             std::snprintf(err, err_cap, "exec: argv[%zu] holds a NUL byte", i + 1);
             return -1;
         }
+        argv_bytes += argv_storage[i].size() + 1;
+    }
+    // The arguments are copied out of the Lua heap (which the memory
+    // limit bounds) into a queued job (which it did not: 256 jobs of
+    // 15 MiB); the kernel's own limit on them is lower than this anyway.
+    if (argv_bytes > kMaxExecArgvBytes) {
+        std::snprintf(err, err_cap, "exec: the arguments are %zu bytes, over %zu",
+                      argv_bytes, kMaxExecArgvBytes);
+        return -1;
     }
 
     // --- Hardening -----------------------------------------------------
@@ -480,8 +494,9 @@ int exec_impl(lua_State* L, budyk::LuaEngine* eng, ExecOutcome* out, char* err,
                 budyk::ExecResult res{};
                 const int rc = budyk::exec_command(ptrs.data(), timeout_s, &res, &cancel);
                 if (rc != 0) {
-                    std::fprintf(stderr, "budyk exec: %s: could not start (rc=%d)\n",
-                                 what.c_str(), rc);
+                    std::fprintf(stderr, "budyk exec: %s: could not start: %s: %s\n",
+                                 what.c_str(), budyk::exec_describe(rc),
+                                 std::strerror(res.err));
                 } else if (res.cancelled) {
                     std::fprintf(stderr, "budyk exec: %s: killed at shutdown after %.1f s\n",
                                  what.c_str(), res.elapsed_seconds);
@@ -561,7 +576,10 @@ int l_exec(lua_State* L) {
                        res.signal == 0 && !res.timed_out);
     lua_setfield(L, -2, "ok");
     if (out.rc != 0) {
-        lua_pushinteger(L, out.rc); lua_setfield(L, -2, "error");
+        // What failed and why, as the log says it: `error` was the bare
+        // ordinal (-4).
+        lua_pushfstring(L, "%s: %s", budyk::exec_describe(out.rc), std::strerror(res.err));
+        lua_setfield(L, -2, "error");
     }
     return 1;
 }
@@ -621,7 +639,9 @@ int freeze_action(lua_State* L, const char* fn_name, bool stop) {
         }
     }
 
-    const int rc = stop ? budyk::freeze_pid(pid) : budyk::unfreeze_pid(pid);
+    // A probe engine (the reload's check of the new file) signals nothing:
+    // a file-scope freeze() stopped the process a second time.
+    const int rc = eng->probe() ? 0 : stop ? budyk::freeze_pid(pid) : budyk::unfreeze_pid(pid);
 
     lua_newtable(L);
     lua_pushboolean(L, rc == 0);          lua_setfield(L, -2, "ok");

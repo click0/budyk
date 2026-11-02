@@ -309,12 +309,21 @@ The gates a local build does not show:
    Library work in C is charged to the instruction limit too
    (`LuaEngine::charge()`): `src/rules/lua_pattern.c` is Lua 5.4.7's
    own pattern matcher (MIT, kept as Lua writes it, the changes marked
-   "budyk") with a step count, `table.move` is charged, past the limit
-   the hook raises on every instruction (no `pcall` carries on),
-   `xpcall` runs its handler after the call and `setmetatable` refuses
-   `__gc` (Lua runs both with hooks off). `exec()` is gated by
-   `--enable-exec` or `rules.exec.enabled` plus an allowlist. A runaway
-   rule gets an error, not the daemon.
+   "budyk") with a step count, `table.move` is charged, `print()` by
+   the bytes it writes and `collectgarbage()` by the heap it walks
+   ("stop" and the tuning options are refused), past the limit the hook
+   raises on every instruction (no `pcall` carries on), `xpcall` runs
+   its handler after the call and `setmetatable` refuses `__gc` (Lua
+   runs both with hooks off). A rules file is loaded as text only (Lua
+   does not verify bytecode; `string.dump` is gone with it). What
+   leaves the Lua heap is bounded too: an alert's name and message are
+   cut (`kMaxAlertNameBytes`, `kMaxAlertMessageBytes`), `exec()`'s
+   arguments together to 64 KiB, and `files` is a read-only proxy as
+   the sample tables are. `exec()` is gated by `--enable-exec` or
+   `rules.exec.enabled` plus an allowlist. A runaway rule gets an
+   error, not the daemon. The reload's check of a new rules file runs
+   in a probe engine (`LuaEngine::set_probe()`), which knows the level
+   names and whose `alert()` and `freeze()` do nothing.
 2. The hot buffer (spec §3.4.2) is emptied once no client has been
    connected for `hot_buffer.warm_grace` (`WarmGrace`).
 3. Storage records (spec §3.4.3, §3.5) also carry a flags byte (bit 0:

@@ -8,6 +8,7 @@
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <thread>
 #include <pthread.h>
 #include <unistd.h>
@@ -163,6 +164,23 @@ int main() {
         assert(std::getenv("FOO_SECRET") != nullptr);
         ::unsetenv("FOO_SECRET");
         ::unsetenv("http_proxy");
+    }
+
+    // 8. A failure has a name and keeps its errno (the log said "rc=-4"):
+    //    exec_describe() names the step, ExecResult::err is the errno, 0
+    //    on success.
+    {
+        assert(strcmp(exec_describe(-4), "fork") == 0);
+        assert(strcmp(exec_describe(-5), "waitpid") == 0);
+        assert(strcmp(exec_describe(-1), "no command") == 0);
+        assert(strcmp(exec_describe(0),  "ok") == 0);
+        const char* ok[] = {"/bin/true", nullptr};
+        ExecResult r{};
+        r.err = 42;
+        if (exists("/bin/true")) {
+            assert(exec_command(ok, 5, &r) == 0);
+            assert(r.err == 0);                     // cleared on a run
+        }
     }
 
     std::printf("test_exec_action: PASS\n");
