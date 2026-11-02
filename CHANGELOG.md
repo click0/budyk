@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.6] — 2026-11-02
+
+Eight security fixes. In the rules, `collectgarbage()` and `print()` are
+charged to the instruction limit (a rule could hold the tick for minutes
+or fill the log under it), what a rule hands to `alert()` and `exec()`
+is bounded outside the Lua heap, a rules file is loaded as text only (no
+bytecode), and `files` is read-only. In the web server, a password change
+ends every session (the sessions file carries a fingerprint of the hash,
+so after this upgrade every dashboard signs in once more), and the login
+takes the dashboard's own page alone, as JSON, sent to one of budyk's own
+names. Root no longer follows a link planted as the data directory's lock
+file, and the FreeBSD port installs `config.yaml` 0640. Then the fixes:
+in on-demand mode an `escalate()` from a file-watch rule collects, a
+watched file's change no longer waits for a dashboard, and a path not
+there yet is watched; a clock step in either direction no longer
+escalates, lengthens sessions or empties a query; a dashboard connecting
+while L3 runs gets every tick, and not the burst of an anomaly hours ago;
+a stop, a silent connection, a slow reader and a flooding WebSocket
+client no longer hold the HTTP thread or the tick; the Linux collectors
+read hwmon temperatures, the ZFS ARC as available, a `hidepid` `/proc`
+and an unreachable mount point for what they are; the FreeBSD collectors
+no longer count the kernel's processes as blocked, md(4) and CTL LUNs as
+disks, or a filesystem hidden under an NFS mount through the NFS server;
+an alert channel's refusal is logged instead of counted as delivered, a
+channel missing its fields is refused at start, and a child gets a
+minimal environment; `freeze()` refuses budyk's own pid; a thread that
+cannot be made is not the daemon's end; a session in use slides. `service
+budyk reload` and `systemctl reload budyk` reload the rules, and the rc.d
+script puts curl on the daemon's PATH. The record format does not
+change: the rings of 0.8.5 are used as they are.
+
 ### Changed
 
 - `budyk help`, `--help`, `-h`, `--version` and `-V` are taken (they were
@@ -1983,6 +2014,7 @@ it turned up two untested storage paths, which are now covered.
   opened, and init with the original size works again. tier_manager.cpp
   coverage went from 84.3% to 94.4%.
 
+[0.8.6]: https://github.com/click0/budyk/releases/tag/v0.8.6
 [0.8.5]: https://github.com/click0/budyk/releases/tag/v0.8.5
 [0.8.4]: https://github.com/click0/budyk/releases/tag/v0.8.4
 [0.8.3]: https://github.com/click0/budyk/releases/tag/v0.8.3
