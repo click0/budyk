@@ -261,6 +261,25 @@ int main() {
         assert(sch.tick(at(day + 51)) == Level::L1);
     }
 
+    // 10e. The same, for a level requested once before: its old request,
+    //      expired on the old clock and never cleared, was "later" than
+    //      the new one (request() keeps the later deadline), so tick()
+    //      moved the old one back under now and the level was missed.
+    {
+        SchedulerConfig c = cfg;
+        CustomLevel burst; burst.id = 4; burst.name = "burst"; burst.interval_ms = 500; burst.priority = 40;
+        c.custom_levels = {burst};
+        Scheduler sch(c);
+        const uint64_t day = 86400;
+        sch.request(static_cast<Level>(4), (2 * day + 30) * kSec, (2 * day) * kSec);   // yesterday's
+        assert(sch.tick(at(2 * day)) == static_cast<Level>(4));
+        assert(sch.tick(at(2 * day + 100)) == Level::L1);             // expired, still on record
+        sch.request(static_cast<Level>(4), (day + 200 + 30) * kSec, (day + 200) * kSec);
+        assert(sch.tick(at(day + 200)) == static_cast<Level>(4));     // the step back is seen here
+        assert(sch.tick(at(day + 210)) == static_cast<Level>(4));
+        assert(sch.tick(at(day + 231)) == Level::L1);
+    }
+
     // 10d. The client grace and the L2 hysteresis move back with the
     //      clock as the requests do. Left where they were, each replayed
     //      its window a day later, when the clock reached the old stamp:
@@ -327,6 +346,28 @@ int main() {
         Scheduler z(c);
         for (uint64_t t = 0; t <= 3600; t += 30) assert(z.tick(hot(t)) == Level::L2);
         assert(!z.escalated());
+
+        // A clock step forward (NTP at boot on a host with no RTC, a VM
+        // resumed) is not time the anomaly held: told of it, the
+        // scheduler moves its timers forward as far, and the run still
+        // needs escalate_after of real ticks (the jump of an hour made a
+        // two-tick anomaly escalate at once). The grace moves too.
+        c.escalate_after_sec = 100;
+        Scheduler f(c);
+        assert(f.tick(hot(1000)) == Level::L2);
+        assert(f.tick(hot(1030)) == Level::L2);
+        f.clock_stepped_forward(3600 * kSec);
+        assert(f.tick(hot(4660)) == Level::L2 && !f.escalated());    // 60 s of anomaly, not 3660
+        assert(f.tick(hot(4690)) == Level::L2);
+        assert(f.tick(hot(4700)) == Level::L3 && f.escalated());     // 100 s since 1000 + 3600
+        Scheduler g(c);
+        g.client_connected();
+        assert(g.tick(at(100)) == Level::L3);
+        g.client_disconnected();
+        assert(g.tick(at(110)) == Level::L3);                          // 10 s into the grace
+        g.clock_stepped_forward(3600 * kSec);
+        assert(g.tick(at(3720)) == Level::L3);                         // 20 s in, not 3620
+        assert(g.tick(at(3761)) == Level::L1);
 
         // A clock step back moves the run's start back as far rather
         // than escalating at once.

@@ -84,6 +84,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **In on-demand mode an `escalate()` from a file-watch rule collected
+  nothing.** The idle tick chose its L1 sleep before the rules ran and
+  never looked again, so a request shorter than the L1 interval (60 s
+  for `{ alert, escalate }`, against 300 s) had expired when the loop
+  woke, and a longer one took effect an interval late: a tampered
+  sudoers sent the alert and no L3 data. The level is re-selected after
+  those rules run, and a level that collects is entered at once.
+- **The warm-grace reset could make a tick a few ms after the previous
+  one.** The sleep was cut to the time left to the reset with no floor,
+  so on a host whose tick takes tens of ms the first L1 tick after a
+  session ended could come 2–6 ms after the one before it, with rates
+  over those ms (0 % or 100 % CPU) stored in the history and read by
+  the anomaly check. The cap is no lower than 250 ms
+  (`WarmGrace::cap_sleep_ms()`).
+- **A custom level's `when` on the sample where a clock step back is
+  seen was still missed when the level had been requested before**: the
+  old request, expired on the old clock and never cleared, was "later"
+  than the new one, which `request()` dropped, and `tick()` moved the
+  old one under now. A request from before a step back is replaced.
+- **A clock step forward counted as time an anomaly held**, so a
+  two-tick anomaly escalated to L3 at once after NTP stepped the clock
+  by hours ("anomaly held for 300 s"), and the client grace, the
+  hysteresis and the requests ended early. The loop sees the step
+  against the monotonic clock and moves the scheduler's timers forward
+  as far (`Scheduler::clock_stepped_forward()`).
+- **An escalation's 1 Hz burst stayed in the hot buffer for the next
+  client's catch-up.** The warm-grace reset followed client sessions
+  only; a dashboard opened at 09:00 got the 290 samples of an anomaly
+  at 03:00. A fast level without a client arms the reset too.
 - **A SIGHUP refused a rules file that calls `escalate()` at file
   scope**, though the same file loaded at start: the engine that checks
   the new file first knew no level names ("unknown level 'L3'"), so no

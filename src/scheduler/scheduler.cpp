@@ -138,10 +138,34 @@ void Scheduler::request(Level level, uint64_t until_ns, uint64_t made_at_ns) {
     const uint8_t id = static_cast<uint8_t>(level);
     if (id < 1 || id > kMaxLevelId) return;
     if (id >= kFirstCustomLevel && find_custom(level) == nullptr) return;
-    if (requested_[id] && requested_until_ns_[id] >= until_ns) return;
+    // A later deadline replaces an earlier one, unless the one there was
+    // made on a clock since stepped back (its made_at is later than this
+    // one's): expired on the old clock and never cleared, it was "later"
+    // than every request on the new one, so a `when` that held on the
+    // sample the step is seen on was missed, for a level requested once
+    // before.
+    const bool stale = made_at_ns != 0 && requested_made_ns_[id] > made_at_ns;
+    if (requested_[id] && !stale && requested_until_ns_[id] >= until_ns) return;
     requested_[id]          = true;
     requested_until_ns_[id] = until_ns;
     requested_made_ns_[id]  = made_at_ns;
+}
+
+void Scheduler::clock_stepped_forward(uint64_t by_ns) {
+    // Every instant on the old clock is this much later on the new one;
+    // left where they were, the jump counted as time that passed: a
+    // two-tick anomaly "held for 300 s" and escalated at once, and the
+    // client grace, the hysteresis and the requests ended early.
+    auto move = [by_ns](uint64_t* t) { *t += by_ns; };
+    for (size_t id = 0; id <= kMaxLevelId; ++id) {
+        if (!requested_[id]) continue;
+        move(&requested_until_ns_[id]);
+        if (requested_made_ns_[id] != 0) move(&requested_made_ns_[id]);
+    }
+    if (had_clients_)    move(&last_client_active_ns_);
+    if (had_anomaly_)    move(&last_anomaly_ns_);
+    if (in_anomaly_run_) move(&anomaly_run_start_ns_);
+    if (last_tick_ns_ != 0) move(&last_tick_ns_);
 }
 
 bool Scheduler::request_by_name(const std::string& name, uint64_t until_ns, uint64_t made_at_ns) {
