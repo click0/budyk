@@ -77,7 +77,16 @@ fi
 # a port and "5s" as 5 ms): a bad one is an error that names it.
 cli_rejects() {   # cli_rejects <expected message> <args...>
     msg=$1; shift
-    if "$BIN" "$@" > /dev/null 2> "$DIR/cli.err" < /dev/null; then
+    # In the background with a bound: a `serve` that is wrongly taken
+    # runs as a daemon for ever.
+    "$BIN" "$@" > /dev/null 2> "$DIR/cli.err" < /dev/null &
+    cpid=$!
+    i=0
+    while kill -0 "$cpid" 2>/dev/null && [ "$i" -lt 50 ]; do i=$((i + 1)); sleep 0.1; done
+    if kill -0 "$cpid" 2>/dev/null; then
+        kill "$cpid"; wait "$cpid" 2>/dev/null
+        echo "FAIL: budyk $* kept running"; fail=1
+    elif wait "$cpid"; then
         echo "FAIL: budyk $* succeeded"; fail=1
     elif ! grep -qF -- "$msg" "$DIR/cli.err"; then
         echo "FAIL: budyk $*: no '$msg' in: $(cat "$DIR/cli.err")"; fail=1
@@ -87,6 +96,26 @@ cli_rejects() {   # cli_rejects <expected message> <args...>
 }
 cli_rejects "--port wants a number from 1 to 65535, got '99999'" tui --port 99999
 cli_rejects "--timeout wants milliseconds (-1 for none), got '5s'" watch-files --timeout 5s "$DIR"
+# A flag without its value was "unknown arg '--config'"; a key for a
+# request that is not made was taken in silence.
+cli_rejects "--config needs a value" serve --config
+cli_rejects "--port needs a value" tui --port
+cli_rejects "--config needs a value" fsck --config
+cli_rejects "--api-key goes with --ai" suggest-rules --config "$DIR/config.yaml" --api-key x
+# A password required with no hash started a dashboard nobody could log
+# in to; a data_dir whose parent is missing was "cannot lock budyk.lock".
+printf 'data_dir: %s/d2\nport: %d\nweb: { auth: { enabled: true } }\n' "$DIR" "$PORT" > "$DIR/nohash.yaml"
+cli_rejects "web.auth.password_hash is empty: nobody could log in" serve --config "$DIR/nohash.yaml"
+printf 'data_dir: %s/no/parent\nport: %d\n' "$DIR" "$PORT" > "$DIR/noparent.yaml"
+cli_rejects "its parent directory does not exist" serve --config "$DIR/noparent.yaml"
+# help and the version under their usual spellings (they were "unknown
+# command", exit 1).
+for a in help --help -h; do
+    if "$BIN" "$a" 2>/dev/null | grep -q '^Usage:'; then echo "ok   budyk $a -> usage, exit 0"
+    else echo "FAIL: budyk $a"; fail=1; fi
+done
+if [ "$("$BIN" --version)" = "$("$BIN" version)" ]; then echo "ok   budyk --version = budyk version"
+else echo "FAIL: budyk --version"; fail=1; fi
 
 expect() {   # expect <status> <path>
     got=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT$2")

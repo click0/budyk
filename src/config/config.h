@@ -81,6 +81,14 @@ struct Config {
     std::vector<AlertChannelConfig> alert_channels;
 };
 
+/// What an alert channel lacks to send anything, or null when it has
+/// what its type needs: ntfy `url` and `topic`, discord `url`, telegram
+/// `token` (or a `url` that replaces the Bot API's) and `topic` (the
+/// chat id), smtp `url`, `from` and `topic`, twilio `url`, `token`,
+/// `from` and `topic`; an unknown type lacks a type. The loader leaves
+/// such a channel out and says so; the dispatcher asks the same.
+const char* alert_channel_missing(const Config::AlertChannelConfig& ch);
+
 /// Load a YAML config into `out`, starting from defaults. Missing
 /// keys leave defaults in place, and so does an empty file. Returns 0 on
 /// success, negative on I/O or parse error.

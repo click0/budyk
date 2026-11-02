@@ -35,7 +35,15 @@ COPY rules/examples.lua /usr/local/etc/budyk/rules.lua
 
 USER budyk
 VOLUME ["/var/db/budyk"]
+# The example config listens on 127.0.0.1: the port is reachable with
+# `--network host` (docker-compose.yml), or mount a config with
+# `listen: 0.0.0.0` (plain HTTP: put a TLS proxy in front, see README).
 EXPOSE 8080
+
+# budyk as PID 1 reaps only its own children: run with `--init` (compose:
+# `init: true`) so a helper an exec() command leaves behind is reaped.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
+    CMD curl -sf http://127.0.0.1:8080/api/health || exit 1
 
 ENTRYPOINT ["/usr/local/bin/budyk"]
 CMD ["serve", "--config", "/etc/budyk/config.example.yaml"]

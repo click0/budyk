@@ -382,6 +382,71 @@ int main(int argc, char** argv) {
         assert(has(err, "alerts.channels[1]: not a mapping"));
     }
 
+    // 9b. A channel of an unknown type, or without what its type needs to
+    //     send, is left out at load and named with what it lacks: it used
+    //     to be found at the first alert, hours later, and the start-up
+    //     line counted it. The type is read in any case (`Telegram`).
+    {
+        Config c;
+        const char* y =
+            "alerts:\n"
+            "  channels:\n"
+            "    - name: tg\n"
+            "      type: Telegram\n"
+            "      token: \"12345:AAA\"\n"
+            "      topic: \"-100\"\n"
+            "    - name: slack\n"
+            "      type: slack\n"
+            "      url: https://hooks.slack.com/x\n"
+            "    - name: tg-no-chat\n"
+            "      type: telegram\n"
+            "      token: \"12345:AAA\"\n"
+            "    - name: mail\n"
+            "      type: smtp\n"
+            "      url: smtps://smtp.example.com:465\n"
+            "    - name: sms\n"
+            "      type: twilio\n"
+            "      url: https://api.twilio.com/x\n"
+            "    - name: n\n"
+            "      type: ntfy\n"
+            "      topic: t\n"
+            "    - name: d\n"
+            "      type: discord\n";
+        const std::string err = stderr_of(y, &c);
+        assert(c.alert_channels.size() == 1);
+        assert(c.alert_channels[0].name == "tg");
+        assert(c.alert_channels[0].type == "telegram");
+        assert(has(err, "alerts.channels[1] (slack): unknown type (ntfy, discord, telegram, smtp, twilio); left out"));
+        assert(has(err, "alerts.channels[2] (tg-no-chat): no topic (the chat id); left out"));
+        assert(has(err, "alerts.channels[3] (mail): no from (the sender); left out"));
+        assert(has(err, "alerts.channels[4] (sms): no token (\"AccountSID:AuthToken\"); left out"));
+        assert(has(err, "alerts.channels[5] (n): no url (the ntfy server); left out"));
+        assert(has(err, "alerts.channels[6] (d): no url (the webhook); left out"));
+        // A telegram channel with a url of its own needs no token.
+        Config c2;
+        assert(config_load_string("alerts:\n  channels:\n    - {name: t, type: telegram, "
+                                  "url: \"https://tg.example/send\", topic: \"1\"}\n", &c2) == 0);
+        assert(c2.alert_channels.size() == 1);
+        assert(alert_channel_missing(c2.alert_channels[0]) == nullptr);
+    }
+
+    // 9c. A duration is digits with at most one point before its unit:
+    //     strtod() also took "0x10" (16 s), "1e1" (10 s) and " 5", none
+    //     of them a duration anyone writes on purpose. The old flat key
+    //     rules.enable_exec is still read, and named as the old name.
+    {
+        Config c;
+        std::string err = stderr_of(
+            "collection:\n  l2: { hysteresis: 0x10, escalate_after: 1e1 }\n  l3: { grace_period: 1.5m }\n", &c);
+        assert(has(err, "collection.l2.hysteresis"));
+        assert(has(err, "collection.l2.escalate_after"));
+        assert(c.scheduler.hysteresis_sec == 300);
+        assert(c.scheduler.grace_period_sec == 90);
+        err = stderr_of("rules: { enable_exec: true }\n", &c);
+        assert(has(err, "rules.enable_exec is the old name of rules.exec.enabled"));
+        assert(c.rules_enable_exec == true);
+    }
+
     // 10. File load path: write a small YAML and parse it.
     {
         char tmpl[] = "/tmp/budyk_cfg_XXXXXX";
@@ -744,7 +809,6 @@ int main(int argc, char** argv) {
             "storage: { tier1_max_mb: 250, tier2_max_mb: 150, tier3_max_mb: 50 }\n"
             "rules:\n"
             "  path: /usr/local/etc/budyk/rules.lua\n"
-            "  enable_exec: false\n"
             "  persist_state: true\n"
             "  state_path: /var/db/budyk/rule_state.tsv\n"
             "  exec: { enabled: false, allow: [/usr/bin/systemctl] }\n"

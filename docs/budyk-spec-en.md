@@ -269,14 +269,14 @@ Consequences:
 3. Tier 1 → Tier 2 aggregation works with irregular samples: "all records within a 1-minute window, however many there are."
 4. The `/api/history` API returns data with resolution zone markers.
 
-#### 3.4.4. Configuration
+#### 3.4.4. Configuration (as implemented)
 
 ```yaml
 collection:
   mode: adaptive          # always | adaptive | on-demand
   l1:
     interval: 300s        # heartbeat
-    metrics: minimal      # load, cpu_total, mem_total, swap, uptime
+    metrics: standard     # every group; minimal = cpu, mem, swap, load, uptime
   l2:
     interval: 30s
     always_on: false       # true = L2 always runs
@@ -285,6 +285,8 @@ collection:
       cpu_percent: 85
       swap_used_percent: 50
     hysteresis: 300s       # 5 min before de-escalation
+    escalate_after: 300s   # an anomaly held this long switches L3 on; 0 = never
+    metrics: full
   l3:
     interval: 1s
     metrics: full
@@ -292,9 +294,15 @@ collection:
   hot_buffer:
     capacity: 300          # records (= 5 min at 1 Hz)
     warm_grace: 60s        # how long to keep after clients leave
+  levels:                  # custom levels beside L1/L2/L3 (at most 16)
+    - name: burst
+      interval: 0.5
+      priority: 40         # L1 = 0, L2 = 20, L3 = 30; the highest active wins
+      when: "cpu.total_percent > 95"
+      hold: 120
 ```
 
-In `always` mode — behavior identical to kula/Netdata (L3 always). In `on-demand` mode — L1 disabled, L2 disabled, collection only on client connect (hot buffer only, ring-buffer not used).
+Durations take a unit or none (300, 300s, 5m, 1h, 1d); the defaults are those shown. `metrics` is `minimal`, `standard`, `full` or a list of groups and lists (`[standard, cpu.cores]`); the default is `standard` at L1 and `full` elsewhere. In `always` mode — behavior identical to kula/Netdata (L3 always). In `on-demand` mode — L1 disabled, L2 disabled, collection only on client connect (hot buffer only, ring-buffer not used). `config.example.yaml` has every key with its explanation.
 
 #### 3.4.5. Resource Comparison
 
@@ -450,7 +458,7 @@ How it works:
 3. It constructs a prompt: "Here are 7-day metric summaries for a FreeBSD server. Suggest monitoring rules as Lua `watch()` calls. For each rule, explain why."
 4. Summary is anonymized: no hostnames, no IPs, no usernames. Only numeric distributions.
 5. LLM responds with Lua rules + explanations. Lua is a widely known format — LLMs generate it far more reliably than a custom DSL.
-6. The tool validates the response: parseable by Lua? references valid fields? thresholds within plausible range?
+6. The tool validates the response (as implemented: it must load in the rules sandbox and define at least one `watch()` rule, or nothing is written; fields and thresholds are not checked beyond that).
 7. Output to `suggested-rules.lua` with `-- AI-suggested` markers.
 
 **The user always reviews and approves.** The tool never writes directly to `config.yaml`. The workflow is always: `suggest → review → copy to config → restart/reload`.
@@ -464,7 +472,7 @@ A future version may integrate AI suggestions directly into the SPA dashboard: a
 1. **AI is never in the hot path.** Rule evaluation (§3.6) is pure arithmetic, no AI. AI only runs when the user explicitly asks for suggestions.
 2. **No always-on AI.** The daemon does not phone home, does not send telemetry, does not run background ML models. Tier A is local arithmetic. Tier B is user-initiated.
 3. **Tier B is optional at compile time.** `cmake -DENABLE_LLM=OFF` removes the LLM client entirely. Zero network code for LLM in the binary. Air-gapped systems get Tier A only.
-4. **No API keys in config.** Keys are passed via environment variable or CLI flag, never persisted to disk by the tool.
+4. **No API keys in config.** Keys are passed via environment variable or CLI flag, never kept by the tool: the key reaches curl through a private temporary file (mode 0600) removed when the request ends, Ctrl-C included.
 
 ---
 

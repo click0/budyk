@@ -59,14 +59,24 @@ int main() {
         assert(same(parse(every), metric_set_standard()));
     }
 
-    // 3. An unknown name (a typo, the wrong case, file_watch, the Lua
-    //    spelling self_) is -EINVAL naming it; *out is left alone.
+    // 3. An unknown name (a typo, the wrong case, the Lua spelling self_)
+    //    is -EINVAL naming it; *out is left alone. file_watch is refused
+    //    with its own words: not a level's to pick (the watcher runs at
+    //    every level), so "unknown metric" sent its reader looking for a
+    //    typo.
     {
-        for (const char* bad : { "dsik", "Disk", "file_watch", "self_", "", "cpu.core", "maximal" }) {
+        for (const char* bad : { "dsik", "Disk", "self_", "", "cpu.core", "maximal" }) {
             MetricSet m{kGroupCpu, kDetailDisks};
             std::string error;
             assert(parse_metric_set({"disk", bad}, &m, &error) == -EINVAL);
             assert(error == std::string("unknown metric '") + bad + "'");
+            assert(same(m, MetricSet{kGroupCpu, kDetailDisks}));
+        }
+        {
+            MetricSet m{kGroupCpu, kDetailDisks};
+            std::string error;
+            assert(parse_metric_set({"disk", "file_watch"}, &m, &error) == -EINVAL);
+            assert(error.find("'file_watch' is not a metric a level reads") == 0);
             assert(same(m, MetricSet{kGroupCpu, kDetailDisks}));
         }
         assert(parse_metric_set({"bogus"}, nullptr, nullptr) == -EINVAL);

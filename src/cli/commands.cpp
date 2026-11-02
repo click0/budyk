@@ -291,10 +291,19 @@ int cmd_suggest_rules(int argc, char* argv[]) {
             ai = true;
         } else if (std::strcmp(argv[i], "--api-key") == 0 && i + 1 < argc) {
             api_key = argv[++i];
+        } else if (std::strcmp(argv[i], "--config") == 0 || std::strcmp(argv[i], "--window") == 0 ||
+                   std::strcmp(argv[i], "--output") == 0 || std::strcmp(argv[i], "--api-key") == 0) {
+            std::fprintf(stderr, "budyk suggest-rules: %s needs a value\n", argv[i]);
+            return 1;
         } else {
             std::fprintf(stderr, "budyk suggest-rules: unknown arg '%s'\n", argv[i]);
             return 1;
         }
+    }
+    // A key given for a request that is not made was taken in silence.
+    if (api_key != nullptr && !ai) {
+        std::fprintf(stderr, "budyk suggest-rules: --api-key goes with --ai\n");
+        return 1;
     }
 
 #ifndef BUDYK_LLM_ENABLED
@@ -462,6 +471,9 @@ int cmd_watch_files(int argc, char* argv[]) {
                 return 1;
             }
             timeout_ms = static_cast<int>(ms);
+        } else if (std::strcmp(argv[i], "--timeout") == 0) {
+            std::fprintf(stderr, "budyk watch-files: --timeout needs a value (milliseconds)\n");
+            return 1;
         } else if (argv[i][0] == '-') {
             std::fprintf(stderr,
                 "budyk watch-files: unknown arg '%s'\n", argv[i]);
@@ -535,6 +547,9 @@ int cmd_tui(int argc, char* argv[]) {
                     return 1;
                 }
                 port = static_cast<int>(p);
+            } else if (std::strcmp(argv[i], "--host") == 0 || std::strcmp(argv[i], "--port") == 0) {
+                std::fprintf(stderr, "budyk tui: %s needs a value\n", argv[i]);
+                return 1;
             } else {
                 std::fprintf(stderr, "budyk tui: unknown arg '%s'\n", argv[i]);
                 return 1;

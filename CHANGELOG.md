@@ -7,8 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `budyk help`, `--help`, `-h`, `--version` and `-V` are taken (they were
+  "unknown command", exit 1); the usage ends with a pointer to budyk(8).
+- `service budyk reload` and `systemctl reload budyk` send the SIGHUP that
+  reloads the rules; the systemd unit stops budyk alone (`KillMode=mixed`),
+  which ends its own children with a grace period, where the default killed
+  an alert's curl and an `exec()` command with it. The Docker image has a
+  `HEALTHCHECK` on `/api/health`, and the compose file `init: true`.
+- The FreeBSD rc.d script puts `%%PREFIX%%/bin` on the daemon's PATH
+  (`budyk_env`): rc(8) starts services with `/sbin:/bin:/usr/sbin:/usr/bin`,
+  where the curl the alert channels run is not, so every channel failed with
+  "curl not found in PATH" when the daemon was started by `service` or at
+  boot. The port depends on curl.
+- The spec's §3.4.4 (the `collection:` config) and §3.7.1 step 6 / §3.7.3
+  item 4 (what the LLM reply check does, where the key goes) say what the
+  code does; `config.example.yaml` describes the tiers as the rings they are
+  (tier2.ring the L2 samples and the L2 folds, tier3.ring L1's), names the
+  files data_dir holds, the `escalate` action of a YAML rule, the login
+  throttle's global cap, `priority`'s range; the man page lists
+  `rule_state.tsv`, `sessions.tsv` and the rc.d pid file, and `proc.top`
+  under `full`; the port's pkg-descr points at the sample the port installs.
+
 ### Fixed
 
+- **An alert channel that could not send was registered without a word.**
+  The config loader took any channel with a `type`; what the type needs
+  (ntfy `url` and `topic`, discord `url`, telegram `token` and `topic`,
+  smtp `url`, `from` and `topic`, twilio all four) was checked at the first
+  alert, so `type: Telegram`, `type: slack`, or an smtp channel with only a
+  `url` was "registered 3 alert channel(s)" at start and nothing until the
+  first alert went nowhere. Such a channel is left out when the config
+  loads, named with what it lacks, and the type is read in any case.
+- **`web.auth.enabled: true` with no `password_hash`, or one that is not
+  Argon2id, started a dashboard nobody could log in to**, without a word.
+  The daemon refuses to start and says what to run.
+- **A `data_dir` whose parent is missing was "cannot lock budyk.lock: No
+  such file or directory"**, which the shipped example (`/var/db/budyk`)
+  does on a Linux host; the error names the missing parent now. A
+  `listen` that cannot be bound (not an IPv4 address, a port in use) is
+  still not the end, but the started line said `listen=...:0`: it says
+  "no HTTP" and the failure line says what is lost.
+- A SIGHUP in the daemon's first milliseconds (a deploy script's `service
+  budyk start && kill -HUP`) ended it with nothing logged: the handlers
+  are installed before the config is read.
+- A flag without its value (`budyk serve --config`) was "unknown arg
+  '--config'"; `suggest-rules --api-key` without `--ai` was taken in
+  silence; `exec()` disabled said only `--enable-exec`, not
+  `rules.exec.enabled`; a duration written as `0x10` or `1e1` read as 16
+  and 10 seconds; the old flat key `rules.enable_exec` loaded in silence
+  (it is still read, and named as the old name); `file_watch` in a level's
+  `metrics` was "unknown metric" (the watcher runs at every level).
 - **An alert channel's refusal counted as delivered, and was not logged.**
   curl exits 0 on an HTTP 4xx or 5xx, and the dispatcher took that as
   success: a Telegram `chat_id` that is wrong, a Discord webhook that

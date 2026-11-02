@@ -32,25 +32,35 @@ int main(int argc, char* argv[]) {
     // budyk at once, with nothing in the log (a ring's ftruncate on start).
     std::signal(SIGXFSZ, SIG_IGN);
 
+    static const char kUsage[] =
+        "budyk — lightweight server monitoring with adaptive collection\n"
+        "\n"
+        "Usage:\n"
+        "  budyk serve           Start monitoring daemon + web server\n"
+        "  budyk tui             Start terminal UI\n"
+        "  budyk hash-password   Generate Argon2id password hash\n"
+        "  budyk suggest-rules   Generate rule suggestions from history\n"
+        "  budyk watch-files     Print file change events (diagnostic)\n"
+        "  budyk fsck            Check (--repair: fix) the ring files\n"
+        "  budyk version         Show version\n"
+        "  budyk help            Show this\n"
+        "\n"
+        "See budyk(8) for each command's options.\n";
     if (argc < 2) {
-        std::fprintf(stderr,
-            "budyk — lightweight server monitoring with adaptive collection\n"
-            "\n"
-            "Usage:\n"
-            "  budyk serve           Start monitoring daemon + web server\n"
-            "  budyk tui             Start terminal UI\n"
-            "  budyk hash-password   Generate Argon2id password hash\n"
-            "  budyk suggest-rules   Generate rule suggestions from history\n"
-            "  budyk watch-files     Print file change events (diagnostic)\n"
-            "  budyk fsck            Check (--repair: fix) the ring files\n"
-            "  budyk version         Show version\n"
-        );
+        std::fputs(kUsage, stderr);
         return 1;
     }
 
     const char* cmd = argv[1];
 
-    if (std::strcmp(cmd, "version") == 0) {
+    // The usual spellings too: they were "unknown command", exit 1.
+    if (std::strcmp(cmd, "help") == 0 || std::strcmp(cmd, "--help") == 0 ||
+        std::strcmp(cmd, "-h") == 0) {
+        std::fputs(kUsage, stdout);
+        return 0;
+    }
+    if (std::strcmp(cmd, "version") == 0 || std::strcmp(cmd, "--version") == 0 ||
+        std::strcmp(cmd, "-V") == 0) {
         std::printf("budyk " BUDYK_VERSION "\n");
         return 0;
     }

@@ -19,6 +19,12 @@
 # budyk_args (string):   More options for `budyk serve`, such as
 #                        "--enable-exec". budyk_flags, which rc.subr
 #                        would hand to daemon(8), is taken as these too.
+# budyk_env (string):    The daemon's environment. The default puts
+#                        %%PREFIX%%/bin on PATH: rc(8) starts services
+#                        with /sbin:/bin:/usr/sbin:/usr/bin, where the
+#                        curl the alert channels run is not.
+#
+# `service budyk reload` sends SIGHUP: the rules file is read again.
 #
 # budyk logs to syslog, tag "budyk" (/var/log/messages). The data_dir is
 # the config's: /var/db/budyk, which the package makes; one elsewhere
@@ -36,6 +42,9 @@ load_rc_config $name
 : ${budyk_group:="budyk"}
 : ${budyk_config:="%%PREFIX%%/etc/budyk/config.yaml"}
 : ${budyk_args:=""}
+: ${budyk_env:="PATH=/sbin:/bin:/usr/sbin:/usr/bin:%%PREFIX%%/sbin:%%PREFIX%%/bin"}
+
+extra_commands="reload"
 
 # rc.subr runs the command as budyk_user (su -m): daemon(8) runs as budyk,
 # so it takes no -u, and its pidfile goes in a directory budyk owns.
