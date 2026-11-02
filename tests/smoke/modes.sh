@@ -174,15 +174,24 @@ grep -q "collection.mode always: collecting at L3 all the time" "$DIR/always.log
 stop always
 
 # 3. on-demand --------------------------------------------------------------
+# The rules above, and one that escalates on a watched file's second
+# change (the first is for the checks before, with nothing collected).
+{ cat "$DIR/rules.lua"; cat <<'EOF'
+watch("tamper_escalate", { when = function()
+    for _, f in pairs(files) do if f.tampered and f.modifies >= 2 then return true end end
+    return false
+end, action = function() escalate("L3", 3) end })
+EOF
+} > "$DIR/rules_od.lua"
 cat > "$DIR/ondemand.yaml" <<EOF
 data_dir: $DIR/ondemand
 listen: 127.0.0.1
 port: $PORT
-rules: { path: $DIR/rules.lua }
+rules: { path: $DIR/rules_od.lua }
 security: { file_watch: { enabled: true, paths: [$DIR/watched_od] } }
 collection:
   mode: on-demand
-  l1: { interval: 1 }
+  l1: { interval: 3 }                        # longer than the rule's escalate() below
   l3: { interval: 1, grace_period: 1 }
 EOF
 : > "$DIR/watched_od"
@@ -197,7 +206,7 @@ fi
 # watcher was read only on a collecting tick, so it waited for a
 # dashboard (and the kernel's event queue filled meanwhile).
 echo changed >> "$DIR/watched_od"
-sleep 2.5
+sleep 4                                      # the idle tick is every 3 s
 if grep -q '^\[budyk\] tampered$' "$DIR/ondemand.log"; then
     echo "ok   on-demand: a watched file's change is reported with no client"
 else
@@ -230,6 +239,24 @@ check "on-demand: the first sample after a gap is a baseline" \
       "[s for s in doc['samples'] if s['ts'] > $last_ts][0].get('baseline', []).count('cpu') == 1" /api/samples
 grep -q "collection.mode on-demand: collecting only while a client is connected" "$DIR/ondemand.log" ||
     { echo "FAIL: the mode is not logged"; fail=1; }
+# An escalate() from a file-watch rule, with no client: the idle tick
+# chose its L1 sleep before the rules ran and never looked again, so the
+# request (3 s here, 60 s for `{ alert, escalate }`, both under the L1
+# interval) had expired when it woke, and nothing was collected. The
+# "io" rule reads a disk rate: it fires on a collected L3 sample with
+# the rates in, not on the idle tick's file-watch sample (the "tick"
+# rule fires on that one too).
+io_lines() { grep -c '^\[budyk\] io$' "$DIR/ondemand.log" || true; }
+sleep 8                                      # past the poller window and the grace: idle again
+before=$(io_lines)
+echo changed >> "$DIR/watched_od"
+sleep 7                                      # an idle tick sees it within 3 s, then 3 s of L3
+after=$(io_lines)
+if [ "$after" -gt "$before" ]; then
+    echo "ok   on-demand: escalate() from a file-watch rule collects with no client ($((after - before)) L3 sample(s) with rates)"
+else
+    echo "FAIL: on-demand: escalate() from a file-watch rule collected nothing ($before io line(s) before and after)"; fail=1
+fi
 stop ondemand
 
 # 4. SIGHUP between ticks ---------------------------------------------------

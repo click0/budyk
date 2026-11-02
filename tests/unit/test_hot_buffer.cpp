@@ -166,6 +166,24 @@ int main() {
         assert(!w.should_reset(0, 300 * S));              // 50 s since 250
         assert(w.should_reset(0, 310 * S));
 
+        // A fast tick without a client (an escalation, escalate(), a
+        // custom level) fills the buffer as a session does: the reset
+        // follows its last tick too (an escalation's 1 Hz burst from
+        // 03:00 was the 09:00 dashboard's catch-up). The sleep is capped
+        // at the time left, no lower than the floor given.
+        WarmGrace f(60 * S);
+        assert(!f.should_reset(0, 1000 * S, true));
+        assert(!f.should_reset(0, 1001 * S, true));
+        assert(f.ns_until_due(1001 * S) == 60 * S);       // armed, and counted from the last fast tick
+        assert(!f.should_reset(0, 1030 * S));             // L1 again
+        assert(f.ns_until_due(1030 * S) == 31 * S);
+        assert(f.cap_sleep_ms(300000, 1030 * S, 250) == 31001);
+        assert(f.cap_sleep_ms(300000, 1060999 * S / 1000, 250) == 250);   // due in 1 ms: the floor
+        assert(f.cap_sleep_ms(100, 1030 * S, 250) == 100);   // a shorter interval stays
+        assert(!f.should_reset(0, 1060 * S));
+        assert(f.should_reset(0, 1061 * S));
+        assert(f.cap_sleep_ms(300000, 1062 * S, 250) == 300000);   // nothing pending
+
         // A clock that steps back re-anchors instead of expiring.
         assert(!w.should_reset(1, 400 * S));
         assert(!w.should_reset(0, 100 * S));

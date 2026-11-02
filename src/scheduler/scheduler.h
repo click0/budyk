@@ -111,6 +111,13 @@ public:
     /// Same, by level name ("L1".."L3" or a custom name). False if unknown.
     bool request_by_name(const std::string& name, uint64_t until_ns, uint64_t made_at_ns = 0);
 
+    /// The wall clock stepped forward by `by_ns` since the last tick (the
+    /// serve loop sees it against the monotonic clock): every timer and
+    /// deadline moves forward as far, so the jump is not time the anomaly
+    /// held, the grace ran or a request lasted. A step back is seen by
+    /// tick() itself.
+    void clock_stepped_forward(uint64_t by_ns);
+
     /// Level table lookups. Unknown ids fall back to L1's values / "?".
     int         interval_ms(Level lv) const;
     int         priority(Level lv)    const;

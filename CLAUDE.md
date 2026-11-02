@@ -102,7 +102,13 @@ There is no event-loop library (no libuv, kqueue or epoll). The daemon is:
   applied inside the sleep, which goes on. The new rules file is loaded
   into a scratch engine first, and one that does not load leaves the
   rules as they were. In on-demand mode a tick whose level is L1 or L2
-  only sleeps, and nothing is stored.
+  only sleeps, and nothing is stored; such an idle tick still reads the
+  watched files and runs the rules on them, and re-selects the level
+  after they ran (an `escalate()` there collects at once). The
+  scheduler's timers are on the samples' wall clock: a step back is
+  seen by `Scheduler::tick()`, a step forward (the wall interval over a
+  second longer than the monotonic one) by the loop, which calls
+  `clock_stepped_forward()`.
 - **HTTP thread:** one blocking accept-handle-close loop. Every connection
   is bounded by `HttpServer::set_io_timeout_ms` (5 s) so a stalled client
   cannot hold it for longer: the request by that (one that has sent
@@ -325,7 +331,10 @@ The gates a local build does not show:
    in a probe engine (`LuaEngine::set_probe()`), which knows the level
    names and whose `alert()` and `freeze()` do nothing.
 2. The hot buffer (spec §3.4.2) is emptied once no client has been
-   connected for `hot_buffer.warm_grace` (`WarmGrace`).
+   connected, and no fast level (L3, a custom level: an escalation's
+   burst) has run, for `hot_buffer.warm_grace` (`WarmGrace`); the sleep
+   is capped at the time left to that, no lower than `kMinWakeGapMs`
+   (`WarmGrace::cap_sleep_ms()`).
 3. Storage records (spec §3.4.3, §3.5) also carry a flags byte (bit 0:
    folded); `write_idx` is advanced only after the `pwrite`. A codec
    version only appends fields; a ring of smaller (older) records is

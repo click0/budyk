@@ -758,6 +758,7 @@ int cmd_serve(int argc, char* argv[], const char* version) {
         }
     };
 
+    uint64_t prev_wall_ns = 0, prev_mono_ns = 0;   // the last collecting tick's clocks
     while (!g_stop) {
         // SIGHUP latched in the handler — process it at a clean tick
         // boundary so an in-flight eval_tick / store can't race with
@@ -789,7 +790,11 @@ int cmd_serve(int argc, char* argv[], const char* version) {
                 ++clients;
             }
             sched.set_client_count(clients);
-            if (warm.should_reset(clients, s.timestamp_nanos)) {
+            // A fast level without a client (an escalation, escalate(), a
+            // custom level) fills the buffer as a session does: its burst
+            // is emptied after the grace too.
+            const bool fast = slept_at != budyk::Level::L1 && slept_at != budyk::Level::L2;
+            if (warm.should_reset(clients, s.timestamp_nanos, fast)) {
                 std::lock_guard<std::mutex> g(hot_mtx);
                 hot.reset();
             }
@@ -810,11 +815,8 @@ int cmd_serve(int argc, char* argv[], const char* version) {
             // minutes before a client came back).
             collect_ctx.last_groups = 0;
             collect_ctx.last_detail = 0;
-            int idle_ms = sched.interval_ms(collect_at);
-            const uint64_t idle_due = warm.ns_until_due(now_realtime_ns());
-            if (idle_due != UINT64_MAX && idle_due / 1000000 + 1 < static_cast<uint64_t>(idle_ms)) {
-                idle_ms = static_cast<int>(idle_due / 1000000 + 1);
-            }
+            int idle_ms = warm.cap_sleep_ms(sched.interval_ms(collect_at), now_realtime_ns(),
+                                            kMinWakeGapMs);
             // The watched files are read on this tick too, and when one
             // changed the rules run on a sample of the file_watch group
             // alone (the rules reading metrics are skipped, as on any
@@ -826,12 +828,41 @@ int cmd_serve(int argc, char* argv[], const char* version) {
                 if (fs.file_watch.events_this_tick > 0) {
                     engine.eval_tick(fs, nullptr);
                     publish_rule_results();
+                    // A rule's escalate() filed a request the sleep chosen
+                    // above knew nothing of: the loop slept the L1 interval
+                    // and found the request expired (the only rules that
+                    // run here are the file-watch ones, so a `{ alert,
+                    // escalate }` on a tampered file collected nothing).
+                    const budyk::Level raised =
+                        sched.higher(collect_at, sched.select(now_realtime_ns()));
+                    if (sched.collects(raised)) {
+                        slept_at = raised;
+                        interruptible_sleep(kMinWakeGapMs, reload_rules);
+                        continue;
+                    }
+                    if (sched.interval_ms(raised) < idle_ms) idle_ms = sched.interval_ms(raised);
                 }
             }
             interruptible_sleep(idle_ms, reload_rules);
             continue;
         }
         collect_ctx.mono_now_ns = now_monotonic_ns();
+        // The scheduler's timers are on the wall clock (the samples'): a
+        // step forward since the last collecting tick (the wall interval
+        // over a second longer than the monotonic one: NTP at boot on a
+        // host with no RTC, a VM resumed) moves them forward as far, or
+        // the jump counted as time an anomaly held (a two-tick anomaly
+        // escalated to L3 at once, "held for 300 s").
+        if (prev_mono_ns != 0 && collect_ctx.mono_now_ns > prev_mono_ns &&
+            s.timestamp_nanos > prev_wall_ns) {
+            const uint64_t mono_dt = collect_ctx.mono_now_ns - prev_mono_ns;
+            const uint64_t wall_dt = s.timestamp_nanos - prev_wall_ns;
+            if (wall_dt > mono_dt && wall_dt - mono_dt > 1000000000ULL) {
+                sched.clock_stepped_forward(wall_dt - mono_dt);
+            }
+        }
+        prev_mono_ns = collect_ctx.mono_now_ns;
+        prev_wall_ns = s.timestamp_nanos;
         collect_one(&s, &collect_ctx, sched.metrics(collect_at));
 
         // File-watch drain — non-blocking poll so the tick cadence is
@@ -899,13 +930,11 @@ int cmd_serve(int argc, char* argv[], const char* version) {
         const budyk::Level next = sched.higher(s.level, sched.select(now_realtime_ns()));
         slept_at = next;
         // Wake for the warm-grace reset too, or an L1 sleep of minutes
-        // would leave stale samples for the next client's catch-up.
-        int sleep_ms = sched.interval_ms(next);
-        const uint64_t due_ns = warm.ns_until_due(now_realtime_ns());
-        if (due_ns != UINT64_MAX) {
-            const uint64_t due_ms = due_ns / 1000000 + 1;
-            if (due_ms < static_cast<uint64_t>(sleep_ms)) sleep_ms = static_cast<int>(due_ms);
-        }
+        // would leave stale samples for the next client's catch-up; no
+        // sooner than kMinWakeGapMs after this tick (a reset due moments
+        // after it made the next tick's rates a few ms wide).
+        const int sleep_ms = warm.cap_sleep_ms(sched.interval_ms(next), now_realtime_ns(),
+                                               kMinWakeGapMs);
         interruptible_sleep(sleep_ms, reload_rules);
     }
 

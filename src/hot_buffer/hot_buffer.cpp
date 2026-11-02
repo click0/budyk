@@ -39,9 +39,12 @@ size_t HotBuffer::dump_last(Sample* out, size_t n) const {
 
 void HotBuffer::reset() { head_ = 0; count_ = 0; }
 
-bool WarmGrace::should_reset(int clients, uint64_t now_ns) {
+bool WarmGrace::should_reset(int clients, uint64_t now_ns, bool fast) {
     connected_ = clients > 0;
-    if (connected_) {
+    // A fast tick without a client (an escalation at 1 Hz for ten
+    // minutes at 03:00) fills the buffer as a session does, and nothing
+    // emptied it: the dashboard opened at 09:00 got its 290 samples.
+    if (connected_ || fast) {
         last_client_ns_ = now_ns;
         pending_        = true;
         return false;
@@ -65,6 +68,14 @@ uint64_t WarmGrace::ns_until_due(uint64_t now_ns) const {
     if (now_ns < last_client_ns_) return grace_ns_;
     const uint64_t idle = now_ns - last_client_ns_;
     return idle >= grace_ns_ ? 0 : grace_ns_ - idle;
+}
+
+int WarmGrace::cap_sleep_ms(int sleep_ms, uint64_t now_ns, int floor_ms) const {
+    const uint64_t due_ns = ns_until_due(now_ns);
+    if (due_ns == UINT64_MAX) return sleep_ms;
+    uint64_t due_ms = due_ns / 1000000 + 1;
+    if (floor_ms > 0 && due_ms < static_cast<uint64_t>(floor_ms)) due_ms = static_cast<uint64_t>(floor_ms);
+    return sleep_ms > 0 && due_ms < static_cast<uint64_t>(sleep_ms) ? static_cast<int>(due_ms) : sleep_ms;
 }
 size_t HotBuffer::size() const { return count_; }
 
