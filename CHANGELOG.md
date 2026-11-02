@@ -32,6 +32,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A query whose window started after a stretch out of order read
+  nothing.** After a clock step back the records of the new run are
+  stamped before the ones under them, and a power loss can leave a
+  previous lap's records under the write index (the header's page reached
+  the disk, theirs did not); a `tier=` or `level=` query found the first
+  older record at the top and stopped: a window after the step was empty,
+  one across it the new run alone. The walk looks past such a stretch (up
+  to 1024 records) before it stops. (`level=all` still searches by
+  halves; a window inside such a stretch there can still miss records.)
+- **`/api/range` with `until` in the past walked the whole ring** down to
+  it, on the HTTP thread: a second on a full 250 MB tier1 from the page
+  cache, far longer cold, for every such request, the TUI and the logins
+  waiting. The walk starts at the newest record within `until`, found by
+  a binary search; `since` past `until` is nothing, at once.
+- **An upgrade right after a crash lost the record written but not
+  indexed.** The start-up recovery counts in a record that reached its
+  slot but not the index; the conversion of an older ring ran before it
+  and copied the indexed records only, so with a newer budyk after a
+  SIGKILL that record was gone (spec §3.5 promises no stored record is
+  lost on a crash). The conversion copies it too; `count_unindexed()`
+  reads a ring with its own record size.
 - **Linux: a tick across a clock step read its rates as readings.** The
   collectors divide a counter's change by the wall-clock interval since
   their previous read; an NTP step at boot (a Pi with no RTC), a VM

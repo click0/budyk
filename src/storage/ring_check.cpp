@@ -43,7 +43,10 @@ uint64_t count_unindexed(const RingFile& ring, uint64_t now_ns) {
     const uint64_t widx = ring.write_index();
     if (cap == 0) return 0;
     if (now_ns == 0) now_ns = now_realtime_ns();
-    std::vector<uint8_t> buf(record_size_for_sample());
+    // The ring's own record size: an older ring's records are smaller,
+    // and read with this version's size nothing decoded, so a record
+    // left unindexed by a crash was not seen before the conversion.
+    std::vector<uint8_t> buf(ring.record_size() != 0 ? ring.record_size() : record_size_for_sample());
     auto read = [&](uint64_t logical, Sample* s) {
         return ring.read_at(logical % cap, buf.data(), buf.size()) == 0 &&
                record_decode(buf.data(), buf.size(), s) == 0 &&
@@ -90,12 +93,25 @@ int convert_ring(const char* path, uint8_t tier, uint32_t record_size,
     }
 
     const uint64_t widx   = old.write_index();
-    const uint64_t count  = widx < h.capacity ? widx : h.capacity;
-    const uint64_t skip   = count > capacity ? count - capacity : 0;
+    // A record written but not indexed before a crash (a SIGKILL between
+    // the record's pwrite and the index update) is counted in at start
+    // (count_unindexed); the conversion runs before that, and copied the
+    // indexed records only, so the record was lost when the next start
+    // was a newer budyk. It is copied too, at the end; in a full ring it
+    // took the oldest record's slot, which is gone.
+    const uint64_t unidx  = count_unindexed(old);
+    uint64_t       count  = widx < h.capacity ? widx : h.capacity;
+    uint64_t       first  = widx - count;
+    if (count + unidx > h.capacity) {
+        first += count + unidx - h.capacity;
+        count  = h.capacity - unidx;
+    }
+    const uint64_t total  = count + unidx;
+    const uint64_t skip   = total > capacity ? total - capacity : 0;
     std::vector<uint8_t> in(h.record_size);
     uint8_t enc[1024];
     int rc = 0;
-    for (uint64_t logical = widx - count + skip; logical < widx; ++logical) {
+    for (uint64_t logical = first + skip; logical < widx + unidx; ++logical) {
         Sample s{};
         size_t len = 0;
         if (old.read_at(logical % h.capacity, in.data(), in.size()) != 0 ||

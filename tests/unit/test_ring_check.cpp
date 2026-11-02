@@ -371,6 +371,38 @@ int main() {
         rmrf(d);
     }
 
+    // 8c. A record written but not indexed before a crash (the write index
+    //     one short of the records in their slots) is converted too: the
+    //     conversion ran before the start-up recovery and copied the
+    //     indexed records only, so an upgrade after a crash lost it. In a
+    //     full ring it took the oldest record's slot.
+    {
+        const std::string d = tmp_dir(), p = d + "/tier1.ring";
+        make_v7_ring(p, 1, 32, Level::L3, 1000, 20);
+        const uint64_t nineteen = 19;
+        poke(p, 28, &nineteen, sizeof(nineteen));             // write_idx 20 -> 19
+        RingCheck c = check(p, false);
+        assert(c.older_format);                               // (fsck stops there)
+        uint64_t kept = 0, dropped = 0;
+        assert(convert_ring(p.c_str(), 1, static_cast<uint32_t>(kRec), 32, &kept, &dropped) == 0);
+        assert(kept == 20 && dropped == 0);
+        c = check(p, false);
+        assert(!c.older_format && !c.errors() && c.valid == 20 && c.unindexed == 0);
+        assert(c.first_ts == 1000 && c.last_ts == 1019);
+        // A full ring: 8 slots, 9 records written, the index at 8: the
+        // unindexed ninth (ts 1008) took the oldest one's slot (ts 1000),
+        // which is gone; the eight that are there are converted.
+        const std::string f = d + "/tier2.ring";
+        make_v7_ring(f, 2, 8, Level::L2, 1000, 9);
+        const uint64_t eight = 8;
+        poke(f, 28, &eight, sizeof(eight));
+        assert(convert_ring(f.c_str(), 2, static_cast<uint32_t>(kRec), 8, &kept, &dropped) == 0);
+        assert(kept == 8 && dropped == 0);
+        c = check(f, false);
+        assert(c.valid == 8 && c.first_ts == 1001 && c.last_ts == 1008);
+        rmrf(d);
+    }
+
     // 8b. A v8 ring (budyk 0.7, 502-byte records) converts the same way:
     //     every v8 field intact, the groups as stored, ICMP (new in v9)
     //     zero; fsck calls it an older format first.

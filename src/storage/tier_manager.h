@@ -125,6 +125,9 @@ public:
     uint64_t tier1_count() const;
     uint64_t tier2_count() const;
     uint64_t tier3_count() const;
+    /// Records read from tier1.ring since init() (RingFile::reads()): the
+    /// tests see how much of the ring a query walked.
+    uint64_t tier1_reads() const;
 
 private:
     std::string last_error_;
