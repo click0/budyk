@@ -214,7 +214,9 @@ tests/smoke/crash.sh build/src/budyk     # SIGKILL + restart, at most one record
 tests/smoke/warm_grace.sh build/src/budyk  # hot buffer emptied after warm_grace
 tests/smoke/escalate.sh build/src/budyk  # a sustained anomaly escalates L2 to L3
 tests/smoke/fsck.sh build/src/budyk      # fsck, recovery after a crash, the data_dir lock
-tests/smoke/upgrade.sh build/src/budyk OLD/budyk  # rings of an older release converted
+tests/smoke/upgrade.sh build/src/budyk OLD/budyk  # rings of an older release converted;
+                                         # of the same record format (OLD = build/src/budyk)
+                                         # used as they are
 tests/smoke/modes.sh build/src/budyk     # metric sets per level, always / on-demand
 tests/smoke/auth.sh build/src/budyk      # login, the WebSocket ends with its session,
                                          # a cross-origin WebSocket refused
@@ -343,7 +345,9 @@ The gates a local build does not show:
    folded); `write_idx` is advanced only after the `pwrite`. A codec
    version only appends fields; a ring of smaller (older) records is
    converted on start (`convert_ring()`, tests/smoke/upgrade.sh against
-   v0.6.4 and v0.7.0; codec v9, 542-byte records, since ICMP). On start
+   v0.6.4 and v0.7.0, and against the build itself: rings of the same
+   record format are used as they are; codec v9, 542-byte records,
+   since ICMP). On start
    `TierManager::init()` also counts in a record that reached its slot but
    not the index (`count_unindexed()`), so a daemon crash loses no stored
    record (`tests/smoke/crash.sh`, `fsck.sh`). `budyk serve` holds an
