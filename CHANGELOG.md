@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `tests/smoke/upgrade.sh` run against an older budyk of the same record
+  format (0.8.5 under 0.8.6) failed for want of a conversion that had
+  nothing to convert. Such rings must be used as they are, and the test
+  checks that now (a conversion logged there is the failure); CI runs
+  it against the build itself, next to v0.6.4 and v0.7.0.
+
 ## [0.8.6] — 2026-11-02
 
 Eight security fixes. In the rules, `collectgarbage()` and `print()` are
