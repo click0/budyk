@@ -201,15 +201,26 @@ elif phase == "active":
     if cpu > 1:         bad("active CPU %.2f %% > 1 %%" % cpu)
 
 elif phase == "catchup":
-    deadline = time.time() + 60
-    while get("/api/samples")["count"] < 300 and time.time() < deadline:
+    # The buffer's count every half second while it fills: printed when
+    # the frame comes up short, to tell a buffer that filled slowly from
+    # one that stopped filling, or was emptied, on the way.
+    started = time.time()
+    deadline = started + 60
+    filling = []
+    while True:
+        count = get("/api/samples")["count"]
+        filling.append("%.1f:%d" % (time.time() - started, count))
+        if count >= 300 or time.time() >= deadline:
+            break
         time.sleep(0.5)
     t0 = time.time()
     m = Frames(connect()).next(t0 + 5)
     dt = time.time() - t0
     n = len(m["samples"]) if m else 0
     print("ok   catch-up: %d record(s) %.1f ms after the connect" % (n, dt * 1000))
-    if n != 300: bad("the catch-up frame holds %d records, not 300" % n)
+    if n != 300:
+        bad("the catch-up frame holds %d records, not 300" % n)
+        print("     the buffer's count while it filled (s:count): " + " ".join(filling))
     if dt > 0.1: bad("the catch-up took %.1f ms > 100 ms" % (dt * 1000))
 
 sys.exit(1 if fail else 0)
@@ -248,6 +259,10 @@ python3 "$DIR/measure.py" "$PORT" "$PID" catchup || fail=1
 stop
 
 if grep -q "ERROR: AddressSanitizer\|runtime error:" "$DIR/log"; then
-    echo "FAIL: sanitizer report"; cat "$DIR/log"; fail=1
+    echo "FAIL: sanitizer report"; fail=1
 fi
-[ "$fail" -eq 0 ] && echo "resources smoke test: PASS" || { echo "resources smoke test: FAIL"; exit 1; }
+if [ "$fail" -ne 0 ]; then
+    echo "--- daemon log (the last daemon started) ---"; cat "$DIR/log"
+    echo "resources smoke test: FAIL"; exit 1
+fi
+echo "resources smoke test: PASS"
