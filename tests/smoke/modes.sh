@@ -339,16 +339,18 @@ collection:
     - { name: fast, interval: 0.1, priority: 40, when: "true", storage_mb: 1 }
 EOF
 start slow
+# The line comes once the first such tick is over: 7 s on the emulated
+# arm64 CI, 0.2 s here.
 i=0
 until grep -q "a tick took [0-9]* ms .*longer than the level's interval (fast: 100 ms)" "$DIR/slow.log"; do
     i=$((i + 1))
-    [ "$i" -lt 50 ] || break
+    [ "$i" -lt 200 ] || break
     sleep 0.1
 done
 if grep -q "a tick took [0-9]* ms .*longer than the level's interval (fast: 100 ms)" "$DIR/slow.log"; then
     echo "ok   a tick longer than its level's interval is said: $(grep -o 'a tick took [0-9]* ms (collecting [0-9]* ms' "$DIR/slow.log" | head -1)"
 else
-    echo "FAIL: a tick longer than its level's interval was not said in 5 s"; fail=1
+    echo "FAIL: a tick longer than its level's interval was not said in 20 s"; fail=1
 fi
 stop slow
 
