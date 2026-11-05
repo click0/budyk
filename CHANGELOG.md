@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `budyk tui`: `q`, Escape and Ctrl-C end it while a request waits too
+  (a stalled daemon held the key unread for the 8 s bound; a reply that
+  kept trickling, for ever); a request is bounded as a whole (60 s) and
+  a reply at 16 MiB ("reply over 16 MiB": a port that streams was read
+  into memory until the OOM killer).
 - A tick longer than its level's interval is logged, when it starts and
   when it stops ("a tick took 412 ms (collecting 405 ms, ...), longer
   than the level's interval (fast: 100 ms)"): the period is the tick's
@@ -48,6 +53,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reached `/app/`'s backend and its logs. A proxy that sends
   `X-Forwarded-Prefix` (`/budyk`) gets a cookie for that path alone;
   a value that is not a plain path, or none, is `/` as before.
+- **`budyk tui` gave up on the password after one login that did not
+  get through.** When the session had to be renewed, any login result
+  but 200 ended the attempts for good, with "the password is no longer
+  accepted": a connection closed with no reply (the daemon restarting,
+  its HTTP thread held by idle clients ahead), a proxy's 502, a
+  timeout. Only a 401 is for good; a 429 waits out its `Retry-After`
+  (60 s without one); anything else is tried again in 5 s, and the
+  screen says which ("session ended; login failed (recv: Connection
+  reset) — logging in again in 5s").
+- **`budyk tui` sent the daemon a request per key press.** The rest of
+  the second was slept out only when no key came, so a held key or a
+  paste (200 keys over 2 s) made 200 requests of the daemon's one HTTP
+  thread. A key that is not a quit, and a resize, waits for the tick.
+- **`budyk tui` kept the level table from its start**: after a daemon
+  restart with other custom levels under the same ids it named a level
+  by the old table (the table was fetched again only for an unknown
+  id). It is fetched again after a connection error and after a
+  re-login.
+- `budyk tui` drew "iowait 0.0%" on the Procs line while the CPU row
+  said "measuring..." (the cpu group a baseline, its fields zeros).
+
 
 - **The dashboard's history chart said "no data" in on-demand mode**, and
   ended a level's interval ago in the other (5 minutes at L1): it drew

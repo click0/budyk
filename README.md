@@ -343,7 +343,12 @@ there (`min_send_rate: 64`), at the cost of a slow reader's longer hold.
 
 If the dashboard is password-protected, `budyk tui` asks for the password
 once at startup (without echoing it) and logs in. If the session later
-expires, for example after a daemon restart, it logs in again by itself.
+expires, for example after a daemon restart, it logs in again by itself;
+a login that does not get through (the daemon still starting, a proxy's
+502) is tried again a few seconds later, a throttled one (429) after
+its `Retry-After`, and only a refused password (401) ends the attempts.
+`q` and Ctrl-C end the TUI at once, while a request waits too; a reply
+is read for at most a minute and 16 MiB.
 
 All settings are documented in
 [`config.example.yaml`](config.example.yaml).

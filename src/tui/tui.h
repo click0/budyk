@@ -47,6 +47,10 @@ int  sample_in_list(const std::string& body, const char* key, const char* name);
 /// A sample without a "groups" list (an older daemon) has every group.
 bool sample_has_group(const std::string& body, const char* group);
 
+/// The seconds of a `Retry-After` header among `headers` (a 429's), or
+/// 0 when there is none, it is a date, or it is absurd (over a day).
+int  retry_after_seconds(const std::string& headers);
+
 /// One of the top processes in the "detail" of an /api/samples body.
 struct ProcessRow {
     long        pid = 0;
