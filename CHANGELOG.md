@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A tick longer than its level's interval is logged, when it starts and
+  when it stops ("a tick took 412 ms (collecting 405 ms, ...), longer
+  than the level's interval (fast: 100 ms)"): the period is the tick's
+  length then, and the rates are over it, and the log said nothing.
+
 ### Fixed
 
 - **`budyk fsck` next to a running budyk could call the record being

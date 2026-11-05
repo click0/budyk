@@ -775,6 +775,11 @@ int cmd_serve(int argc, char* argv[], const char* version) {
     // change was seen at the next tick, in on-demand mode up to the L1
     // interval later with no client.
     const int watch_fd = fw_active ? file_watcher.fd() : -1;
+    // A tick longer than its level's interval is said, when it starts
+    // and when it stops: the period is the tick's length then, the
+    // rates are over it, and the log said nothing (a CI host ticked a
+    // 100 ms level at 2 Hz for a minute, with nothing to tell why).
+    bool slow_ticks = false;
     while (!g_stop) {
         // SIGHUP latched in the handler — process it at a clean tick
         // boundary so an in-flight eval_tick / store can't race with
@@ -885,6 +890,7 @@ int cmd_serve(int argc, char* argv[], const char* version) {
         prev_mono_ns = collect_ctx.mono_now_ns;
         prev_wall_ns = s.timestamp_nanos;
         collect_one(&s, &collect_ctx, sched.metrics(collect_at));
+        const uint64_t collected_mono_ns = now_monotonic_ns();
 
         // File-watch drain — non-blocking poll so the tick cadence is
         // unchanged. Done before tm.store/hot.push so the persisted +
@@ -957,6 +963,25 @@ int cmd_serve(int argc, char* argv[], const char* version) {
         const int sleep_ms = warm.cap_sleep_ms(
             budyk::sleep_left_ms(sched.interval_ms(next), now_monotonic_ns() - tick_mono_ns),
             now_realtime_ns(), kMinWakeGapMs);
+        {
+            const uint64_t tick_ms    = (now_monotonic_ns() - tick_mono_ns) / 1000000ULL;
+            const uint64_t collect_ms = (collected_mono_ns - collect_ctx.mono_now_ns) / 1000000ULL;
+            const bool slow = tick_ms > static_cast<uint64_t>(sched.interval_ms(next));
+            if (slow != slow_ticks) {
+                slow_ticks = slow;
+                if (slow) {
+                    std::fprintf(stderr,
+                        "budyk serve: a tick took %llu ms (collecting %llu ms, the rest the "
+                        "store, the rules and the clients), longer than the level's interval "
+                        "(%s: %d ms): the period is the tick's length until it is not\n",
+                        static_cast<unsigned long long>(tick_ms),
+                        static_cast<unsigned long long>(collect_ms),
+                        sched.level_name(next), sched.interval_ms(next));
+                } else {
+                    std::fprintf(stderr, "budyk serve: ticks within the level's interval again\n");
+                }
+            }
+        }
         interruptible_sleep(sleep_ms, reload_rules, watch_fd);
     }
 
