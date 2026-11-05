@@ -285,6 +285,25 @@ int main() {
                !has(r.body, "\"ts\":123456789"));
         r = w.handler(get("/api/samples?last=99"));
         assert(has(r.body, "\"ts\":123456789") && has(r.body, "\"ts\":300"));
+
+        // Without `last` (or 0): the newest 300, the catch-up's size,
+        // not the whole buffer (170 MB at hot_buffer.capacity 100000);
+        // `last` past 300 is honoured up to the buffer.
+        World big(400, 86400); big.init();
+        for (uint64_t ts = 1000; ts < 1400; ++ts) {
+            s.timestamp_nanos = ts;
+            std::lock_guard<std::mutex> g(big.hot_mtx);
+            big.hot.push(s);
+        }
+        r = big.handler(get("/api/samples"));
+        assert(has(r.body, "\"count\":300,") && has(r.body, "\"ts\":1399") && has(r.body, "\"ts\":1100") &&
+               !has(r.body, "\"ts\":1099"));
+        r = big.handler(get("/api/samples?last=0"));
+        assert(has(r.body, "\"count\":300,"));
+        r = big.handler(get("/api/samples?last=350"));
+        assert(has(r.body, "\"count\":350,") && has(r.body, "\"ts\":1050"));
+        r = big.handler(get("/api/samples?last=1000"));
+        assert(has(r.body, "\"count\":400,") && has(r.body, "\"ts\":1000"));
     }
 
     // 5. /api/levels lists the built-in levels in order with their ids.

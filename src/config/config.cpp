@@ -327,7 +327,8 @@ const KeySpec kFileWatchKeys[]  = {{"enabled"}, {"paths"}, {nullptr}};
 const KeySpec kSecurityKeys[]   = {{"file_watch", kFileWatchKeys}, {nullptr}};
 const KeySpec kAuthKeys[]       = {{"enabled"}, {"password_hash"}, {"persist_sessions"},
                                    {"max_login_failures"}, {"login_window"}, {nullptr}};
-const KeySpec kWebKeys[]        = {{"allowed_hosts"}, {"auth", kAuthKeys}, {nullptr}};
+const KeySpec kWebKeys[]        = {{"allowed_hosts"}, {"min_send_rate"}, {"auth", kAuthKeys},
+                                   {nullptr}};
 const KeySpec kRootKeys[]       = {{"listen"}, {"port"}, {"data_dir"},
                                    {"collection", kCollectionKeys},
                                    {"storage", kStorageKeys}, {"rules", kRulesKeys},
@@ -562,6 +563,7 @@ void clamp_numbers(Config* c) {
     clamp_int(&c->rules_memory_mb,         1,     1024,       d.rules_memory_mb,         "rules.limits.memory_mb");
     clamp_int(&c->auth_max_login_failures, 1, 1000,  d.auth_max_login_failures, "web.auth.max_login_failures");
     clamp_int(&c->auth_login_window_sec,   1, 86400, d.auth_login_window_sec,   "web.auth.login_window");
+    clamp_int(&c->web_min_send_rate_kib,   1, 1048576, d.web_min_send_rate_kib, "web.min_send_rate");
 }
 
 // --- Section walkers --------------------------------------------------------
@@ -751,6 +753,7 @@ int parse_document(yaml_parser_t* parser, Config* out, std::string* error) {
                           "web.auth.login_window");
         }
         apply_str_list(&doc, web, "allowed_hosts", &out->web_allowed_hosts, "web.allowed_hosts");
+        apply_int     (&doc, web, "min_send_rate", &out->web_min_send_rate_kib, "web.min_send_rate");
     }
 
     yaml_document_delete(&doc);

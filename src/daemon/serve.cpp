@@ -617,6 +617,7 @@ int cmd_serve(int argc, char* argv[], const char* version) {
     deps.wake             = [] { wake_collection_loop(); };
     deps.version          = version;
     deps.io_timeout_ms    = http.io_timeout_ms();
+    http.set_min_send_rate(static_cast<size_t>(cfg.web_min_send_rate_kib) * 1024);
     deps.min_send_rate    = http.min_send_rate();
     {
         char name[256] = "";

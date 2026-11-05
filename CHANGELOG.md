@@ -14,8 +14,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   than the level's interval (fast: 100 ms)"): the period is the tick's
   length then, and the rates are over it, and the log said nothing.
 
+- `web.min_send_rate` (KiB/s, default 256, as before): the rate a client
+  must take a response at, past the I/O timeout, or it is cut off. The
+  dashboard's 7-day history (1000 points, about a megabyte) was lost on
+  a link under about 1 Mbit/s, with nothing to set.
+
 ### Fixed
 
+- **The dashboard's history chart said "no data" in on-demand mode**, and
+  ended a level's interval ago in the other (5 minutes at L1): it drew
+  the rings alone, while the page held the catch-up's 300 samples and
+  every tick's since. The samples the page holds are drawn after the
+  rings' newest point, and the chart moves with the ticks.
+- **`/api/samples` without `last` served the whole hot buffer**: 170 MB
+  at `hot_buffer.capacity: 100000`, the HTTP thread's ten seconds, for
+  the dashboard's session probe. It serves the newest 300 (the
+  catch-up's size); `?last=N` the newest N, up to the buffer.
 - **`budyk fsck` next to a running budyk could call the record being
   written a problem** (exit 4, "a crash before the index update"): a
   record reaches its slot before the index moves, and a check in that
