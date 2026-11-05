@@ -101,6 +101,11 @@ public:
     /// forever; 0 returns immediately (poll-style).
     int  poll(int timeout_ms, std::vector<FileChangeEvent>* out);
 
+    /// The kernel handle (inotify's or kqueue's descriptor), readable
+    /// when an event waits: for a sleep that wakes on a change. -1
+    /// before init() and after shutdown().
+    int  fd() const { return fd_; }
+
 private:
     struct Batch;   ///< the events of one poll(), one per (path, kind)
 

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #include "scheduler/scheduler.h"
+#include "core/clock.h"
 
 #include <cassert>
 #include <cstdint>
@@ -508,6 +509,18 @@ int main() {
                     MetricSet{kGroupsMinimal | kGroupTcp, 0}));
         assert(same(b.metrics(static_cast<Level>(kFirstCustomLevel)), metric_set_full()));
         assert(same(b.metrics(static_cast<Level>(kMaxLevelId)), metric_set_minimal()));
+    }
+
+    // 14. sleep_left_ms (core/clock.h): the sleep ends the interval
+    //     after the tick's start, not after its end, so the tick's own
+    //     length is not added to every period; never below 0.
+    {
+        assert(sleep_left_ms(1000, 0) == 1000);
+        assert(sleep_left_ms(1000, 50 * 1000000ULL) == 950);
+        assert(sleep_left_ms(100, 999999ULL) == 100);            // under a ms
+        assert(sleep_left_ms(100, 100 * 1000000ULL) == 0);
+        assert(sleep_left_ms(100, 120 * 1000000ULL) == 0);
+        assert(sleep_left_ms(0, 5) == 0 && sleep_left_ms(-1, 0) == 0);
     }
 
     std::printf("test_scheduler: PASS\n");
