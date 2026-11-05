@@ -114,6 +114,7 @@ def connect():
 class Frames:
     def __init__(self, s):
         self.s, self.buf, self.head = s, b"", False
+        self.arrived = None       # when the last frame's bytes were all in
     def frame(self):
         # One whole frame's JSON off the buffer, or None.
         if not self.head:
@@ -132,6 +133,9 @@ class Frames:
         if len(self.buf) < o + n:
             return None
         payload, self.buf = self.buf[o:o + n], self.buf[o + n:]
+        # The figure is the daemon's: the frame's bytes in, not parsed
+        # (json.loads of 300 samples is tens of ms on a slow VM).
+        self.arrived = time.time()
         return json.loads(payload)
     def next(self, deadline):
         # The next text frame's JSON, or None at the deadline.
@@ -219,8 +223,9 @@ elif phase == "catchup":
     best = None
     for _ in range(2):
         t0 = time.time()
-        m = Frames(connect()).next(t0 + 5)
-        dt = time.time() - t0
+        f = Frames(connect())
+        m = f.next(t0 + 5)
+        dt = (f.arrived if m else time.time()) - t0
         n = len(m["samples"]) if m else 0
         if best is None or (n, -dt) > (best[0], -best[1]):
             best = (n, dt)
