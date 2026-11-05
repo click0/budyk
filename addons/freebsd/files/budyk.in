@@ -56,10 +56,18 @@ command_args="-f -T ${name} -p ${pidfile} ${procname} serve --config ${budyk_con
 budyk_flags=""
 
 start_precmd="budyk_prestart"
+start_postcmd="budyk_poststart"
 
 budyk_prestart()
 {
     install -d -o "${budyk_user}" -g "${budyk_group}" -m 0755 "/var/run/${name}"
+}
+
+# daemon(8) makes the pid file 0600, budyk's: `service budyk status` as
+# anyone else read no pid from it and said "budyk is not running".
+budyk_poststart()
+{
+    chmod 0644 "${pidfile}" 2>/dev/null || true
 }
 
 run_rc_command "$1"

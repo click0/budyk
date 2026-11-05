@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **FreeBSD: `service budyk status` as anyone but root said "budyk is
+  not running"** while it ran: daemon(8) makes the pid file 0600,
+  budyk's, and rc.subr read no pid from it. The rc.d script makes the
+  file 0644 once the service is started; `addons/freebsd/test-port.sh`
+  asks as `nobody`.
+- **Ctrl-C ended `budyk tui` with exit 1.** `initscr()` gave SIGINT a
+  handler of ncurses' own, which set the terminal back and exited 1, so
+  a script running the TUI read a failure in a plain quit. Ctrl-C ends
+  it as `q` does, exit 0.
+- FreeBSD: the CPU temperatures were read up to the first CPU without a
+  `dev.cpu.N.temperature` sysctl. amdtemp(4) and coretemp(4) attach per
+  package, so on a host with two the second package's CPUs can have the
+  sysctl while the first's do not, and no temperature was read. Every
+  CPU's (`hw.ncpu`) is tried.
 - `tests/smoke/upgrade.sh` run against an older budyk of the same record
   format (0.8.5 under 0.8.6) failed for want of a conversion that had
   nothing to convert. Such rings must be used as they are, and the test
