@@ -47,6 +47,13 @@ std::string fmt_num(double v, int prec = 1) {
     return buf;
 }
 
+// No rule, and why: the template's threshold is inside what the host
+// does every day, so the rule would hold all the time (swap at 96-98 %
+// got `swap.used_percent > 90`, a CPU at 99 % most of the day `> 95`).
+std::string fmt_no_rule(const char* name, const std::string& why) {
+    return std::string("-- ") + name + ": no rule: " + why + "\n\n";
+}
+
 } // namespace
 
 std::string suggest_rule_cpu_total_percent(const MetricBaseline& b) {
@@ -62,6 +69,10 @@ std::string suggest_rule_cpu_total_percent(const MetricBaseline& b) {
     std::ostringstream rat;
     rat << "Tier A: cpu.total_percent p99=" << fmt_num(b.p99)
         << "%, max=" << fmt_num(b.max) << "% over " << b.n << " samples";
+    if (t <= b.p99) {
+        return fmt_no_rule("high_cpu", "p99 is " + fmt_num(b.p99) + "%, at or above the " +
+                           fmt_num(t, 0) + "% cap: the host runs at that load (" + rat.str() + ")");
+    }
     std::ostringstream cond;
     cond << "cpu.total_percent > " << fmt_num(t, 0);
     return fmt_rule("high_cpu", rat.str().c_str(), "warning", cond.str(), kSustainTicks);
@@ -84,6 +95,10 @@ std::string suggest_rule_mem_available_percent(const MetricBaseline& b) {
     std::ostringstream rat;
     rat << "Tier A: mem.available_percent min=" << fmt_num(b.min)
         << "%, mean=" << fmt_num(b.mean) << "% over " << b.n << " samples";
+    if (t >= b.min) {
+        return fmt_no_rule("memory_low", "the minimum is " + fmt_num(b.min) + "%, at or under the " +
+                           fmt_num(t, 0) + "% floor: the host runs that low (" + rat.str() + ")");
+    }
     std::ostringstream cond;
     cond << "mem.available_percent < " << fmt_num(t, 0);
     return fmt_rule("memory_low", rat.str().c_str(), severity, cond.str(), kSustainTicksMemory);
@@ -96,6 +111,11 @@ std::string suggest_rule_swap_used_percent(const MetricBaseline& b) {
     double t = std::ceil(b.p99 * 2.0);
     if (t < 50.0) t = 50.0;
     if (t > 90.0) t = 90.0;
+    if (t <= b.p99) {
+        return fmt_no_rule("swap_pressure", "p99 is " + fmt_num(b.p99) + "%, at or above the " +
+                           fmt_num(t, 0) + "% cap: the host runs on swap (max " +
+                           fmt_num(b.max) + "% over " + std::to_string(b.n) + " samples)");
+    }
 
     std::ostringstream rat;
     rat << "Tier A: swap.used_percent p99=" << fmt_num(b.p99)
@@ -202,7 +222,7 @@ std::string suggest_rule_net_tx_bytes_per_sec(const MetricBaseline& b) {
                                    /*min_floor_mb*/    5.0);
 }
 
-std::string suggest_rules_for_samples(const Sample* s, size_t n) {
+std::string suggest_rules_for_samples(const Sample* s, size_t n, const double* w) {
     std::ostringstream os;
     os << "-- AI-suggested rules (Tier A, local heuristics). Review before using.\n"
        << "-- Generated from " << n << " samples.\n\n";
@@ -211,38 +231,66 @@ std::string suggest_rules_for_samples(const Sample* s, size_t n) {
 
     const double cpu_count_est = static_cast<double>(newest_cpu_count(s, n));
 
-    os << suggest_rule_cpu_total_percent       (compute_cpu_total_percent_stats       (s, n));
-    os << suggest_rule_mem_available_percent   (compute_mem_available_percent_stats   (s, n));
-    os << suggest_rule_swap_used_percent       (compute_swap_used_percent_stats       (s, n));
-    os << suggest_rule_load_1m                 (compute_load_1m_stats                 (s, n), cpu_count_est);
-    os << suggest_rule_disk_read_bytes_per_sec (compute_disk_read_bytes_per_sec_stats (s, n));
-    os << suggest_rule_disk_write_bytes_per_sec(compute_disk_write_bytes_per_sec_stats(s, n));
-    os << suggest_rule_net_rx_bytes_per_sec    (compute_net_rx_bytes_per_sec_stats    (s, n));
-    os << suggest_rule_net_tx_bytes_per_sec    (compute_net_tx_bytes_per_sec_stats    (s, n));
+    os << suggest_rule_cpu_total_percent       (compute_cpu_total_percent_stats       (s, n, w));
+    os << suggest_rule_mem_available_percent   (compute_mem_available_percent_stats   (s, n, w));
+    os << suggest_rule_swap_used_percent       (compute_swap_used_percent_stats       (s, n, w));
+    os << suggest_rule_load_1m                 (compute_load_1m_stats                 (s, n, w), cpu_count_est);
+    os << suggest_rule_disk_read_bytes_per_sec (compute_disk_read_bytes_per_sec_stats (s, n, w));
+    os << suggest_rule_disk_write_bytes_per_sec(compute_disk_write_bytes_per_sec_stats(s, n, w));
+    os << suggest_rule_net_rx_bytes_per_sec    (compute_net_rx_bytes_per_sec_stats    (s, n, w));
+    os << suggest_rule_net_tx_bytes_per_sec    (compute_net_tx_bytes_per_sec_stats    (s, n, w));
     return os.str();
 }
 
-int check_suggested_rules(const std::string& lua, std::string* error) {
+int check_suggested_rules(const std::string& lua, std::string* error, const CheckOptions* opt) {
+    const CheckOptions defaults;
+    if (opt == nullptr) opt = &defaults;
     LuaEngine e;
-    if (e.init(/*enable_exec*/ true) != 0) {
+    if (e.init(opt->enable_exec) != 0) {
         if (error != nullptr) *error = "the rules engine did not start";
         return -1;
     }
+    if (opt->instruction_limit != 0 || opt->memory_bytes != 0) {
+        e.set_limits(opt->instruction_limit != 0 ? opt->instruction_limit : e.instruction_limit(),
+                     opt->memory_bytes != 0 ? opt->memory_bytes : e.memory_limit());
+    }
+    if (!opt->exec_allow.empty()) e.set_exec_allowlist(opt->exec_allow);
     // The reply's file-scope statements run as the check loads it: a
     // print() landed on stdout ahead of the rules file (which then did
     // not load), an alert() logged an alert, and an escalate("L3") was
     // refused (the scratch engine knew no level names). Both are
-    // silenced for the check, and the built-in levels are known.
-    e.set_level_names({"L1", "L2", "L3"});
+    // silenced for the check, and the levels are known.
+    e.set_level_names(opt->level_names);
     if (e.load_string("print = function() end\nalert = function() end\n") != 0) {
         if (error != nullptr) *error = e.last_error();
         return -1;
     }
-    if (e.load_string(lua.c_str()) != 0) {
+    if (e.load_buffer(lua, "=suggested rules") != 0) {
         if (error != nullptr) *error = e.last_error();
         return -1;
     }
     return e.rule_count();
+}
+
+size_t suggestion_control_byte(const std::string& doc) {
+    for (size_t i = 0; i < doc.size(); ++i) {
+        const unsigned char c = static_cast<unsigned char>(doc[i]);
+        if (c < 0x20 && c != '\t' && c != '\n' && c != '\r') return i;
+    }
+    return std::string::npos;
+}
+
+bool suggestion_names_exec(const std::string& doc) {
+    const auto name_char = [](char c) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+               c == '_';
+    };
+    for (size_t at = doc.find("exec"); at != std::string::npos; at = doc.find("exec", at + 4)) {
+        const bool starts = at == 0 || !name_char(doc[at - 1]);
+        const bool ends   = at + 4 >= doc.size() || !name_char(doc[at + 4]);
+        if (starts && ends) return true;
+    }
+    return false;
 }
 
 std::vector<Sample> merge_l2_l1(std::vector<Sample> l2, const std::vector<Sample>& l1,
@@ -251,7 +299,10 @@ std::vector<Sample> merge_l2_l1(std::vector<Sample> l2, const std::vector<Sample
         return a.timestamp_nanos < b.timestamp_nanos;
     };
     std::sort(l2.begin(), l2.end(), by_time);
-    std::vector<Sample> out = l2;
+    // Which L1 records to keep, found against the L2 records as sorted;
+    // then the L2 records are moved, not copied, into the result.
+    std::vector<const Sample*> keep;
+    keep.reserve(l1.size());
     for (const auto& r : l1) {
         if (r.folded) {
             // The window (lo, hi], as TierAggregator folds it.
@@ -261,8 +312,11 @@ std::vector<Sample> merge_l2_l1(std::vector<Sample> l2, const std::vector<Sample
                 [](uint64_t t, const Sample& s) { return t < s.timestamp_nanos; });
             if (it != l2.end() && it->timestamp_nanos <= hi) continue;
         }
-        out.push_back(r);
+        keep.push_back(&r);
     }
+    std::vector<Sample> out = std::move(l2);
+    out.reserve(out.size() + keep.size());
+    for (const Sample* r : keep) out.push_back(*r);
     std::sort(out.begin(), out.end(), by_time);
     return out;
 }

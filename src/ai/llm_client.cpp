@@ -200,8 +200,10 @@ int suggest_rules_llm(const std::string& api_key,
     const std::string body_arg = std::string("@") + body_f.path;
     char max_time[16];
     std::snprintf(max_time, sizeof(max_time), "%d", kCurlMaxTime);
+    // -q first: curl otherwise reads ~/.curlrc, where a `-v` would write
+    // the request's headers, the key among them, to the error file.
     const char* const argv[] = {
-        "curl", "-sS", "-X", "POST",
+        "curl", "-q", "-sS", "-X", "POST",
         "-H", hdr_arg.c_str(), "-d", body_arg.c_str(),
         "--max-time", max_time,
         "-o", resp_f.path, "--stderr", err_f.path,

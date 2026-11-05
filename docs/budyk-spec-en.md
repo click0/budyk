@@ -442,8 +442,8 @@ $ budyk suggest-rules --window 7d --output suggested-rules.lua
 
 How it works:
 1. Read Tier 2/Tier 3 ring-buffers for the requested window.
-2. For each metric, compute: mean, stddev, p95, p99, min, max over the window.
-3. Apply heuristic templates. Examples: if `cpu.total_percent` p99 is 45% → suggest threshold at 85% (≈ 2× headroom). If `memory.available_percent` ever dropped below 10% → suggest a rule at 8% with severity critical. If `disk.*.util_percent` shows sustained >90% episodes → suggest with the observed duration as `for_ticks`.
+2. For each metric, compute: mean, stddev, p95, p99, min, max over the window (as implemented: each record weighs the time it stands for, so an L2 stretch of 30 s records counts as the time it covers, not ten times that).
+3. Apply heuristic templates. Examples: if `cpu.total_percent` p99 is 45% → suggest threshold at 85% (≈ 2× headroom). If `memory.available_percent` ever dropped below 10% → suggest a rule at 8% with severity critical (as implemented: at `max(5, floor(min − 2))`, critical; the templates are CPU, memory, swap, load, disk and network bytes/s, there is no `util_percent`; a threshold that would land inside the observed range is a comment saying so, not a rule). If `disk.*.util_percent` shows sustained >90% episodes → suggest with the observed duration as `for_ticks` (not implemented: `for_ticks` is 5, 3 for memory).
 4. Output a `suggested-rules.lua` file with `watch()` calls and comments explaining rationale.
 
 This is **not** machine learning. It is arithmetic + templates. It runs locally, does not require network access, and completes in seconds. It is always available even on air-gapped systems.
@@ -455,7 +455,7 @@ For users who want smarter suggestions: send anonymized metric summaries (not ra
 How it works:
 1. User runs: `$ budyk suggest-rules --ai --api-key $KEY`
 2. The tool computes the same statistical summary as Tier A.
-3. It constructs a prompt: "Here are 7-day metric summaries for a FreeBSD server. Suggest monitoring rules as Lua `watch()` calls. For each rule, explain why."
+3. It constructs a prompt: "Here are 7-day metric summaries for a FreeBSD server. Suggest monitoring rules as Lua `watch()` calls. For each rule, explain why." (As implemented: the prompt names the fields a rule may use and asks for Lua only, in a code block, no prose; the window and the OS are not sent, only the sample count, the CPU count and the distributions.)
 4. Summary is anonymized: no hostnames, no IPs, no usernames. Only numeric distributions.
 5. LLM responds with Lua rules + explanations. Lua is a widely known format — LLMs generate it far more reliably than a custom DSL.
 6. The tool validates the response (as implemented: it must load in the rules sandbox and define at least one `watch()` rule, or nothing is written; fields and thresholds are not checked beyond that).

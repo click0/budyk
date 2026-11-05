@@ -131,6 +131,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so at load.
 - `config.example.yaml` says a ring's size applies when the ring is
   created, and how to resize; the man page describes YAML rules.
+- **`suggest-rules --ai` wrote code the check never saw.** A NUL byte
+  in the LLM's reply (`\u0000` in the JSON) ended the C string the
+  check loaded, while Lua's lexer skipped the byte and the daemon
+  loaded the rules after it, an `exec()` among them. A reply with a
+  control byte other than tab, LF and CR is refused; the check loads
+  the text whole; the standard output is written whole.
+- **`suggest-rules` weighed an L2 stretch ten times what the same time
+  at L1 weighed.** Each record counted once: 30 s records for the hours
+  a dashboard was open or an anomaly ran (the least baseline-like
+  hours), 5-minute records for the rest, so every p99 came from those
+  hours and the thresholds sat above them (an hour at 90 % CPU in an
+  idle week gave `cpu.total_percent > 95`). Each record weighs the time
+  it stands for, the gap to the one before it, at most the L1 interval.
+- **`suggest-rules` checked the reply as a daemon with `exec()` on
+  would load it**, whatever the config said: a reply calling `exec()`
+  passed, and `budyk serve` with exec off refused the file ("exec is
+  disabled", rules=0). The check engine is set up from the config: exec
+  on or off, its allowlist, the limits, the custom levels' names.
+- A Tier A threshold clamped inside the observed range made a rule that
+  held all the time: swap at 96-98 % got `swap.used_percent > 90`, a
+  CPU at p99 99 % `> 95`, 3 % of memory available `< 5` critical. Each
+  is a comment saying why there is no rule.
+- `suggest-rules` with no sample in the window sent "no samples
+  available" to the LLM (a paid request) and wrote the rules it got
+  back as "Generated from 0 samples"; Tier A wrote a header alone over
+  `--output`. It says "no samples in the last 7d", exit 1, before any
+  request or write. A record stamped in the future (the clock stepped
+  back since) was in every window; it is in none.
+- The note that an LLM suggestion calls `exec()` matched `exec(` and
+  `exec (` alone: `exec{...}`, `exec "..."`, `exec[[...]]` and an alias
+  passed without it. It matches the name wherever it stands.
+- `curl(1)` is run with `-q` first, for alerts and the LLM: it read
+  `~/.curlrc`, where a `-v` put the request's headers, the API key or
+  the token among them, in the error file the log quotes.
+- `ALL_PROXY` and `all_proxy` reach curl and `exec()` commands, as the
+  other proxy variables do.
+- `suggest-rules --window 366d` on full default rings held about 490 MB:
+  the L2 records were copied twice on the way to the statistics. They
+  are moved; what the window leaves out is dropped as the rings are
+  read.
+- Docs: spec §3.7.1 marked where the code differs (weighting, the
+  templates, the prompt), the man page and the READMEs on
+  `suggest-rules`.
 
 ## [0.8.6] — 2026-11-02
 

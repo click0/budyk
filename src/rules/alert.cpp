@@ -155,6 +155,7 @@ bool run_curl(const std::vector<std::string>& args, int timeout_s,
     std::vector<const char*> argv;
     argv.reserve(args.size() + 4);
     argv.push_back("curl");
+    argv.push_back("-q");            // first: no ~/.curlrc (a `-v` there put the token in the log)
     argv.push_back("--stderr");
     argv.push_back(err_path);
     for (const auto& a : args) argv.push_back(a.c_str());
