@@ -368,6 +368,31 @@ if grep -q "SIGHUP — rules file '$DIR/rules.lua' failed to load: No such file 
 else
     echo "FAIL: a SIGHUP with the rules file gone dropped the rules, or said nothing"; fail=1
 fi
+
+# A directory, or a FIFO, where the rules file was: the reload refuses
+# it in words and keeps the rules (a directory named rules.yaml was read
+# as a file of 2^63 bytes, and the daemon aborted; a FIFO held it until
+# something wrote to it: here the reload would hang the daemon, and the
+# next SIGHUP never be seen).
+mkdir "$DIR/rules.lua"
+kill -HUP "$PID"
+sleep 1.5
+if grep -q "SIGHUP — rules file '$DIR/rules.lua' failed to load: Is a directory; keeping the 3 rule(s) loaded before" "$DIR/log"; then
+    echo "ok   a SIGHUP with a directory where the rules file was keeps the rules"
+else
+    echo "FAIL: a SIGHUP with a directory where the rules file was: $(grep 'SIGHUP' "$DIR/log" | tail -1)"; fail=1
+fi
+rmdir "$DIR/rules.lua"
+mkfifo "$DIR/rules.lua"
+kill -HUP "$PID"
+sleep 1.5
+if grep -q "SIGHUP — rules file '$DIR/rules.lua' failed to load: not a regular file; keeping the 3 rule(s) loaded before" "$DIR/log" &&
+   kill -0 "$PID" 2>/dev/null; then
+    echo "ok   a SIGHUP with a FIFO where the rules file was keeps the rules, at once"
+else
+    echo "FAIL: a SIGHUP with a FIFO where the rules file was: $(grep 'SIGHUP' "$DIR/log" | tail -1)"; fail=1
+fi
+rm -f "$DIR/rules.lua"
 mv "$DIR/rules.lua.gone" "$DIR/rules.lua"
 
 # A rules file with escalate() at file scope loads at start, and loaded

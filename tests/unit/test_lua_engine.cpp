@@ -3,6 +3,7 @@
 #include "core/metric_set.h"
 #include "rules/lua_engine.h"
 #include "rules/alert.h"
+#include "rules/freeze.h"
 
 extern "C" {
 #include <lauxlib.h>
@@ -16,7 +17,9 @@ extern "C" {
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <csignal>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <vector>
 
@@ -420,6 +423,48 @@ int main() {
         const int rc = e.load_string(buf);
         assert(rc != 0);
         e.shutdown();
+    }
+
+    // 17b. An allowlist entry longer than the kernel keeps of a process
+    //      name (kCommMax) matches a process by its first kCommMax
+    //      bytes: `postgres-checkpointer` never matched `postgres-checkp`.
+    //      A child of ours has our name, cut to kCommMax when it is that
+    //      long (Linux: "test_lua_engine" is 15); it is frozen and
+    //      thawed through the longer entry, and refused through one that
+    //      is not its prefix.
+    {
+        char comm[64] = {0};
+        assert(budyk::proc_name_of(static_cast<int>(::getpid()), comm, sizeof(comm)) == 0);
+        if (std::strlen(comm) == budyk::kCommMax) {
+            const pid_t child = ::fork();
+            assert(child >= 0);
+            if (child == 0) {
+                for (;;) ::pause();
+            }
+            char buf[160];
+            std::snprintf(buf, sizeof(buf),
+                          "r = freeze(%d)\nassert(r.ok)\nassert(unfreeze(%d).ok)\n",
+                          static_cast<int>(child), static_cast<int>(child));
+            budyk::LuaEngine e;
+            assert(e.init(false) == 0);
+            e.set_freeze_enabled(true);
+            e.set_freeze_allowlist({std::string(comm) + "_and_more"});
+            assert(e.load_string(buf) == 0);                  // past the allowlist
+            budyk::LuaEngine f;
+            assert(f.init(false) == 0);
+            f.set_freeze_enabled(true);
+            std::string other(comm);
+            other.back() = other.back() == 'x' ? 'y' : 'x';   // not the comm's prefix
+            f.set_freeze_allowlist({other + "_and_more"});
+            assert(f.load_string(buf) != 0);
+            assert(f.last_error().find("not in allowlist") != std::string::npos);
+            ::kill(child, SIGKILL);
+            int status = 0;
+            assert(::waitpid(child, &status, 0) == child);
+        } else {
+            std::printf("test_lua_engine: 17b skipped (comm '%s' is shorter than %zu)\n",
+                        comm, budyk::kCommMax);
+        }
     }
 
     // 18. `files` global is bound when set_file_state() has been
@@ -2118,6 +2163,26 @@ int main() {
         assert(e.eval_tick(mk(0, 0, 0, 0)) == 1);
         assert(e.rules()[0].last_error.empty());
         assert(e.rules()[1].last_error.find("undefined global nosuch") != std::string::npos);
+        e.shutdown();
+    }
+
+    // 53. load_buffer() loads the text whole, as the chunk it is named:
+    //     an error names the file ("@x.lua" reads "x.lua:2:"), and a NUL
+    //     byte is a byte of the text, not its end (load_string() stopped
+    //     there, and a rules file with one past a comment loaded what
+    //     the check never saw).
+    {
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        assert(e.load_buffer("x = 1\nx = = 2\n", "@x.lua") != 0);
+        assert(e.last_error().rfind("x.lua:2:", 0) == 0);
+        const std::string with_nul("y = 1\n\0z = 2\n", 13);
+        assert(e.load_string(with_nul.c_str()) == 0);         // "y = 1\n" alone
+        assert(e.load_buffer(with_nul, "@y.lua") != 0);       // the NUL is read
+        assert(e.last_error().rfind("y.lua:2:", 0) == 0);
+        assert(e.load_buffer("watch('b', { when = function() return true end })\n",
+                             "=rules.yaml (generated Lua)") == 0);
+        assert(e.rule_count() == 1);
         e.shutdown();
     }
 

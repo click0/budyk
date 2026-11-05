@@ -485,12 +485,21 @@ void LuaEngine::shutdown() {
 }
 
 int LuaEngine::load_string(const char* code) {
+    if (code == nullptr) return -1;
+    return load_chunk(code, std::strlen(code), code);
+}
+
+int LuaEngine::load_buffer(const std::string& code, const char* chunkname) {
+    return load_chunk(code.data(), code.size(), chunkname != nullptr ? chunkname : "=rules");
+}
+
+int LuaEngine::load_chunk(const char* code, size_t len, const char* chunkname) {
     if (L_ == nullptr || code == nullptr) return -1;
     begin_call();
     loading_ = true;
     // Text only ("t"): Lua does not verify bytecode, and a precompiled
     // chunk could do what no sandbox prevents.
-    int rc = luaL_loadbufferx(L_, code, std::strlen(code), code, "t");
+    int rc = luaL_loadbufferx(L_, code, len, chunkname, "t");
     if (rc == LUA_OK) rc = lua_pcall(L_, 0, LUA_MULTRET, 0);
     loading_ = false;
     if (rc != LUA_OK) {

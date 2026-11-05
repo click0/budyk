@@ -16,6 +16,7 @@
 #include "storage/codec.h"
 #include "storage/tier_manager.h"
 #include "util/dir_lock.h"
+#include "util/text_file.h"
 #include "web/json.h"
 #include "web/login_limiter.h"
 #include "web/server.h"
@@ -36,6 +37,7 @@
 
 #include <fcntl.h>
 #include <poll.h>
+#include <strings.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -405,34 +407,55 @@ int cmd_serve(int argc, char* argv[], const char* version) {
     // that failed, and the rules stay (a deploy's `mv rules.lua
     // rules.lua.bak` followed by a HUP, a mount briefly gone, a chmod
     // mistake dropped every rule in silence); at start it is no rules.
-    auto load_rules_into = [&cfg](budyk::LuaEngine& e, std::string* err, bool reload) -> int {
+    // The file is read once, whole (a regular file only: a FIFO held the
+    // daemon until something wrote to it, a directory named rules.yaml
+    // was read as a file of 2^63 bytes and the daemon aborted), and the
+    // text read is what is loaded: a reload read it twice, once for the
+    // check and once for the engine, and a file replaced in between was
+    // loaded unchecked.
+    struct RulesSource {
+        std::string text;
+        bool        is_yaml = false;
+        bool        none    = true;         // no rules file: no rules
+    };
+    auto read_rules = [&cfg](RulesSource* rs, std::string* err, bool reload) -> int {
+        rs->none = true;
         if (cfg.rules_path[0] == '\0') {
             std::fprintf(stderr, "budyk serve: rules.path is empty; running without rules\n");
             return 0;
         }
-        if (::access(cfg.rules_path, R_OK) != 0) {
+        std::string why;
+        if (budyk::read_text_file(cfg.rules_path, &rs->text, &why) != 0) {
             if (reload) {
-                *err = std::strerror(errno);
+                *err = why;
                 return -1;
             }
             std::fprintf(stderr, "budyk serve: rules file '%s': %s; running without rules\n",
-                         cfg.rules_path, std::strerror(errno));
+                         cfg.rules_path, why.c_str());
             return 0;
         }
         const size_t plen = std::strlen(cfg.rules_path);
-        const bool   is_yaml =
-            (plen >= 5 && std::strcmp(cfg.rules_path + plen - 5, ".yaml") == 0) ||
-            (plen >= 4 && std::strcmp(cfg.rules_path + plen - 4, ".yml")  == 0);
+        rs->is_yaml =                       // any case: rules.YAML was loaded as Lua
+            (plen >= 5 && ::strcasecmp(cfg.rules_path + plen - 5, ".yaml") == 0) ||
+            (plen >= 4 && ::strcasecmp(cfg.rules_path + plen - 4, ".yml")  == 0);
+        rs->none = false;
+        return 0;
+    };
+    auto load_rules_into = [&cfg](budyk::LuaEngine& e, const RulesSource& rs,
+                                  std::string* err) -> int {
+        if (rs.none) return 0;
         int rc = 0;
-        if (is_yaml) {
+        if (rs.is_yaml) {
             std::string lua_src;
-            if (budyk::yaml_rules_to_lua_file(cfg.rules_path, &lua_src, err) != 0) {
+            if (budyk::yaml_rules_to_lua(rs.text, &lua_src, err) != 0) {
                 rc = -1;                       // *err: which rule and what
-            } else if ((rc = e.load_string(lua_src.c_str())) != 0) {
-                *err = e.last_error();
+            } else {
+                const std::string chunk = std::string("=") + cfg.rules_path + " (generated Lua)";
+                if ((rc = e.load_buffer(lua_src, chunk.c_str())) != 0) *err = e.last_error();
             }
-        } else if ((rc = e.load_file(cfg.rules_path)) != 0) {
-            *err = e.last_error();
+        } else {
+            const std::string chunk = std::string("@") + cfg.rules_path;
+            if ((rc = e.load_buffer(rs.text, chunk.c_str())) != 0) *err = e.last_error();
         }
         return rc;
     };
@@ -452,7 +475,10 @@ int cmd_serve(int argc, char* argv[], const char* version) {
         e.set_level_names(std::move(names));
         return 0;
     };
-    auto setup_engine = [&](const char* restore_path, bool register_channels) -> int {
+    // `checked`: the rules text a reload's probe loaded, else the file is
+    // read here (at start).
+    auto setup_engine = [&](const char* restore_path, bool register_channels,
+                            const RulesSource* checked) -> int {
         if (init_engine(engine) != 0) return -1;
         {
             // The custom levels' `when` conditions. Re-applied on reload:
@@ -469,7 +495,9 @@ int cmd_serve(int argc, char* argv[], const char* version) {
         }
         {
             std::string err;
-            if (load_rules_into(engine, &err, /*reload=*/false) != 0) {
+            RulesSource fresh;
+            if (checked == nullptr) read_rules(&fresh, &err, /*reload=*/false);
+            if (load_rules_into(engine, checked != nullptr ? *checked : fresh, &err) != 0) {
                 // Loading stops at the first error; rules defined above it
                 // stay registered, so report how many are actually active.
                 std::fprintf(stderr,
@@ -510,7 +538,7 @@ int cmd_serve(int argc, char* argv[], const char* version) {
                    : std::string(cfg.data_dir) + "/rule_state.tsv";
     }
     if (setup_engine(state_path.empty() ? nullptr : state_path.c_str(),
-                     /*register_channels=*/true) != 0) {
+                     /*register_channels=*/true, /*checked=*/nullptr) != 0) {
         std::fprintf(stderr, "budyk serve: LuaEngine.init failed\n");
         tm.close();
         return 1;
@@ -529,13 +557,16 @@ int cmd_serve(int argc, char* argv[], const char* version) {
         // The new file is loaded into a scratch engine first: one with an
         // error at rule 200 of 300 used to replace the working set with
         // the 199 before it. A file that does not load leaves the rules
-        // as they are.
+        // as they are. The text the probe checked is what the engine
+        // loads.
+        RulesSource rs;
         {
             budyk::LuaEngine probe;
             std::string err;
             int rc = init_engine(probe);
             probe.set_probe(true);              // a check: nothing it loads goes out
-            if (rc == 0) rc = load_rules_into(probe, &err, /*reload=*/true);
+            if (rc == 0) rc = read_rules(&rs, &err, /*reload=*/true);
+            if (rc == 0) rc = load_rules_into(probe, rs, &err);
             probe.shutdown();
             if (rc != 0) {
                 std::fprintf(stderr,
@@ -557,7 +588,7 @@ int cmd_serve(int argc, char* argv[], const char* version) {
                 "cooldowns may reset\n", rp.c_str(), std::strerror(-rc));
         }
         engine.shutdown();
-        if (setup_engine(rp.c_str(), /*register_channels=*/false) != 0) {
+        if (setup_engine(rp.c_str(), /*register_channels=*/false, &rs) != 0) {
             std::fprintf(stderr,
                 "budyk serve: SIGHUP — engine re-init failed; daemon is now ruleless\n");
         } else {

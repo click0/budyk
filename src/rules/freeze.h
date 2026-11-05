@@ -13,6 +13,16 @@
 
 namespace budyk {
 
+/// The longest process name the kernel keeps (`comm`): 15 bytes on
+/// Linux (TASK_COMM_LEN - 1), 19 on FreeBSD (MAXCOMLEN). A longer
+/// executable name is cut to this, so an allowlist entry longer than
+/// this matches a process by its first kCommMax bytes.
+#ifdef BUDYK_FREEBSD
+constexpr std::size_t kCommMax = 19;
+#else
+constexpr std::size_t kCommMax = 15;
+#endif
+
 /// Resolve the executable / kernel-reported `comm` for `pid`. On Linux
 /// reads `/proc/<pid>/comm` (15-char kernel-thread name, trailing \n
 /// stripped); on FreeBSD pulls `kinfo_proc.ki_comm` via sysctl.

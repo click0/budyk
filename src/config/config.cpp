@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #include "config/config.h"
+#include "rules/freeze.h"           // kCommMax: a header of constants and declarations
 #include "util/yaml_dom.h"
 
 extern "C" {
@@ -16,7 +17,9 @@ extern "C" {
 #include <cerrno>
 #include <cstring>
 
+#include <fcntl.h>
 #include <strings.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 namespace budyk {
@@ -126,7 +129,9 @@ bool parse_duration_full(const char* v, double* seconds) {
     else if (std::strcmp(end, "h") == 0)                    unit = 3600.0;
     else if (std::strcmp(end, "d") == 0)                    unit = 86400.0;
     else return false;
-    *seconds = x * unit;
+    // To the millisecond: 1.1 * 3600 is 3960.0000000000005 in binary, and
+    // "1.1h" was refused as not whole seconds (4.1m, 2.2h too).
+    *seconds = std::round(x * unit * 1000.0) / 1000.0;
     return true;
 }
 
@@ -204,12 +209,21 @@ const char* const kMatchesNothing = "(no usable entry in the allowlist)";
 //
 // `allowlist` (rules.exec.allow, rules.freeze.allow): an empty one allows
 // everything, so one that was written but is left with nothing usable
-// (every item a mapping, `- path: /usr/bin/x`; a mapping for the list)
+// (every item a mapping, `- path: /usr/bin/x`; a mapping for the list;
+// `allow:` with every entry commented out, which YAML reads as null)
 // allows nothing instead, and says so. It allowed everything.
 void apply_str_list(yaml_document_t* d, const yaml_node_t* m, const char* key,
                     std::vector<std::string>* dst, const char* path, bool allowlist = false) {
     const yaml_node_t* seq = yaml_find_key(d, m, key);
-    if (seq == nullptr || yaml_null(seq)) return;
+    if (seq == nullptr) return;
+    if (yaml_null(seq)) {
+        if (allowlist) {
+            std::fprintf(stderr, "budyk config: %s: empty (every entry commented out?); "
+                                 "it allows nothing (an empty list, [], allows any)\n", path);
+            dst->assign(1, kMatchesNothing);
+        }
+        return;
+    }
     if (const char* one = yaml_scalar(seq)) {
         dst->assign(1, one);
         return;
@@ -714,6 +728,17 @@ int parse_document(yaml_parser_t* parser, Config* out, std::string* error) {
             apply_bool    (&doc, fr, "enabled", &out->rules_enable_freeze, "rules.freeze.enabled");
             apply_str_list(&doc, fr, "allow",   &out->rules_freeze_allow, "rules.freeze.allow",
                            /*allowlist*/ true);
+            // The kernel keeps kCommMax bytes of a process name: a longer
+            // entry matches by that much (it matched nothing, in silence).
+            for (size_t i = 0; i < out->rules_freeze_allow.size(); ++i) {
+                const std::string& n = out->rules_freeze_allow[i];
+                if (n.size() > kCommMax && n != kMatchesNothing) {
+                    std::fprintf(stderr, "budyk config: rules.freeze.allow[%zu]: '%s' is longer "
+                                         "than a process name (%zu bytes); it matches a process "
+                                         "named by its first %zu\n",
+                                 i, n.c_str(), kCommMax, kCommMax);
+                }
+            }
         }
 
         // Nested `rules.limits` block — how much a single call into Lua
@@ -757,8 +782,59 @@ int parse_document(yaml_parser_t* parser, Config* out, std::string* error) {
     }
 
     yaml_document_delete(&doc);
+
+    // Only the first document was read: `cat base.yaml site.yaml >
+    // config.yaml`, each starting with `---`, lost site.yaml's settings
+    // (web.auth.enabled among them) without a word, and a syntax error
+    // after `---` or `...` was never reported.
+    yaml_document_t more;
+    if (!yaml_parser_load(parser, &more)) {
+        if (error != nullptr) *error = yaml_problem(parser);
+        return -3;
+    }
+    const yaml_node_t* second = yaml_document_get_root_node(&more);
+    const bool another = second != nullptr && !yaml_null(second);
+    yaml_document_delete(&more);
+    if (another) {
+        if (error != nullptr) {
+            *error = "a second YAML document (after ---): the file must hold one";
+        }
+        return -5;
+    }
     clamp_numbers(out);
     return 0;
+}
+
+// The config as a stream: a regular file only. A directory read as
+// "input error at line 1, column 1"; a FIFO held the daemon until
+// something wrote to it.
+FILE* open_config(const char* path, std::string* error) {
+    const int fd = ::open(path, O_RDONLY | O_CLOEXEC | O_NONBLOCK);
+    if (fd < 0) {
+        if (error != nullptr) *error = std::strerror(errno);
+        return nullptr;
+    }
+    struct stat st{};
+    if (::fstat(fd, &st) != 0) {
+        if (error != nullptr) *error = std::strerror(errno);
+        ::close(fd);
+        return nullptr;
+    }
+    if (!S_ISREG(st.st_mode)) {
+        if (error != nullptr) {
+            *error = S_ISDIR(st.st_mode) ? "is a directory" : "not a regular file";
+        }
+        ::close(fd);
+        return nullptr;
+    }
+    const int fl = ::fcntl(fd, F_GETFL);
+    if (fl >= 0) ::fcntl(fd, F_SETFL, fl & ~O_NONBLOCK);
+    FILE* f = ::fdopen(fd, "r");
+    if (f == nullptr) {
+        if (error != nullptr) *error = std::strerror(errno);
+        ::close(fd);
+    }
+    return f;
 }
 
 } // namespace
@@ -770,11 +846,8 @@ int config_load(const char* path, Config* out, std::string* error) {
         return -1;
     }
 
-    FILE* f = std::fopen(path, "re");
-    if (f == nullptr) {
-        if (error != nullptr) *error = std::strerror(errno);
-        return -2;
-    }
+    FILE* f = open_config(path, error);
+    if (f == nullptr) return -2;
 
     yaml_parser_t parser;
     yaml_parser_initialize(&parser);

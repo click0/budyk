@@ -93,6 +93,11 @@ collection:
   #     when: "load.avg_1m < 0.05 and cpu.total_percent < 2"
 
 # ---- Storage rings -------------------------------------------------------
+# A size applies when its ring file is created (the first start, or
+# after the file is removed): a ring on disk of another size stops the
+# daemon at start ("file size does not match record size x capacity").
+# To resize, stop budyk, remove the ring (its history goes with it) and
+# start it again. A custom level's storage_mb is the same.
 storage:
   tier1_max_mb: 250        # tier1.ring: the L3 samples (1 s)
   tier2_max_mb: 150        # tier2.ring: the L2 samples (30 s) and, while L3

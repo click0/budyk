@@ -85,6 +85,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nothing to convert. Such rings must be used as they are, and the test
   checks that now (a conversion logged there is the failure); CI runs
   it against the build itself, next to v0.6.4 and v0.7.0.
+- **An exec allowlist with every entry commented out let `exec()` run
+  any program.** `allow:` followed by comments alone is YAML's null,
+  which the loader read as no key, and an empty allowlist allows any
+  absolute path (`rules.freeze.allow` the same). Such an allowlist
+  allows nothing, and the config says so ("empty (every entry commented
+  out?); it allows nothing"); an empty list, `[]`, still allows any.
+- **Only the first YAML document of the config, or of a YAML rules
+  file, was read.** `cat base.yaml site.yaml > config.yaml`, each
+  starting with `---`, dropped site.yaml's settings (`web.auth.enabled`
+  among them) without a word, and rules after a `---` were dropped; a
+  syntax error after `---` or `...` was never reported. A second
+  document is an error ("a second YAML document (after ---): the file
+  must hold one"), as is the syntax error.
+- **A YAML rule's unknown key, duplicate key or list where a value
+  belongs was dropped without a word**: `cooldwon: 5` set nothing,
+  `severity: [critical]` fired as a warning, and `message:` with no
+  value sent an empty message. Each is an error naming the rule and the
+  key, and the file is not loaded; a key with no value is one left out
+  (the message defaults to the name). A `when` that does not parse is
+  read before the file is put together, so the error names the rule
+  and the YAML line, not a line of the generated Lua and its first rule
+  (`[string "watch("r1", {..."]:56: 'end' expected`). A `when` ending
+  in a `--` comment loads (it took the generated `end` with it). A NUL
+  byte in a YAML rules file is refused, where the rules after it were
+  dropped in silence.
+- **A directory named by `rules.path` aborted the daemon**, at start
+  and on SIGHUP: `rules.yaml` as a directory was read as a file of 2^63
+  bytes. A FIFO there held the daemon until something wrote to it (as a
+  FIFO named `--config` did). Both are read as regular files only, and
+  refused in words ("Is a directory", "not a regular file"); a rules
+  file over 16 MiB too. The rules file's extension is read in any case
+  (`rules.YAML` was loaded as Lua).
+- **A SIGHUP read the rules file twice**: once for the check and once
+  for the engine, so a file replaced in between (a deploy's `mv` after
+  the HUP) was loaded unchecked, and one gone by then left the daemon
+  without rules ("running without rules"). The text the check loaded is
+  what the engine loads.
+- `login_window: 1.1h`, and every duration with one decimal whose
+  product is not exact in binary (4.1m, 2.2h), was refused as "not
+  whole seconds". Durations are read to the millisecond.
+- A `rules.freeze.allow` entry longer than the kernel keeps of a process
+  name (15 bytes on Linux, 19 on FreeBSD) matched nothing, in silence.
+  It matches a process by its first 15 (19) bytes, and the config says
+  so at load.
+- `config.example.yaml` says a ring's size applies when the ring is
+  created, and how to resize; the man page describes YAML rules.
 
 ## [0.8.6] — 2026-11-02
 

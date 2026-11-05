@@ -628,9 +628,18 @@ int freeze_action(lua_State* L, const char* fn_name, bool stop) {
             return luaL_error(L,
                 "%s: cannot resolve process name for pid %d", fn_name, pid);
         }
+        // An entry longer than the kernel keeps of a name (comm, 15 bytes
+        // on Linux) matches the process by that much: `postgres-checkpointer`
+        // never matched, and the config did not say.
+        const size_t name_len = std::strlen(name_buf);
         bool found = false;
         for (const auto& n : allow) {
-            if (n == name_buf) { found = true; break; }
+            if (n == name_buf ||
+                (n.size() > budyk::kCommMax && name_len == budyk::kCommMax &&
+                 n.compare(0, budyk::kCommMax, name_buf) == 0)) {
+                found = true;
+                break;
+            }
         }
         if (!found) {
             return luaL_error(L,
