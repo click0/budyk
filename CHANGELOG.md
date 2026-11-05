@@ -21,6 +21,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The dashboard kept the level table from its start**: after a
+  daemon restart with other custom levels under the same ids (they
+  are numbered in config order) it named a level by the old table
+  ("burst" for what was now "deep_sleep"). The table is fetched again
+  on every (re)connect.
+- **A clock step back drew the history chart backwards and off it**:
+  the points were drawn in the rings' and the page's order, and the
+  axis took the first and the last as its ends (points at x = -53 and
+  1023, the axis reading 16:48 … 15:53); with rings' data from before
+  the step, the live ticks after it were not drawn for the step's
+  length. The points are drawn in time order, each instant once.
+- **A failed history load was hidden within a second**: "error" until
+  the next tick's frame redrew the live samples over it ("200 pts",
+  the last few minutes under the 7d button). It says "history: error,
+  live samples only" until a load succeeds.
+- **A refused login said "Server returned 403"** while the reply said
+  why (a Host that is not budyk's: "add it to web.allowed_hosts"; a
+  cross-origin login). The reason is shown after the status.
+- **On a phone the dashboard was wider than the screen**, the readings
+  squeezed into a column a word or two wide. Under 40rem the label and
+  the bar share a line with the value under them, and the tables
+  scroll sideways.
+- **Behind a reverse proxy under a path, the session cookie went to
+  every application on that host** (`Path=/` always): the token
+  reached `/app/`'s backend and its logs. A proxy that sends
+  `X-Forwarded-Prefix` (`/budyk`) gets a cookie for that path alone;
+  a value that is not a plain path, or none, is `/` as before.
+
 - **The dashboard's history chart said "no data" in on-demand mode**, and
   ended a level's interval ago in the other (5 minutes at L1): it drew
   the rings alone, while the page held the catch-up's 300 samples and
