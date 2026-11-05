@@ -311,7 +311,7 @@ std::string header_value(const std::string& s) {
 }
 
 std::string header_text(const std::string& s) {
-    const std::string v = header_value(s);
+    std::string v = header_value(s);      // not const: returned as it is, moved
     bool ascii = true;
     for (char c : v) {
         if (static_cast<unsigned char>(c) >= 0x80) { ascii = false; break; }
