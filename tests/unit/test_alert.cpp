@@ -81,11 +81,51 @@ int main() {
 
     // 2. ntfy_payload — the body is just the message text. Title /
     //    priority / tags ride in headers, exercised via the dispatcher
-    //    plumbing rather than the payload itself.
+    //    plumbing rather than the payload itself. The body is UTF-8:
+    //    one that is not (a process name's bytes) ntfy takes as a file,
+    //    and the alert arrived as an attachment.
     {
         const std::string body =
             ntfy_payload(AlertSeverity::Critical, "memory_low", "RAM is gone");
         assert(body == "RAM is gone");
+        assert(ntfy_payload(AlertSeverity::Critical, "x", "proc \xFF\xFE died") ==
+               "proc \xEF\xBF\xBD\xEF\xBF\xBD died");
+        assert(ntfy_payload(AlertSeverity::Critical, "x", "\xD0\xB1\xD1\x83\xD0\xB4") ==
+               "\xD0\xB1\xD1\x83\xD0\xB4");
+    }
+
+    // 2b. header_text — a header line's text: ASCII as it is (control
+    //     characters spaces, as header_value has it); anything else as
+    //     RFC 2047 encoded words of 75 characters at most, split between
+    //     characters. ntfy's Title and the mail's Subject carry a rule's
+    //     name, anyone's text; the bytes raw in the line were shown as
+    //     mojibake or refused.
+    {
+        assert(header_text("high_load") == "high_load");
+        assert(header_text("a\r\nb") == "a  b");
+        // "диск" (8 bytes) -> base64 of D0 B4 D0 B8 D1 81 D0 BA
+        assert(header_text("\xD0\xB4\xD0\xB8\xD1\x81\xD0\xBA") == "=?UTF-8?B?0LTQuNGB0Lo=?=");
+        assert(header_text("disk \xD0\xB4") == "=?UTF-8?B?ZGlzayDQtA==?=");
+        // 60 two-byte characters (120 bytes): three words, none over 75
+        // characters, none cut inside a character.
+        std::string s;
+        for (int i = 0; i < 60; ++i) s += "\xD0\xB1";
+        const std::string h = header_text(s);
+        size_t words = 0;
+        for (size_t at = 0; (at = h.find("=?UTF-8?B?", at)) != std::string::npos; ++at) ++words;
+        assert(words == 3);
+        size_t start = 0;
+        while (start < h.size()) {
+            size_t end = h.find(' ', start);
+            if (end == std::string::npos) end = h.size();
+            assert(end - start <= 75);
+            assert(h.compare(start, 10, "=?UTF-8?B?") == 0 && h.compare(end - 2, 2, "?=") == 0);
+            // 44 bytes (22 characters) a word: 60 base64 characters, no '='
+            assert(end - start == 10 + 60 + 2 || end == h.size());
+            start = end + 1;
+        }
+        assert(ntfy_headers(AlertSeverity::Info, "\xD0\xB4")[0] == "Title: =?UTF-8?B?YnVkeWs6INC0?=");
+        assert(ntfy_headers(AlertSeverity::Info, "plain")[0] == "Title: budyk: plain");
     }
 
     // 3. discord_payload — JSON with embed: title, description, colour.
@@ -158,6 +198,14 @@ int main() {
         assert(contains(m, "Subject: [budyk:warning] high_load\r\n"));
         assert(contains(m, "Date: "));
         assert(contains(m, "MIME-Version: 1.0\r\n"));
+        assert(contains(m, "Content-Transfer-Encoding: 8bit\r\n"));   // the body is UTF-8, raw
+        // A rule name that is not ASCII: the Subject as RFC 2047 has it,
+        // the body's bytes made valid UTF-8.
+        const std::string u = smtp_message(
+            AlertSeverity::Warning, "a@example.com", "b@example.com",
+            "\xD0\xB4", "x \xFF y");
+        assert(contains(u, "Subject: =?UTF-8?B?W2J1ZHlrOndhcm5pbmddINC0?=\r\n"));
+        assert(contains(u, "\r\n\r\nx \xEF\xBF\xBD y\r\n"));
         assert(contains(m, "Content-Type: text/plain; charset=utf-8\r\n"));
         assert(contains(m, "\r\n\r\nload_1m=12.0\r\n"));   // blank line + body
     }

@@ -104,6 +104,11 @@ private:
 /// bytes (a process name, a mount point), and a line break in it would
 /// add a header of its own (ntfy's, or a Bcc: in the mail).
 std::string header_value    (const std::string& s);
+/// `s` as a header's text as a mail or ntfy carries it: header_value(),
+/// and when a byte is not ASCII, RFC 2047 encoded words (UTF-8,
+/// base64, 75 characters each at most). A mail's Subject and ntfy's
+/// Title are header lines, and a rule's name is anyone's text.
+std::string header_text     (const std::string& s);
 /// ntfy's headers: Title (from the rule name), Priority, Tags.
 std::vector<std::string> ntfy_headers(AlertSeverity sev, const std::string& rule_name);
 std::string ntfy_payload    (AlertSeverity sev, const std::string& rule_name,

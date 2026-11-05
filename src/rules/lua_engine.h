@@ -263,6 +263,13 @@ private:
     /// logged once per distinct error, when the bind raised: the tick's
     /// rules and level conditions are then not evaluated.
     bool bind(const Sample& s, const budyk_detail_c* detail);
+    /// Sets every global the bind set (the sample tables, `files`,
+    /// `uptime_seconds`) back to what it set, and whether one had been
+    /// assigned since: its name in `*name`.
+    bool assigned_bound(std::string* name);
+    /// assigned_bound() after a rules file ran at load: true, with the
+    /// file's error set, when it assigned one.
+    bool file_assigned_bound();
 
     lua_State*               L_               = nullptr;
     uint64_t                 instruction_limit_ = kDefaultInstructionLimit;

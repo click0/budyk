@@ -310,9 +310,50 @@ std::string header_value(const std::string& s) {
     return out;
 }
 
+std::string header_text(const std::string& s) {
+    const std::string v = header_value(s);
+    bool ascii = true;
+    for (char c : v) {
+        if (static_cast<unsigned char>(c) >= 0x80) { ascii = false; break; }
+    }
+    if (ascii) return v;
+    // RFC 2047: `=?UTF-8?B?<base64>?=`, each word 75 characters at most
+    // (12 of them the frame, so 45 bytes of text, 60 of base64), split
+    // between characters, not inside one (a continuation byte is
+    // 10xxxxxx). A mail reader or ntfy shows the words as the text; the
+    // bytes raw in a header line were shown as mojibake or refused.
+    static const char kB64[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const std::string text = utf8_sanitize(v);
+    std::string out;
+    size_t i = 0;
+    while (i < text.size()) {
+        size_t n = text.size() - i < 45 ? text.size() - i : 45;
+        while (n > 1 && i + n < text.size() &&
+               (static_cast<unsigned char>(text[i + n]) & 0xC0) == 0x80) {
+            --n;
+        }
+        if (!out.empty()) out.push_back(' ');
+        out += "=?UTF-8?B?";
+        for (size_t k = 0; k < n; k += 3) {
+            const uint32_t a = static_cast<unsigned char>(text[i + k]);
+            const uint32_t b = k + 1 < n ? static_cast<unsigned char>(text[i + k + 1]) : 0;
+            const uint32_t c = k + 2 < n ? static_cast<unsigned char>(text[i + k + 2]) : 0;
+            const uint32_t triple = (a << 16) | (b << 8) | c;
+            out.push_back(kB64[(triple >> 18) & 0x3F]);
+            out.push_back(kB64[(triple >> 12) & 0x3F]);
+            out.push_back(k + 1 < n ? kB64[(triple >> 6) & 0x3F] : '=');
+            out.push_back(k + 2 < n ? kB64[triple & 0x3F] : '=');
+        }
+        out += "?=";
+        i += n;
+    }
+    return out;
+}
+
 std::vector<std::string> ntfy_headers(AlertSeverity sev, const std::string& rule_name) {
     return {
-        "Title: budyk: " + header_value(rule_name),
+        "Title: " + header_text("budyk: " + rule_name),
         std::string("Priority: ") + ntfy_priority(sev),
         std::string("Tags: ") + severity_name(sev),
     };
@@ -321,8 +362,10 @@ std::vector<std::string> ntfy_headers(AlertSeverity sev, const std::string& rule
 std::string ntfy_payload(AlertSeverity, const std::string&,
                          const std::string& message) {
     // ntfy.sh accepts a plain-text body — title / priority / tags are
-    // all carried in HTTP headers. The body is just the message text.
-    return message;
+    // all carried in HTTP headers. The body is just the message text,
+    // as UTF-8: a body that is not (a process name's bytes) is taken
+    // by ntfy as a file, and the alert arrives as an attachment.
+    return utf8_sanitize(message);
 }
 
 std::string telegram_payload(AlertSeverity sev, const std::string& chat_id,
@@ -366,22 +409,25 @@ std::string smtp_message(AlertSeverity sev, const std::string& from,
     out.reserve(message.size() + rule_name.size() + 256);
     out += "From: ";    out += header_value(from); out += "\r\n";
     out += "To: ";      out += header_value(to);   out += "\r\n";
-    out += "Subject: [budyk:"; out += severity_name(sev); out += "] "; out += header_value(rule_name);
+    out += "Subject: ";
+    out += header_text(std::string("[budyk:") + severity_name(sev) + "] " + rule_name);
     out += "\r\n";
     out += "Date: ";    out += date_buf; out += "\r\n";
     out += "MIME-Version: 1.0\r\n";
     out += "Content-Type: text/plain; charset=utf-8\r\n";
+    out += "Content-Transfer-Encoding: 8bit\r\n";
     out += "\r\n";
     // The body's line ends as SMTP has them, CR LF: curl dot-stuffs a
     // line that starts with "." only when CR LF ends the one before, so
     // a bare-LF "\n.\n" in the message (a process name holds anyone's
     // bytes) went out as it was, and an MTA that takes <LF>.<LF> as the
     // end of DATA cut the mail there and read the rest as commands.
-    for (size_t i = 0; i < message.size(); ++i) {
-        const char c = message[i];
+    const std::string body = utf8_sanitize(message);   // charset=utf-8 says so
+    for (size_t i = 0; i < body.size(); ++i) {
+        const char c = body[i];
         if (c == '\r') {
             out += "\r\n";
-            if (i + 1 < message.size() && message[i + 1] == '\n') ++i;
+            if (i + 1 < body.size() && body[i + 1] == '\n') ++i;
         } else if (c == '\n') {
             out += "\r\n";
         } else {
@@ -407,7 +453,7 @@ std::string twilio_form(const std::string& from, const std::string& to,
     out.reserve(text.size() + from.size() + to.size() + 32);
     out += "From=" + url_encode(from);
     out += "&To="  + url_encode(to);
-    out += "&Body="+ url_encode(text);
+    out += "&Body="+ url_encode(utf8_sanitize(text));
     return out;
 }
 
