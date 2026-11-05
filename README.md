@@ -635,11 +635,18 @@ budyk suggest-rules --config config.yaml --window 7d --output suggested.lua
 ```
 
 This reads the collected history (the L2 and L1 rings: every L1
-interval is there, whether anyone was looking or not) and writes
-`watch()` rules with thresholds derived from it, each to fire when its
-condition holds 5 ticks in a row (3 for memory). The file is loaded as
-`budyk serve` would load it before it is written. Review the rules
-before use.
+interval is there, whether anyone was looking or not; each record
+weighs the time it stands for, so an hour at L2 counts as an hour) and
+writes `watch()` rules with thresholds derived from it, each to fire
+when its condition holds 5 ticks in a row (3 for memory). A threshold
+that would land inside what the host does every day (a CPU at 99 %, a
+host running on swap) is a comment saying so, not a rule. The file is
+loaded as `budyk serve` would load it with this config (exec on or off,
+its allowlist, the limits, the custom levels) before it is written; a
+window with no samples writes nothing, exit 1. Review the rules before
+use. `--ai` sends the statistics (no names, no addresses) to the LLM
+through `curl(1)`, which must be on the `PATH`; a reply that does not
+load that way, or holds a control byte, is refused.
 
 ### Checking the ring files
 

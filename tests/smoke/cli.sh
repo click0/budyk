@@ -119,6 +119,20 @@ else
     echo "FAIL: suggest-rules: $(cat "$DIR/err")"; fail=1
 fi
 
+# A window with no sample in it is said so, exit 1, and nothing is
+# written: Tier A wrote a header alone ("Generated from 0 samples"),
+# --ai sent "no samples available" to the API. The daemon stopped over
+# two seconds ago, so a 1 s window holds nothing.
+sleep 2
+if "$BIN" suggest-rules --config "$DIR/config.yaml" --window 1s --output "$DIR/none.lua" 2> "$DIR/err"; then
+    echo "FAIL: suggest-rules with no sample in the window exited 0"; fail=1
+elif grep -q "no samples in the last 1s (the rings hold [1-9][0-9]* older records); nothing written" "$DIR/err" &&
+     [ ! -e "$DIR/none.lua" ]; then
+    echo "ok   suggest-rules with no sample in the window says so and writes nothing"
+else
+    echo "FAIL: suggest-rules with no sample in the window: $(cat "$DIR/err")"; fail=1
+fi
+
 # A config that is not the daemon's (rings of other sizes): each ring
 # said, with why (it was "cannot read ... run `budyk serve` first").
 { cat "$DIR/config.yaml"; printf 'storage:\n  tier2_max_mb: 3\n  tier3_max_mb: 3\n'; } > "$DIR/other.yaml"
@@ -205,6 +219,43 @@ if os.path.exists(d + "/finished"):
     sys.exit("FAIL: curl went on with the request after budyk was interrupted")
 print("ok   Ctrl-C during suggest-rules --ai kills curl and removes its %d temp files"
       % len(while_running))
+EOF
+
+# The LLM's reply, through a stand-in curl that writes a canned one: a
+# NUL byte in it (as \u0000) is refused (it hid the code after it from
+# the check, which Lua then loaded); a rule calling exec() is refused
+# while the config has exec off, as the daemon would refuse the file
+# (the check passed it with exec on, the daemon loaded nothing); a good
+# reply is written, and `exec` named in it is noted.
+python3 - "$BIN" "$DIR" <<'EOF' || fail=1
+import json, os, subprocess, sys
+binary, d = sys.argv[1], sys.argv[2]
+with open(d + "/bin/curl", "w") as f:
+    f.write("#!/bin/sh\nwhile [ $# -gt 1 ]; do if [ \"$1\" = -o ]; then cp '%s/reply.json' \"$2\"; fi; shift; done\n" % d)
+os.chmod(d + "/bin/curl", 0o755)
+env = dict(os.environ, PATH=d + "/bin:" + os.environ["PATH"], TMPDIR=d + "/tmp",
+           ANTHROPIC_API_KEY="sk-smoke-not-a-key")
+def run(text, out):
+    with open(d + "/reply.json", "w") as f:
+        json.dump({"content": [{"type": "text", "text": text}], "stop_reason": "end_turn"}, f)
+    if os.path.exists(out):
+        os.unlink(out)
+    p = subprocess.run([binary, "suggest-rules", "--config", d + "/config.yaml", "--window", "1h",
+                        "--ai", "--output", out], env=env, stderr=subprocess.PIPE, text=True)
+    return p.returncode, p.stderr
+good = "watch(\"a\", { when = function() return cpu.total_percent > 95 end })\n"
+rc, err = run("```lua\n" + good + "-- \u0000\nwatch(\"evil\", { when = function() return true end, action = exec{\"/bin/true\"} })\n```", d + "/ai1.lua")
+if rc != 1 or "control byte (0x00 at offset" not in err or os.path.exists(d + "/ai1.lua"):
+    sys.exit("FAIL: a reply with a NUL: exit %d, %s" % (rc, err.strip()))
+rc, err = run("```lua\n" + good + "watch(\"e\", { when = function() return true end, action = exec{\"/bin/true\"} })\n```", d + "/ai2.lua")
+if rc != 1 or "exec is disabled" not in err or os.path.exists(d + "/ai2.lua"):
+    sys.exit("FAIL: a reply calling exec() with exec off in the config: exit %d, %s" % (rc, err.strip()))
+rc, err = run("```lua\n" + good + "-- no exec here, exec is off\n```", d + "/ai3.lua")
+if rc != 0 or "note: the suggestion calls exec()" not in err or not os.path.exists(d + "/ai3.lua"):
+    sys.exit("FAIL: a good reply: exit %d, %s" % (rc, err.strip()))
+if good not in open(d + "/ai3.lua").read():
+    sys.exit("FAIL: the good reply was not written as it was")
+print("ok   suggest-rules --ai refuses a reply with a NUL, and one calling exec() while exec is off")
 EOF
 took=
 for w in 367d 213503982334602d 99999999999999999999d 0d -1d 7 d; do

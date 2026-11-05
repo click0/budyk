@@ -317,6 +317,119 @@ int main() {
         assert(got <= 0);
     }
 
+    // 20. A threshold inside what the host does every day is no rule,
+    //     with the reason as a comment: swap at 96-98 % got
+    //     `swap.used_percent > 90`, a CPU at p99 99 % `> 95`, a host
+    //     with 3 % of memory available `< 5` critical, each holding all
+    //     the time. The document still loads.
+    {
+        MetricBaseline cpu{};
+        cpu.n = 100; cpu.max = 100; cpu.p99 = 99;
+        const std::string c = suggest_rule_cpu_total_percent(cpu);
+        assert(contains(c, "-- high_cpu: no rule: p99 is 99.0%, at or above the 95% cap"));
+        assert(!contains(c, "watch("));
+        MetricBaseline swap{};
+        swap.n = 100; swap.max = 98; swap.p99 = 96;
+        const std::string s = suggest_rule_swap_used_percent(swap);
+        assert(contains(s, "-- swap_pressure: no rule: p99 is 96.0%, at or above the 90% cap"));
+        assert(!contains(s, "watch("));
+        MetricBaseline mem{};
+        mem.n = 100; mem.min = 3.2; mem.mean = 4; mem.max = 6;
+        const std::string m = suggest_rule_mem_available_percent(mem);
+        assert(contains(m, "-- memory_low: no rule: the minimum is 3.2%, at or under the 5% floor"));
+        assert(!contains(m, "watch("));
+        MetricBaseline edge{};                          // p99 94: a rule at 95 still
+        edge.n = 100; edge.max = 100; edge.p99 = 94;
+        assert(contains(suggest_rule_cpu_total_percent(edge), "cpu.total_percent > 95"));
+        std::string why;
+        assert(check_suggested_rules(c + s + m, &why) == 0 && why.empty());
+    }
+
+    // 21. The check engine as the config sets the daemon's up: exec off
+    //     refuses a reply that calls exec() ("exec is disabled"), where
+    //     the check passed it and the daemon then loaded no rule; a
+    //     custom level's name is known to escalate(); the limits are the
+    //     config's.
+    {
+        const std::string with_exec =
+            "watch('x', { when = function() return true end, action = exec({'/bin/true'}) })\n";
+        std::string why;
+        assert(check_suggested_rules(with_exec, &why) == 1);            // the default: exec on
+        CheckOptions off;
+        off.enable_exec = false;
+        assert(check_suggested_rules(with_exec, &why, &off) == -1);
+        assert(contains(why, "exec is disabled"));
+        CheckOptions lv;
+        lv.level_names.push_back("burst");
+        const std::string esc =
+            "watch('y', { when = function() return true end, action = function() escalate('burst') end })\n"
+            "escalate('burst', 1)\n";
+        assert(check_suggested_rules(esc, &why) == -1 && contains(why, "burst"));
+        assert(check_suggested_rules(esc, &why, &lv) == 1);
+        CheckOptions tight;
+        tight.instruction_limit = 1000;
+        assert(check_suggested_rules("for i = 1, 100000 do end\n"
+                                     "watch('z', { when = function() return true end })\n",
+                                     &why) == 1);
+        assert(check_suggested_rules("for i = 1, 100000 do end\n"
+                                     "watch('z', { when = function() return true end })\n",
+                                     &why, &tight) == -1);
+        assert(contains(why, "instruction"));
+    }
+
+    // 22. A control byte in the reply: its offset. A NUL in a `--` comment
+    //     hid the code after it from the check (a C string) while Lua's
+    //     lexer skipped it; tab, LF and CR are text.
+    {
+        std::string nul = "watch('a', { when = function() return true end })\n-- \n";
+        nul.push_back('\0');
+        nul += "watch('evil', { when = function() return true end })\n";
+        assert(suggestion_control_byte(nul) == 54);
+        assert(suggestion_control_byte("\tok\r\n") == std::string::npos);
+        assert(suggestion_control_byte("\x1b[31m") == 0);
+        assert(suggestion_control_byte("") == std::string::npos);
+        // The check itself reads the text whole: with the NUL past the
+        // comment's end, Lua sees the byte and refuses the chunk, where a
+        // C string ended at it and the check passed what came before.
+        std::string why;
+        assert(check_suggested_rules(std::string(nul.c_str()), &why) == 1);   // up to the NUL
+        assert(check_suggested_rules(nul, &why) == -1);
+        assert(!why.empty());
+    }
+
+    // 23. The exec() note matches the token, whatever follows it (`exec(`
+    //     and `exec (` alone did: `exec{`, `exec "x"`, `exec[[x]]` and an
+    //     alias passed in silence), not a longer name.
+    {
+        assert(suggestion_names_exec("action = exec({'/bin/x'})"));
+        assert(suggestion_names_exec("action = exec {'/bin/x'}"));
+        assert(suggestion_names_exec("action = exec \"/bin/x\""));
+        assert(suggestion_names_exec("action = exec[[/bin/x]]"));
+        assert(suggestion_names_exec("local run = exec\n"));
+        assert(suggestion_names_exec("exec"));
+        assert(!suggestion_names_exec("execute('/bin/x')"));
+        assert(!suggestion_names_exec("my_exec('/bin/x')"));
+        assert(!suggestion_names_exec("exec2('/bin/x')"));
+        assert(!suggestion_names_exec("-- nothing here\n"));
+    }
+
+    // 24. Weighted statistics: ten samples at 90 % among ninety at 20 %
+    //     are a p99 of 90 counted alike (a rule at 95), and of 20 when
+    //     each stands for a hundredth of the time (a rule at 85): an L2
+    //     stretch of 30 s records weighed ten times the same time at L1.
+    {
+        Sample h[100]{};
+        double w[100];
+        for (int i = 0; i < 100; ++i) {
+            h[i].groups = kGroupsAll;
+            h[i].cpu.count = 4;
+            h[i].cpu.total_percent = i < 90 ? 20.0 : 90.0;
+            w[i] = i < 90 ? 1.0 : 0.01;
+        }
+        assert(contains(suggest_rules_for_samples(h, 100), "cpu.total_percent > 95"));
+        assert(contains(suggest_rules_for_samples(h, 100, w), "cpu.total_percent > 85"));
+    }
+
     std::printf("test_suggest: PASS\n");
     return 0;
 }

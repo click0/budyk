@@ -150,6 +150,48 @@ int main() {
         assert(compute_load_1m_stats(s, 4).n == 0);
     }
 
+    // 10. Weights: with every weight 1 the statistics are the unweighted
+    //     ones; a value of weight 99 against one of weight 1 is the mean
+    //     and the p99 (the weight so far reaches 99 % at it), while at
+    //     98 against 2 the p99 is the other value.
+    {
+        double v[10], one[10];
+        for (int i = 0; i < 10; ++i) { v[i] = static_cast<double>(i + 1); one[i] = 1.0; }
+        const MetricBaseline a = compute_stats(v, 10), b = compute_stats(v, 10, one);
+        assert(near(a.mean, b.mean) && near(a.stddev, b.stddev));
+        assert(near(a.p95, b.p95) && near(a.p99, b.p99) && a.n == b.n);
+        const double two[2] = {10.0, 20.0};
+        const double w99[2] = {99.0, 1.0}, w98[2] = {98.0, 2.0};
+        const MetricBaseline c = compute_stats(two, 2, w99);
+        assert(c.n == 2 && near(c.mean, 10.1) && near(c.min, 10.0) && near(c.max, 20.0));
+        assert(near(c.p95, 10.0) && near(c.p99, 10.0));
+        assert(near(c.stddev, std::sqrt((99.0 * 0.01 + 1.0 * 98.01) / 100.0)));
+        const MetricBaseline d = compute_stats(two, 2, w98);
+        assert(near(d.p95, 10.0) && near(d.p99, 20.0));
+        // Through a Sample array: the extractor hands the weight on.
+        Sample s[2]{};
+        s[0].groups = s[1].groups = kGroupsAll;
+        s[0].cpu.total_percent = 10.0; s[1].cpu.total_percent = 20.0;
+        assert(near(compute_cpu_total_percent_stats(s, 2, w98).p99, 20.0));
+        assert(near(compute_cpu_total_percent_stats(s, 2, w99).p99, 10.0));
+    }
+
+    // 11. sample_weights(): each sample stands for the time since the one
+    //     before it, at most the cap (a gap while nothing was collected
+    //     stands for nothing); the first for the cap; two at the same
+    //     instant a millisecond.
+    {
+        const uint64_t sec = 1000000000ULL;
+        Sample s[5]{};
+        const uint64_t at[5] = {0, 30, 60, 1000, 1000};
+        for (int i = 0; i < 5; ++i) s[i].timestamp_nanos = at[i] * sec;
+        const std::vector<double> w = sample_weights(s, 5, 300 * sec);
+        assert(w.size() == 5);
+        assert(near(w[0], 300.0) && near(w[1], 30.0) && near(w[2], 30.0));
+        assert(near(w[3], 300.0) && near(w[4], 0.001));
+        assert(sample_weights(nullptr, 3, 300 * sec).empty());
+    }
+
     std::printf("test_baseline: PASS\n");
     return 0;
 }

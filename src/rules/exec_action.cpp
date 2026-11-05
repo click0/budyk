@@ -128,8 +128,8 @@ namespace {
 bool child_env_keeps(const char* name) {
     static const char* const kKeep[] = {
         "PATH", "HOME", "LANG", "TZ", "TMPDIR",
-        "http_proxy", "https_proxy", "ftp_proxy", "no_proxy",
-        "HTTP_PROXY", "HTTPS_PROXY", "FTP_PROXY", "NO_PROXY",
+        "http_proxy", "https_proxy", "ftp_proxy", "all_proxy", "no_proxy",
+        "HTTP_PROXY", "HTTPS_PROXY", "FTP_PROXY", "ALL_PROXY", "NO_PROXY",
         "CURL_CA_BUNDLE", "SSL_CERT_FILE", "SSL_CERT_DIR",
     };
     for (const char* k : kKeep) {

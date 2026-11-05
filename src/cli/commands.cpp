@@ -61,14 +61,15 @@ uint64_t parse_window_ns(const char* s) {
 // timestamp_nanos is within [now - window_ns, now]. Records that fail
 // to decode (CRC mismatch / version skew) are silently skipped. A ring
 // that cannot be opened is -1, with why in `why` ("open failed:
-// Permission denied": the rings are the service user's, 0600).
+// Permission denied": the rings are the service user's, 0600). The
+// ring's record count, in the window or not, is added to *in_ring.
 int load_samples_for_suggest(const char* ring_path,
                              uint8_t tier,
                              uint32_t record_size,
                              uint64_t cap,
                              uint64_t window_ns,
                              std::vector<budyk::Sample>* out,
-                             std::string* why) {
+                             std::string* why, uint64_t* in_ring) {
     // Read only: the daemon owns the rings (and running this as root must
     // not leave a root-owned ring behind for it).
     budyk::RingFile ring;
@@ -80,10 +81,15 @@ int load_samples_for_suggest(const char* ring_path,
 
     const uint64_t widx     = ring.write_index();
     const uint64_t valid    = widx < cap ? widx : cap;
-    const uint64_t cutoff   = now_realtime_ns() - window_ns;
+    const uint64_t now      = now_realtime_ns();
+    const uint64_t cutoff   = now - window_ns;
+    // A record stamped past now (the clock stepped back since it was
+    // written) is in no window; it was in every one.
+    const uint64_t future   = now + uint64_t{60} * 1000000000ULL;
 
     std::vector<uint8_t> buf(record_size);
     out->reserve(static_cast<size_t>(valid));
+    if (in_ring != nullptr) *in_ring += valid;
 
     // Walk every valid slot. The ring file's slots are ring-rotated when
     // widx > cap; record_decode tolerates that by reading the framing
@@ -93,6 +99,7 @@ int load_samples_for_suggest(const char* ring_path,
         budyk::Sample s{};
         if (budyk::record_decode(buf.data(), record_size, &s) != 0) continue;
         if (window_ns > 0 && s.timestamp_nanos < cutoff)              continue;
+        if (s.timestamp_nanos > future)                               continue;
         out->push_back(s);
     }
     ring.close();
@@ -110,27 +117,27 @@ std::string fmt_baseline_line(const char* name, const budyk::MetricBaseline& b) 
     return buf;
 }
 
-std::string build_llm_summary(const budyk::Sample* s, size_t n) {
+std::string build_llm_summary(const budyk::Sample* s, size_t n, const double* w) {
     if (s == nullptr || n == 0) return "no samples available\n";
     std::string out;
     out += "samples=" + std::to_string(n) + "\n";
     out += "cpu_count=" + std::to_string(budyk::newest_cpu_count(s, n)) + "\n";
     out += fmt_baseline_line("cpu.total_percent",
-                             budyk::compute_cpu_total_percent_stats(s, n));
+                             budyk::compute_cpu_total_percent_stats(s, n, w));
     out += fmt_baseline_line("mem.available_percent",
-                             budyk::compute_mem_available_percent_stats(s, n));
+                             budyk::compute_mem_available_percent_stats(s, n, w));
     out += fmt_baseline_line("swap.used_percent",
-                             budyk::compute_swap_used_percent_stats(s, n));
+                             budyk::compute_swap_used_percent_stats(s, n, w));
     out += fmt_baseline_line("load.avg_1m",
-                             budyk::compute_load_1m_stats(s, n));
+                             budyk::compute_load_1m_stats(s, n, w));
     out += fmt_baseline_line("disk.read_bytes_per_sec",
-                             budyk::compute_disk_read_bytes_per_sec_stats(s, n));
+                             budyk::compute_disk_read_bytes_per_sec_stats(s, n, w));
     out += fmt_baseline_line("disk.write_bytes_per_sec",
-                             budyk::compute_disk_write_bytes_per_sec_stats(s, n));
+                             budyk::compute_disk_write_bytes_per_sec_stats(s, n, w));
     out += fmt_baseline_line("net.rx_bytes_per_sec",
-                             budyk::compute_net_rx_bytes_per_sec_stats(s, n));
+                             budyk::compute_net_rx_bytes_per_sec_stats(s, n, w));
     out += fmt_baseline_line("net.tx_bytes_per_sec",
-                             budyk::compute_net_tx_bytes_per_sec_stats(s, n));
+                             budyk::compute_net_tx_bytes_per_sec_stats(s, n, w));
     return out;
 }
 #endif // BUDYK_LLM_ENABLED
@@ -354,13 +361,14 @@ int cmd_suggest_rules(int argc, char* argv[]) {
     // A ring that cannot be read is said so, with why: "cannot read"
     // alone, and "run `budyk serve` first", was all an admin got for
     // rings the service user owns, while the daemon had collected for weeks.
+    uint64_t in_rings = 0;                 // records in the rings, in the window or not
     auto load = [&](const char* file, uint8_t tier, int max_mb, std::vector<budyk::Sample>* out) {
         const std::string path = std::string(cfg.data_dir) + "/" + file;
         uint64_t cap = (static_cast<uint64_t>(max_mb) * kMiB) / record_size;
         if (cap == 0) cap = 1;
         std::string why;
         const int rc = load_samples_for_suggest(path.c_str(), tier, record_size, cap,
-                                                window_ns, out, &why);
+                                                window_ns, out, &why, &in_rings);
         if (rc != 0) {
             std::fprintf(stderr, "budyk suggest-rules: cannot read '%s': %s\n",
                          path.c_str(), why.c_str());
@@ -379,26 +387,61 @@ int cmd_suggest_rules(int argc, char* argv[]) {
     // Each stretch once, at the finer level.
     const uint64_t l1_ns = static_cast<uint64_t>(cfg.scheduler.l1_interval_sec) * uint64_t{1000000000};
     const std::vector<budyk::Sample> samples = budyk::merge_l2_l1(std::move(l2), l1, l1_ns);
+    l1 = {};
+    // Nothing in the window is nothing to suggest from: --ai sent "no
+    // samples available" (a paid request) and wrote the rules it got back
+    // as "Generated from 0 samples"; Tier A wrote a header alone over
+    // --output. Said so, exit 1, before any request or write.
+    if (samples.empty()) {
+        std::fprintf(stderr,
+            "budyk suggest-rules: no samples in the last %s (the rings hold %zu older "
+            "records); nothing written\n", window_arg, static_cast<size_t>(in_rings));
+        return 1;
+    }
+    // Each sample weighs the time it stands for: an L2 stretch (30 s
+    // records) counted ten times what the same time at L1 did.
+    const std::vector<double> weights = budyk::sample_weights(samples.data(), samples.size(), l1_ns);
+
+    // The check engine as `budyk serve` sets its own up from this config:
+    // exec on or off, its allowlist, the limits, the level names. A reply
+    // that called exec() passed a check with exec on, and the daemon
+    // (exec off) refused the file: "exec is disabled", rules=0.
+    budyk::CheckOptions check;
+    check.enable_exec = cfg.rules_enable_exec;
+    check.exec_allow  = cfg.rules_exec_allow;
+    check.instruction_limit = static_cast<uint64_t>(cfg.rules_instruction_limit);
+    check.memory_bytes      = static_cast<size_t>(cfg.rules_memory_mb) << 20;
+    for (const auto& lv : cfg.scheduler.custom_levels) check.level_names.push_back(lv.name);
 
     std::string doc;
     if (ai) {
 #ifdef BUDYK_LLM_ENABLED
-        const std::string summary = build_llm_summary(samples.data(), samples.size());
+        const std::string summary = build_llm_summary(samples.data(), samples.size(),
+                                                      weights.data());
         std::string why;
         if (suggest_rules_llm_cancellable(api_key, summary, &doc, &why) != 0) {
             std::fprintf(stderr, "budyk suggest-rules: LLM call failed: %s\n", why.c_str());
             return 1;
         }
+        // A control byte in the reply: a NUL in a `--` comment hid the
+        // code after it from the check (which read a C string) while
+        // Lua's lexer skipped it and loaded that code.
+        if (const size_t at = budyk::suggestion_control_byte(doc); at != std::string::npos) {
+            std::fprintf(stderr,
+                "budyk suggest-rules: the LLM's reply holds a control byte (0x%02x at offset "
+                "%zu); nothing written\n", static_cast<unsigned char>(doc[at]), at);
+            return 1;
+        }
         // Spec §3.7.1 step 6: the reply is checked before it is written.
         // A cut-off or malformed one was written out, and exit 0.
-        const int n = budyk::check_suggested_rules(doc, &why);
+        const int n = budyk::check_suggested_rules(doc, &why, &check);
         if (n <= 0) {
             std::fprintf(stderr,
                 "budyk suggest-rules: the LLM's reply is not a rules file budyk loads (%s); "
                 "nothing written\n", n == 0 ? "no watch() rule in it" : why.c_str());
             return 1;
         }
-        if (doc.find("exec(") != std::string::npos || doc.find("exec (") != std::string::npos) {
+        if (budyk::suggestion_names_exec(doc)) {
             std::fprintf(stderr,
                 "budyk suggest-rules: note: the suggestion calls exec(): read what it "
                 "would run before you use it\n");
@@ -409,11 +452,11 @@ int cmd_suggest_rules(int argc, char* argv[]) {
               " samples in window " + window_arg + ".\n\n" + doc;
 #endif // BUDYK_LLM_ENABLED: --ai was refused above
     } else {
-        doc = budyk::suggest_rules_for_samples(samples.data(), samples.size());
+        doc = budyk::suggest_rules_for_samples(samples.data(), samples.size(), weights.data());
         // The templates' own output, checked as the daemon would load it:
         // a comment in a condition once made every such file fail to load.
         std::string why;
-        if (budyk::check_suggested_rules(doc, &why) < 0) {
+        if (budyk::check_suggested_rules(doc, &why, &check) < 0) {
             std::fprintf(stderr,
                 "budyk suggest-rules: the suggested rules do not load (%s); nothing written\n",
                 why.c_str());
@@ -442,7 +485,8 @@ int cmd_suggest_rules(int argc, char* argv[]) {
             "budyk suggest-rules: wrote %zu bytes to %s "
             "(%zu samples in window %s)\n",
             doc.size(), output_path, samples.size(), window_arg);
-    } else if (std::fputs(doc.c_str(), stdout) == EOF || std::fflush(stdout) != 0) {
+    } else if (std::fwrite(doc.data(), 1, doc.size(), stdout) != doc.size() ||
+               std::fflush(stdout) != 0) {
         std::fprintf(stderr, "budyk suggest-rules: writing the standard output: %s\n",
                      std::strerror(errno));
         return 1;

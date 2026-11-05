@@ -6,7 +6,7 @@
 
 namespace budyk {
 
-/// Tier B AI rule suggestions (spec §6.2). User-initiated, opt-in via
+/// Tier B AI rule suggestions (spec §3.7.1). User-initiated, opt-in via
 /// `budyk suggest-rules --ai --api-key <KEY>`. The implementation runs
 /// curl(1) under the hood — see llm_client.cpp — so the daemon adds no
 /// link-time dependency on TLS / HTTP libraries.

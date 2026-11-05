@@ -52,11 +52,19 @@ A budyk built with
 (the FreeBSD port, the Docker image) has no LLM client, and
 .B \-\-ai
 says so.
-The history is the L2 and the L1 rings', each stretch of time once.
-What is written is first loaded as
+The history is the L2 and the L1 rings', each stretch of time once,
+each record weighing the time it stands for. A threshold inside what
+the host does every day is a comment, not a rule. What is written is
+first loaded as
 .B budyk serve
-loads a rules file: an LLM reply that does not load, or one cut off,
-is not written, and the exit status is 1.
+loads a rules file with this config (exec on or off, its allowlist, the
+limits, the custom levels): an LLM reply that does not load, one cut
+off, or one with a control byte is not written, and the exit status
+is 1; a window with no samples the same.
+.B \-\-ai
+runs
+.BR curl (1),
+which must be on the PATH.
 .TP
 \fBwatch\-files\fR [\fB\-\-timeout\fR \fIms\fR] \fIpath\fR ...
 Print the changes to the files named, as
