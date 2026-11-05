@@ -290,6 +290,27 @@ int main() {
         ::unlink(path.c_str());
     }
 
+    // 16. Two threads autosaving at once (a login on the HTTP thread, an
+    //     expired session evicted on the main thread) while the saves
+    //     fail: the last result they compare against is shared, and was
+    //     written by both without a lock (ThreadSanitizer: a data race;
+    //     the "cannot save" line could come twice or not at all).
+    {
+        const std::string path = mktmp();
+        ::unlink(path.c_str());
+        SessionStore s(0);                       // every session expires at once
+        s.set_persist_path(path + "/no-such-dir/sessions.tsv");
+        std::thread http([&s] {
+            for (int i = 0; i < 50; ++i) (void)s.create();
+        });
+        for (int i = 0; i < 50; ++i) {
+            const std::string tok = s.create();
+            (void)s.verify(tok);                 // expired: evicted, autosaved
+        }
+        http.join();
+        assert(s.size() == 0 || s.size() <= 100);
+    }
+
     std::printf("test_session: PASS\n");
     return 0;
 }

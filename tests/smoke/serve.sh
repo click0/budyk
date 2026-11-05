@@ -479,6 +479,44 @@ if grep -qE 'ERROR: (Address|Leak)Sanitizer|ThreadSanitizer|runtime error:' "$DI
     echo "FAIL: sanitizer report in the signal runs"; cat "$DIR/sig.log"; fail=1
 fi
 
+# A SIGTERM during an inline exec() (wait = true) ends the command and
+# the tick: two rules each waiting on a hung command (60 s) held the
+# shutdown for 120 s, past systemd's 90, and the SIGKILL lost the rule
+# state and the open fold windows. The daemon must be gone within 5 s.
+cat > "$DIR/hang.lua" <<'EOF'
+watch('hang1', { when = function() exec({'/bin/sleep', '100'}, { timeout = 60, wait = true }) return false end })
+watch('hang2', { when = function() exec({'/bin/sleep', '100'}, { timeout = 60, wait = true }) return false end })
+EOF
+cat > "$DIR/hang.yaml" <<EOF
+data_dir: $DIR/hangdata
+listen: 127.0.0.1
+port: $PORT
+collection: { mode: always, l1: { interval: 1 } }
+rules:
+  path: $DIR/hang.lua
+  exec: { enabled: true, allow: [/bin/sleep] }
+EOF
+"$BIN" serve --config "$DIR/hang.yaml" > "$DIR/hang.log" 2>&1 &
+PID=$!
+i=0
+until curl -s -o /dev/null "http://127.0.0.1:$PORT/api/health"; do
+    i=$((i + 1)); [ "$i" -lt 100 ] || break; sleep 0.1
+done
+sleep 2                                    # into the first rule's sleep
+kill -TERM "$PID"
+i=0
+while kill -0 "$PID" 2>/dev/null && [ "$i" -lt 50 ]; do i=$((i + 1)); sleep 0.1; done
+if kill -0 "$PID" 2>/dev/null; then
+    echo "FAIL: a SIGTERM during an inline exec() waited: still up after 5 s"; fail=1; kill -KILL "$PID"
+else
+    echo "ok   a SIGTERM during an inline exec() ends the daemon in $((i / 10)).$((i % 10)) s"
+fi
+wait "$PID" || { echo "FAIL: the daemon exited non-zero after the inline exec"; fail=1; }
+PID=
+if pgrep -f "^/bin/sleep 100$" > /dev/null 2>&1; then
+    echo "FAIL: the inline exec's command outlived the daemon"; fail=1; pkill -f "^/bin/sleep 100$"
+fi
+
 if [ "$fail" -ne 0 ]; then
     echo "--- daemon log ---"; cat "$DIR/log"
     exit 1

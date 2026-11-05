@@ -114,6 +114,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mounts (README, CLAUDE.md).
 
 
+- **A SIGTERM waited out every inline `exec()` of the tick.** An
+  `exec(cmd, { wait = true })` on the main thread ran to its timeout
+  (up to 60 s) whatever the signal said, and the tick went on to the
+  next rule: two rules waiting on hung commands held the shutdown for
+  118 s, past systemd's 90, and the SIGKILL lost the rule state since
+  the last periodic save, the open fold windows, and left the commands
+  running. The stop flag cancels an inline command (killed with its
+  process group) and ends the tick's rules.
+- **`freeze()` refused budyk's pid but not its threads' ids**: on
+  Linux `kill()` with a thread id signals the whole process, and
+  `/proc/<tid>/comm` reads "budyk" as the pid's does, so a rule with a
+  number from elsewhere than `proc.top` could stop the daemon. One of
+  budyk's own thread ids is refused as its pid is.
+- A session that expired while its WebSocket was open (the main thread
+  evicting it) and a login (the HTTP thread) autosaved at once, and
+  both wrote the "last save result" the log line compares against
+  without a lock (ThreadSanitizer: a data race, once the saves fail).
+  It is an atomic.
+- `drop_sessions()` closed clients by fd number after releasing the
+  hub's lock: the HTTP thread could meanwhile drop that client, accept
+  a connection with the same number and add it, and the new, valid
+  client was the one closed. Matched by fd and token.
+- An alert whose `curl` could not be forked named the wrong error: the
+  errno was read after the environment's buffers were freed. The
+  fork's saved errno is used.
+- The wake pipe's failure message printed a bare errno number.
+
 
 - **The dashboard's history chart said "no data" in on-demand mode**, and
   ended a level's interval ago in the other (5 minutes at L1): it drew

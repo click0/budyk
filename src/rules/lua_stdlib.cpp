@@ -526,7 +526,7 @@ int exec_impl(lua_State* L, budyk::LuaEngine* eng, ExecOutcome* out, char* err,
     argv_ptrs.push_back(nullptr);
 
     out->kind = ExecOutcome::Ran;
-    out->rc   = budyk::exec_command(argv_ptrs.data(), timeout_s, &out->res);
+    out->rc   = budyk::exec_command(argv_ptrs.data(), timeout_s, &out->res, eng->stop_flag());
     return 0;
 }
 

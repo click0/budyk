@@ -9,6 +9,12 @@
 #include <sys/wait.h>
 #include <signal.h>
 #include <unistd.h>
+#if defined(BUDYK_LINUX)
+#  include <sys/syscall.h>
+#  include <atomic>
+#  include <chrono>
+#  include <thread>
+#endif
 
 #include <cassert>
 #include <cerrno>
@@ -98,6 +104,24 @@ int main() {
         assert(!freeze_refused(2) && !freeze_refused(0x7FFFFFFE));
         assert(freeze_pid(static_cast<int>(::getpid())) == -EPERM);   // not stopped: we are still here
         assert(unfreeze_pid(static_cast<int>(::getpid())) == -EPERM);
+#if defined(BUDYK_LINUX)
+        // One of our own threads: kill() with its id signals the whole
+        // process (and /proc/<tid>/comm reads our name), so it is
+        // refused as the pid is.
+        // While the thread lives: its /proc/self/task entry goes with it.
+        std::atomic<pid_t> tid{0};
+        std::atomic<bool>  done{false};
+        std::thread t([&] {
+            tid = static_cast<pid_t>(::syscall(SYS_gettid));
+            while (!done) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        });
+        while (tid == 0) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        assert(tid > 0 && tid != ::getpid());
+        assert(freeze_refused(static_cast<int>(tid)));
+        assert(freeze_pid(static_cast<int>(tid)) == -EPERM);
+        done = true;
+        t.join();
+#endif
         assert(freeze_pid(1) == -EPERM);
     }
 

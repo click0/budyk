@@ -193,15 +193,20 @@ size_t WebSocketHub::drop_sessions(const std::function<bool(const std::string&)>
             if (!c.session.empty()) tokens.emplace_back(c.fd, c.session);
         }
     }
-    std::vector<int> gone;
+    // By fd and token both: `valid` runs without the lock (it may save
+    // the sessions file, with an fsync), and in that time the HTTP
+    // thread can close the client, accept a new connection with the
+    // same fd number and add() it; by the fd alone that new client was
+    // the one closed.
+    std::vector<std::pair<int, std::string>> gone;
     for (const auto& t : tokens) {
-        if (!valid(t.second)) gone.push_back(t.first);
+        if (!valid(t.second)) gone.push_back(t);
     }
     if (gone.empty()) return 0;
     size_t dropped = 0;
     std::lock_guard<std::mutex> g(mtx_);
     for (auto it = clients_.begin(); it != clients_.end(); ) {
-        if (std::find(gone.begin(), gone.end(), it->fd) != gone.end()) {
+        if (std::find(gone.begin(), gone.end(), std::make_pair(it->fd, it->session)) != gone.end()) {
             // A close frame first (1008, policy violation), as far as the
             // socket takes it: the page can tell a session that ended
             // from a dropped connection. Only when nothing is owed: sent
