@@ -259,6 +259,38 @@ else
 fi
 stop ondemand
 
+# 3b. on-demand: a watched file's change wakes the sleep --------------------
+# The watcher's descriptor is in the sleep's poll(). The change was seen
+# at the next tick: in on-demand mode with no client up to the L1
+# interval later (5 minutes by default), while the changelog said
+# "reported when it happens". The idle tick here is every 20 s.
+cat > "$DIR/odwake.yaml" <<EOF
+data_dir: $DIR/odwake
+listen: 127.0.0.1
+port: $PORT
+rules: { path: $DIR/rules.lua }
+security: { file_watch: { enabled: true, paths: [$DIR/watched_w] } }
+collection:
+  mode: on-demand
+  l1: { interval: 20 }
+EOF
+: > "$DIR/watched_w"
+start odwake
+sleep 1
+echo changed >> "$DIR/watched_w"
+i=0
+until grep -q '^\[budyk\] tampered$' "$DIR/odwake.log"; do
+    i=$((i + 1))
+    [ "$i" -lt 30 ] || break
+    sleep 0.1
+done
+if grep -q '^\[budyk\] tampered$' "$DIR/odwake.log"; then
+    echo "ok   on-demand: a watched file's change wakes the sleep (seen within $((i / 10)).$((i % 10)) s, the idle tick every 20 s)"
+else
+    echo "FAIL: on-demand: a watched file's change waited for the idle tick (not seen in 3 s)"; fail=1
+fi
+stop odwake
+
 # 4. SIGHUP between ticks ---------------------------------------------------
 # The rules are reloaded at once, and the sleep goes on: SIGHUP used to end
 # it, and the tick right after the last one stored rates over a few ms.

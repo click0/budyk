@@ -137,21 +137,27 @@ constexpr int kMinWakeGapMs = 250;
 // Sleep for at most `ms` milliseconds, returning early when:
 //   * a signal sets g_stop (shutdown), at once, whichever thread took it
 //     (the handler writes the wake pipe);
-//   * wake_collection_loop() is called (a client connected), but not
+//   * wake_collection_loop() is called (a client connected), or
+//     `watch_fd` (the file watcher's) has an event to read, but not
 //     before kMinWakeGapMs into the sleep: a wake-up earlier than that
-//     shortens the sleep to it.
+//     shortens the sleep to it. The change to a watched file was seen
+//     at the next tick, in on-demand mode up to the L1 interval later.
 // A SIGHUP (g_reload) is applied here, through `reload`, and the sleep
 // goes on: it no longer waits out an L1 sleep, and no longer ends it
 // either (a tick right after the last one stored rates over a few ms).
 // g_stop is looked at again after every wake and every reload: a SIGTERM
 // taken during a reload was left to wait out the sleep. Safe to call with
 // ms <= 0 (no-op).
-void interruptible_sleep(int ms, const std::function<void()>& reload) {
+void interruptible_sleep(int ms, const std::function<void()>& reload, int watch_fd = -1) {
     if (ms <= 0 || g_stop) return;
     struct timespec ts{};
     ::clock_gettime(CLOCK_MONOTONIC, &ts);
     const int64_t start_ms = static_cast<int64_t>(ts.tv_sec) * 1000 + ts.tv_nsec / 1000000;
     int64_t deadline_ms    = start_ms + static_cast<int64_t>(ms);
+    // poll() leaves a negative descriptor out. The watcher's is taken
+    // out once it has fired: its event stays readable until the tick
+    // reads it, and the sleep goes on to its floor.
+    struct pollfd pfds[2] = {{g_wake_pipe[0], POLLIN, 0}, {watch_fd, POLLIN, 0}};
     for (;;) {
         if (g_reload) {
             g_reload = 0;
@@ -163,18 +169,24 @@ void interruptible_sleep(int ms, const std::function<void()>& reload) {
                                ts.tv_nsec / 1000000;
         if (now_ms >= deadline_ms) return;
 
-        struct pollfd pfd{g_wake_pipe[0], POLLIN, 0};
-        const int rc = ::poll(&pfd, g_wake_pipe[0] >= 0 ? 1 : 0,
-                              static_cast<int>(deadline_ms - now_ms));
+        pfds[0].revents = pfds[1].revents = 0;
+        const int rc = ::poll(pfds, 2, static_cast<int>(deadline_ms - now_ms));
         if (rc > 0) {
             // A client's wake writes 1, the signal handler's 0: a signal
             // is handled at the top of the loop, with no floor; a client
             // wake keeps its floor (and a SIGHUP that came with it is the
-            // caller's to apply).
+            // caller's to apply). A watched file's change is a client's
+            // wake.
             char buf[64];
             bool client = false;
-            for (ssize_t n; (n = ::read(g_wake_pipe[0], buf, sizeof(buf))) > 0; ) {
-                for (ssize_t i = 0; i < n; ++i) client = client || buf[i] != 0;
+            if (pfds[0].revents != 0) {
+                for (ssize_t n; (n = ::read(g_wake_pipe[0], buf, sizeof(buf))) > 0; ) {
+                    for (ssize_t i = 0; i < n; ++i) client = client || buf[i] != 0;
+                }
+            }
+            if (pfds[1].revents != 0) {
+                client     = true;
+                pfds[1].fd = -1;
             }
             if (g_stop) return;
             if (client) {
@@ -759,6 +771,10 @@ int cmd_serve(int argc, char* argv[], const char* version) {
     };
 
     uint64_t prev_wall_ns = 0, prev_mono_ns = 0;   // the last collecting tick's clocks
+    // The sleep wakes on the watcher's descriptor too: a watched file's
+    // change was seen at the next tick, in on-demand mode up to the L1
+    // interval later with no client.
+    const int watch_fd = fw_active ? file_watcher.fd() : -1;
     while (!g_stop) {
         // SIGHUP latched in the handler — process it at a clean tick
         // boundary so an in-flight eval_tick / store can't race with
@@ -770,6 +786,10 @@ int cmd_serve(int argc, char* argv[], const char* version) {
 
         budyk::Sample s{};
         s.timestamp_nanos = now_realtime_ns();
+        // The sleep ends the level's interval after this, the tick's
+        // start: slept whole after the tick, it put the tick's length
+        // on every period (a 50 ms tick made L3 0.95 Hz).
+        const uint64_t tick_mono_ns = now_monotonic_ns();
 
         // Clients that hold the level at L3: every open WebSocket (the
         // dashboard) plus one for a recent /api/samples poller (the TUI).
@@ -837,13 +857,14 @@ int cmd_serve(int argc, char* argv[], const char* version) {
                         sched.higher(collect_at, sched.select(now_realtime_ns()));
                     if (sched.collects(raised)) {
                         slept_at = raised;
-                        interruptible_sleep(kMinWakeGapMs, reload_rules);
+                        interruptible_sleep(kMinWakeGapMs, reload_rules, watch_fd);
                         continue;
                     }
                     if (sched.interval_ms(raised) < idle_ms) idle_ms = sched.interval_ms(raised);
                 }
             }
-            interruptible_sleep(idle_ms, reload_rules);
+            interruptible_sleep(budyk::sleep_left_ms(idle_ms, now_monotonic_ns() - tick_mono_ns),
+                                reload_rules, watch_fd);
             continue;
         }
         collect_ctx.mono_now_ns = now_monotonic_ns();
@@ -933,9 +954,10 @@ int cmd_serve(int argc, char* argv[], const char* version) {
         // would leave stale samples for the next client's catch-up; no
         // sooner than kMinWakeGapMs after this tick (a reset due moments
         // after it made the next tick's rates a few ms wide).
-        const int sleep_ms = warm.cap_sleep_ms(sched.interval_ms(next), now_realtime_ns(),
-                                               kMinWakeGapMs);
-        interruptible_sleep(sleep_ms, reload_rules);
+        const int sleep_ms = warm.cap_sleep_ms(
+            budyk::sleep_left_ms(sched.interval_ms(next), now_monotonic_ns() - tick_mono_ns),
+            now_realtime_ns(), kMinWakeGapMs);
+        interruptible_sleep(sleep_ms, reload_rules, watch_fd);
     }
 
     std::fprintf(stderr, "budyk serve: shutting down\n");

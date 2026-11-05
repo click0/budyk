@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The tick's own length was added to every period.** The loop slept
+  the level's whole interval after the tick, so a 50 ms tick made L3
+  0.95 Hz and a 100 ms level 6.7 Hz, and every rate was over a period
+  that much longer than the one set. The sleep ends the interval after
+  the tick's start (`sleep_left_ms()`).
+- **A watched file's change waited for the next tick**: in on-demand
+  mode with no client up to the L1 interval later (5 minutes by
+  default), while this file said "reported when it happens". The file
+  watcher's descriptor is in the sleep's `poll()`: a change wakes the
+  loop (no sooner than 250 ms after the tick, as a client's connect
+  does), the rules run on it, and in on-demand mode an `escalate()`
+  there collects at once.
 - **An alert that is not ASCII arrived wrong on ntfy and by mail.** A
   rule's name went raw into ntfy's `Title` header and the mail's
   `Subject`, where a header line is ASCII: shown as mojibake, or the

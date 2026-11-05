@@ -99,10 +99,13 @@ the code still differ, the code wins and this file says how.
 There is no event-loop library (no libuv, kqueue or epoll). The daemon is:
 
 - **Main thread:** the collector tick: collect → store → hot buffer → Lua
-  rules → WebSocket broadcast → sleep until the next tick. The sleep is a
-  `poll()` on a wake pipe, so an escalation (a client connecting, a rule
-  calling `escalate()`) cuts it short, though to no less than 250 ms after
-  the tick (`kMinWakeGapMs`: a rate over a few ms is noise). A SIGHUP is
+  rules → WebSocket broadcast → sleep until the next tick: the interval
+  from the tick's start, not from its end (`sleep_left_ms()`). The
+  sleep is a `poll()` on a wake pipe and the file watcher's descriptor,
+  so an escalation (a client connecting, a rule calling `escalate()`)
+  or a watched file's change cuts it short, though to no less than 250
+  ms after the tick (`kMinWakeGapMs`: a rate over a few ms is noise).
+  A SIGHUP is
   applied inside the sleep, which goes on. The new rules file is loaded
   into a scratch engine first, and one that does not load leaves the
   rules as they were. In on-demand mode a tick whose level is L1 or L2
