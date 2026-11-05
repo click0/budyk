@@ -205,6 +205,17 @@ int main() {
         assert(has_sample("{\"count\":1,\"samples\":[{\"ts\":1,\"cpu\":{}}]}"));
     }
 
+    // 11. retry_after_seconds: a 429's Retry-After in seconds, any case,
+    //     with or without a space; none, a date or an absurd value is 0.
+    {
+        assert(retry_after_seconds("Content-Type: text/plain\r\nRetry-After: 37\r\n") == 37);
+        assert(retry_after_seconds("retry-after:5\r\n") == 5);
+        assert(retry_after_seconds("Retry-After: Wed, 21 Oct 2015 07:28:00 GMT\r\n") == 0);
+        assert(retry_after_seconds("Retry-After: 999999\r\n") == 0);
+        assert(retry_after_seconds("Retry-After-Not: 5\r\nX-Retry-After: 5\r\n") == 0);
+        assert(retry_after_seconds("") == 0);
+    }
+
     std::printf("test_tui: PASS\n");
     return 0;
 }

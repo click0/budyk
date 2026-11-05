@@ -423,6 +423,190 @@ if n < 2:
 print("ok   the TUI with stdin at its end asks once a second: %d requests in 4 s" % n)
 EOF
 
+# The TUI against a fake API, in a pty:
+#   - a key that is not a quit is not a fetch: 200 key presses over 2 s
+#     sent 200 requests (a held key, a paste), about 3 now;
+#   - `q` while a request waits on a stalled daemon ends the TUI at once
+#     (the key was read after the 8 s bound);
+#   - a reply that streams for ever is cut at 16 MiB and named (it was
+#     read into memory until the OOM killer);
+#   - a login that does not get through when the session has to be
+#     renewed (the connection closed with no reply: a restart, a proxy)
+#     is tried again (one such gave up for good, "the password is no
+#     longer accepted", though the password was right);
+#   - the Procs line has no iowait while the cpu group is a baseline.
+python3 - "$BIN" <<'EOF' || fail=1
+import os, pty, select, signal, socket, sys, threading, time
+binary = sys.argv[1]
+SAMPLE = (b'{"count":1,"samples":[{"ts":1,"level":1,"groups":["cpu","mem","proc","uptime"],'
+          b'"cpu":{"total_percent":1.0,"count":4,"iowait_percent":0},'
+          b'"mem":{"total":1000,"available":500,"available_percent":50},'
+          b'"proc":{"total":10,"blocked":0,"zombie":0},"uptime_seconds":100}],'
+          b'"detail":{"collected":[],"processes":[]}}\n')
+BASELINE = SAMPLE.replace(b'"groups":["cpu","mem","proc","uptime"],',
+                          b'"groups":["mem","proc","uptime"],"baseline":["cpu"],')
+class Server:
+    def __init__(self, handler):
+        self.srv = socket.socket()
+        self.srv.bind(("127.0.0.1", 0))
+        self.srv.listen(64)
+        self.port = self.srv.getsockname()[1]
+        self.handler = handler
+        self.log = []
+        threading.Thread(target=self.loop, daemon=True).start()
+    def loop(self):
+        while True:
+            try:
+                c, _ = self.srv.accept()
+            except OSError:
+                return
+            threading.Thread(target=self.one, args=(c,), daemon=True).start()
+    def one(self, c):
+        req = b""
+        while b"\r\n\r\n" not in req:
+            ch = c.recv(4096)
+            if not ch:
+                break
+            req += ch
+        line = req.split(b"\r\n", 1)[0].decode("utf-8", "replace")
+        self.log.append(line)
+        try:
+            self.handler(c, line, req)
+        except OSError:
+            pass
+        try:
+            c.close()
+        except OSError:
+            pass
+def reply(c, status, body, extra=b""):
+    c.sendall(b"HTTP/1.1 " + status + b"\r\nContent-Type: application/json\r\n" + extra +
+              b"Content-Length: %d\r\nConnection: close\r\n\r\n" % len(body) + body)
+def spawn(port):
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.environ["TERM"] = "xterm"
+        os.execv(binary, [binary, "tui", "--port", str(port)])
+    return pid, fd
+def pump(fd, secs, out=b"", until=None):
+    end = time.time() + secs
+    while time.time() < end:
+        try:
+            if select.select([fd], [], [], 0.05)[0]:
+                out += os.read(fd, 65536)
+                if until is not None and until in out:
+                    break
+        except OSError:
+            break
+    return out
+def wait_exit(pid, fd, secs):
+    end = time.time() + secs
+    t0 = time.time()
+    while time.time() < end:
+        got, st = os.waitpid(pid, os.WNOHANG)
+        if got == pid:
+            return st, time.time() - t0
+        pump(fd, 0.1)
+    os.kill(pid, signal.SIGKILL)
+    os.waitpid(pid, 0)
+    return None, time.time() - t0
+
+# 1. Keys that are not a quit.
+s = Server(lambda c, line, req: reply(c, b"200 OK", SAMPLE))
+pid, fd = spawn(s.port)
+pump(fd, 2.0)
+n0 = sum(1 for e in s.log if "samples" in e)
+for i in range(200):
+    os.write(fd, b"x"); time.sleep(0.01)
+pump(fd, 0.5)
+n1 = sum(1 for e in s.log if "samples" in e)
+os.write(fd, b"q")
+st, took = wait_exit(pid, fd, 10)
+if st is None or n1 - n0 > 6:
+    sys.exit("FAIL: 200 key presses over 2.5 s made %d requests (exit %r)" % (n1 - n0, st))
+print("ok   the TUI makes %d request(s) during 200 key presses over 2.5 s" % (n1 - n0))
+
+# 2. `q` while the daemon has stalled.
+state = {"stall": False}
+def stalling(c, line, req):
+    if state["stall"] and "samples" in line:
+        time.sleep(20); return
+    reply(c, b"200 OK", SAMPLE)
+s = Server(stalling)
+pid, fd = spawn(s.port)
+pump(fd, 1.5)
+state["stall"] = True
+pump(fd, 1.5)
+os.write(fd, b"q")
+st, took = wait_exit(pid, fd, 15)
+if st is None or took > 3:
+    sys.exit("FAIL: `q` with the daemon stalled: exit %r after %.1f s" % (st, took))
+print("ok   `q` while a request waits on a stalled daemon ends the TUI in %.1f s" % took)
+
+# 3. A reply that streams for ever.
+state = {"stream": False}
+def streaming(c, line, req):
+    if state["stream"] and "samples" in line:
+        c.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\n")
+        chunk = b"x" * 65536
+        try:
+            while True:
+                c.sendall(chunk)
+        except OSError:
+            return
+    reply(c, b"200 OK", SAMPLE)
+s = Server(streaming)
+pid, fd = spawn(s.port)
+out = pump(fd, 1.5)
+state["stream"] = True
+out = pump(fd, 6, out, until=b"reply over 16 MiB")
+os.write(fd, b"q")
+st, took = wait_exit(pid, fd, 15)
+if b"reply over 16 MiB" not in out or st is None:
+    sys.exit("FAIL: a streaming reply: %r" % out.decode("utf-8", "replace")[-300:])
+print("ok   a reply that streams for ever is cut at 16 MiB and named")
+
+# 4. A login that does not get through at renewal; the password stays.
+cnt = {"login": 0, "samples": 0, "valid": False}
+def renewing(c, line, req):
+    if "login" in line:
+        cnt["login"] += 1
+        if cnt["login"] == 2:
+            return                           # closed without a reply
+        cnt["valid"] = True
+        reply(c, b"200 OK", b'{"ok":true}', b"Set-Cookie: budyk_session=abc; Path=/\r\n"); return
+    if "samples" in line:
+        cnt["samples"] += 1
+        if cnt["samples"] == 4:
+            cnt["valid"] = False             # the session ended
+        if not cnt["valid"] or b"Cookie: budyk_session=abc" not in req:
+            reply(c, b"401 Unauthorized", b'{}'); return
+        reply(c, b"200 OK", SAMPLE); return
+    reply(c, b"200 OK", b"{}")
+s = Server(renewing)
+pid, fd = spawn(s.port)
+out = pump(fd, 3, until=b"assword")
+time.sleep(0.5)          # the prompt, then echo off with TCSAFLUSH: typed sooner, the password is flushed
+os.write(fd, b"secret\n")
+out = pump(fd, 16, out, until=b"tick #12")
+os.write(fd, b"q")
+st, took = wait_exit(pid, fd, 10)
+text = out.decode("utf-8", "replace")
+if cnt["login"] < 3 or "no longer accepted" in text or "logging in again" not in text:
+    sys.exit("FAIL: renewal after a dropped login: %d login(s); %r" % (cnt["login"], text[-400:]))
+print("ok   a login that did not get through at renewal is tried again: %d logins" % cnt["login"])
+
+# 5. No iowait next to a CPU row of "measuring...".
+s = Server(lambda c, line, req: reply(c, b"200 OK", BASELINE))
+pid, fd = spawn(s.port)
+out = pump(fd, 3, until=b"measuring")
+os.write(fd, b"q")
+st, took = wait_exit(pid, fd, 10)
+text = out.decode("utf-8", "replace")
+if "measuring" not in text or "iowait" in text:
+    sys.exit("FAIL: a cpu baseline: %r" % text[-400:])
+print("ok   the Procs line has no iowait while the cpu group is a baseline")
+EOF
+
 # The session ends (the daemon restarted with a new password hash) and
 # the stored password is no longer accepted: the TUI posted it once a
 # second for ever, which with the daemon's throttle (5 failures a

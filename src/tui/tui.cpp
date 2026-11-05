@@ -34,6 +34,31 @@ namespace {
 
 // Set by the SIGINT handler: Ctrl-C ends the TUI as `q` does.
 volatile std::sig_atomic_t g_tui_interrupted = 0;
+// True once ncurses has the terminal: a request's wait then watches the
+// keyboard too, and `q` (or Escape) ends the TUI from inside a request
+// (a stalled daemon held it 8 s before a key was read, a reply that
+// kept trickling for ever). The key read there is in g_tui_quit_key.
+bool g_tui_in_curses = false;
+bool g_tui_quit_key  = false;
+
+bool quit_requested() { return g_tui_interrupted != 0 || g_tui_quit_key; }
+
+// A key typed while a request waits: `q`, `Q` or a lone Escape is the
+// quit; an Escape followed at once by more bytes is a key sequence (an
+// arrow), dropped with the rest.
+void read_key_during_request() {
+    unsigned char c = 0;
+    if (::read(STDIN_FILENO, &c, 1) != 1) return;
+    if (c == 'q' || c == 'Q') { g_tui_quit_key = true; return; }
+    if (c != 27) return;
+    struct pollfd p{STDIN_FILENO, POLLIN, 0};
+    if (::poll(&p, 1, 50) > 0) {
+        unsigned char rest[64];
+        (void)!::read(STDIN_FILENO, rest, sizeof(rest));
+        return;
+    }
+    g_tui_quit_key = true;
+}
 
 // --- minimal HTTP client -----------------------------------------------------
 // One request per connection against host:port. `extra_headers` is
@@ -54,6 +79,9 @@ std::string http_error(int rc) {
         case -4: what = "send";                 break;
         case -5: what = "recv";                 break;
         case -6: what = "malformed HTTP reply"; break;
+        case -7: what = "interrupted";          break;
+        case -8: what = "reply over 16 MiB";    break;
+        case -9: what = "no reply in 60 s";     break;
         default: break;
     }
     std::string out = what;
@@ -72,6 +100,13 @@ std::string http_error(int rc) {
 // since its one HTTP thread may give that whole to an idle client queued
 // ahead of the TUI (a browser's preconnect, a probe).
 constexpr int64_t kHttpIdleMs = 8000;
+// The whole request, progress or not: a reply that trickled a byte at a
+// time for ever held the TUI for ever. Longer than a slow link's reply
+// of a few kilobytes takes (the dashboard's needs are a few KB).
+constexpr int64_t kHttpTotalMs = 60000;
+// A reply is a few kilobytes; one past this is not the daemon's (a port
+// that streams), and it was read into memory until the OOM killer.
+constexpr size_t  kHttpMaxReply = size_t{16} << 20;
 
 int64_t monotonic_ms() {
     struct timespec ts{};
@@ -80,14 +115,20 @@ int64_t monotonic_ms() {
 }
 
 // Until `fd` is ready for `events` or the deadline (monotonic_ms())
-// passes: true if ready, else false with errno ETIMEDOUT.
+// passes: true if ready, else false with errno ETIMEDOUT, or EINTR when
+// the TUI is to quit (Ctrl-C, or `q` typed while the request waits).
 bool wait_ready(int fd, short events, int64_t deadline_ms) {
     while (true) {
+        if (quit_requested()) { errno = EINTR; return false; }
         const int64_t left = deadline_ms - monotonic_ms();
         if (left <= 0) { errno = ETIMEDOUT; return false; }
-        struct pollfd p{fd, events, 0};
-        const int r = ::poll(&p, 1, static_cast<int>(left));
-        if (r > 0) return true;
+        struct pollfd p[2] = {{fd, events, 0}, {STDIN_FILENO, POLLIN, 0}};
+        const int r = ::poll(p, g_tui_in_curses ? 2 : 1, static_cast<int>(left));
+        if (r > 0 && (p[0].revents & (events | POLLERR | POLLHUP)) != 0) return true;
+        if (r > 0 && g_tui_in_curses && (p[1].revents & (POLLIN | POLLHUP)) != 0) {
+            read_key_during_request();
+            continue;
+        }
         if (r < 0 && errno != EINTR) return false;
     }
 }
@@ -96,7 +137,22 @@ int http_request(const char* host, int port, const char* method,
                  const char* path, const std::string& extra_headers,
                  const std::string& body, tui_detail::HttpReply* reply) {
     g_http_errno = 0;
-    int64_t deadline = monotonic_ms() + kHttpIdleMs;   // moved on by progress
+    const int64_t hard = monotonic_ms() + kHttpTotalMs;   // the request whole
+    int64_t deadline = monotonic_ms() + kHttpIdleMs;      // moved on by progress
+    const auto progress = [&] {
+        deadline = monotonic_ms() + kHttpIdleMs;
+        if (deadline > hard) deadline = hard;
+    };
+    // The code for a wait that ended: the quit, the whole request's
+    // bound, else the errno of the wait or the call.
+    const auto failed = [&](int fd, int code) {
+        const int err = errno;
+        ::close(fd);
+        if (quit_requested())                  return -7;
+        if (err == ETIMEDOUT && monotonic_ms() >= hard) return -9;
+        g_http_errno = err;
+        return code;
+    };
     int fd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
     if (fd < 0) { g_http_errno = errno; return -1; }
 
@@ -113,9 +169,8 @@ int http_request(const char* host, int port, const char* method,
             err = errno;
         }
         if (err != 0) {
-            g_http_errno = err;
-            ::close(fd);
-            return -3;
+            errno = err;
+            return failed(fd, -3);
         }
     }
 
@@ -134,14 +189,12 @@ int http_request(const char* host, int port, const char* method,
         const ssize_t n = ::send(fd, req.data() + sent, req.size() - sent, MSG_NOSIGNAL);
         if (n >= 0) {
             sent += static_cast<size_t>(n);
-            deadline = monotonic_ms() + kHttpIdleMs;
+            progress();
             continue;
         }
-        if (errno == EINTR) continue;
+        if (errno == EINTR && !quit_requested()) continue;
         if ((errno == EAGAIN || errno == EWOULDBLOCK) && wait_ready(fd, POLLOUT, deadline)) continue;
-        g_http_errno = errno;
-        ::close(fd);
-        return -4;
+        return failed(fd, -4);
     }
 
     std::string raw;
@@ -150,15 +203,17 @@ int http_request(const char* host, int port, const char* method,
         ssize_t r = ::recv(fd, buf, sizeof(buf), 0);
         if (r == 0) break;
         if (r > 0) {
+            if (raw.size() + static_cast<size_t>(r) > kHttpMaxReply) {
+                ::close(fd);
+                return -8;
+            }
             raw.append(buf, static_cast<size_t>(r));
-            deadline = monotonic_ms() + kHttpIdleMs;
+            progress();
             continue;
         }
-        if (errno == EINTR) continue;
+        if (errno == EINTR && !quit_requested()) continue;
         if ((errno == EAGAIN || errno == EWOULDBLOCK) && wait_ready(fd, POLLIN, deadline)) continue;
-        g_http_errno = errno;
-        ::close(fd);
-        return -5;
+        return failed(fd, -5);
     }
     ::close(fd);
     return tui_detail::parse_http_reply(raw, reply) ? 0 : -6;
@@ -166,15 +221,19 @@ int http_request(const char* host, int port, const char* method,
 
 // POST /api/auth/login; on success *cookie becomes "budyk_session=<token>".
 // Returns the HTTP status (200 = logged in; 401 wrong password; 429
-// throttled after too many failures), 0 for a 200 with no cookie, or
+// throttled after too many failures, with the reply's Retry-After in
+// *retry_after when given), 0 for a 200 with no cookie, or
 // http_request's negative code when the daemon can't be reached (a
 // timeout was reported as a wrong password).
 int login(const char* host, int port, const std::string& password,
-          std::string* cookie) {
+          std::string* cookie, int* retry_after = nullptr) {
     tui_detail::HttpReply r;
     const std::string body = "{\"password\":" + tui_detail::json_quote(password) + "}";
     const int rc = http_request(host, port, "POST", "/api/auth/login", "", body, &r);
     if (rc != 0) return rc;
+    if (r.status == 429 && retry_after != nullptr) {
+        *retry_after = tui_detail::retry_after_seconds(r.headers);
+    }
     if (r.status != 200) return r.status;
     *cookie = tui_detail::session_cookie(r.headers);
     return cookie->empty() ? 0 : 200;
@@ -268,6 +327,25 @@ std::string session_cookie(const std::string& headers) {
         if (eq == 13 || pair[13] == '_') return pair;
     }
     return std::string();
+}
+
+int retry_after_seconds(const std::string& headers) {
+    size_t pos = 0;
+    while (pos < headers.size()) {
+        size_t eol = headers.find("\r\n", pos);
+        if (eol == std::string::npos) eol = headers.size();
+        const std::string line = headers.substr(pos, eol - pos);
+        pos = eol + 2;
+        const auto colon = line.find(':');
+        if (colon != 11 || ::strncasecmp(line.c_str(), "Retry-After", 11) != 0) continue;
+        size_t v = colon + 1;
+        while (v < line.size() && (line[v] == ' ' || line[v] == '\t')) ++v;
+        char* end = nullptr;
+        const long n = std::strtol(line.c_str() + v, &end, 10);
+        if (end == line.c_str() + v || n < 0 || n > 86400) return 0;   // a date, or absurd
+        return static_cast<int>(n);
+    }
+    return 0;
 }
 
 std::string json_quote(const std::string& s) {
@@ -563,33 +641,52 @@ int tui_run(const char* host, int port, std::string (*ask_password)()) {
         ::sigaction(SIGINT, &sa, nullptr);   // no SA_RESTART: getch() returns
     }
 
+    g_tui_in_curses = true;      // a request's wait reads the keyboard too
+
     bool quit = false;
     int  tick = 0;
     int  levels_fetched_at = 0;
+    // The level table is fetched again once the daemon was away (a
+    // connection error: a restart, with other custom levels under the
+    // same ids) or the session was renewed.
+    bool refetch_levels = false;
     // The stored password was refused when the session had to be renewed
-    // (the daemon restarted with a new hash, or throttles logins): posted
-    // once a second for ever, it locked the address out of the login
-    // (5 failures a minute; behind a reverse proxy, everyone's address)
-    // while the screen said only "login required or expired".
-    bool login_refused = false;
-    int  login_status  = 0;
+    // (the daemon restarted with a new hash): posted once a second for
+    // ever, it locked the address out of the login (5 failures a minute;
+    // behind a reverse proxy, everyone's address) while the screen said
+    // only "login required or expired". Only a 401 is for good: a 429
+    // waits out its Retry-After, and a login that did not get through
+    // (the daemon down between the 401 and the POST, its HTTP thread
+    // held, a proxy's 502) is tried again in a few seconds: one such gave
+    // up for good, with "the password is no longer accepted".
+    bool    login_refused = false;
+    int     login_status  = 0;
+    int64_t login_next_ms = 0;
 
     while (!quit) {
         struct timespec t0{};
         ::clock_gettime(CLOCK_MONOTONIC, &t0);
         tui_detail::HttpReply r;
         int rc = http_request(host, port, "GET", "/api/samples?last=1", cookie_header, "", &r);
-        if (rc == 0 && r.status == 401 && !password.empty() && !login_refused) {
-            std::string cookie;                       // session expired: renew, once
-            const int st = login(host, port, password, &cookie);
+        if (rc == 0 && r.status == 401 && !password.empty() && !login_refused &&
+            monotonic_ms() >= login_next_ms) {
+            std::string cookie;                       // session expired: renew
+            int retry_after = 0;
+            const int st = login(host, port, password, &cookie, &retry_after);
+            login_status = st;
             if (st == 200) {
-                cookie_header = "Cookie: " + cookie + "\r\n";
+                cookie_header  = "Cookie: " + cookie + "\r\n";
+                refetch_levels = true;
                 rc = http_request(host, port, "GET", "/api/samples?last=1", cookie_header, "", &r);
-            } else {
+            } else if (st == 401) {
                 login_refused = true;
-                login_status  = st;
+            } else {
+                const int wait_s = st == 429 ? (retry_after > 0 ? retry_after : 60) : 5;
+                login_next_ms = monotonic_ms() + static_cast<int64_t>(wait_s) * 1000;
             }
         }
+        if (rc != 0) refetch_levels = true;
+        if (quit_requested()) break;
 
         ::erase();
         ::mvprintw(0, 0, "budyk tui  %s%s%s:%d   q=quit", hostname.c_str(),
@@ -599,11 +696,16 @@ int tui_run(const char* host, int port, std::string (*ask_password)()) {
         if (rc != 0) {
             ::mvprintw(2, 0, "connection error (%s) — retrying in 1s", http_error(rc).c_str());
         } else if (r.status == 401 && login_refused) {
-            const std::string why = login_status == 429 ? std::string("HTTP 429, logins throttled")
-                                  : login_status > 0   ? "HTTP " + std::to_string(login_status)
-                                                       : http_error(login_status);
-            ::mvprintw(2, 0, "session ended and the password is no longer accepted (login: %s) "
-                             "— q to quit, then start again", why.c_str());
+            ::mvprintw(2, 0, "session ended and the password is no longer accepted (HTTP 401) "
+                             "— q to quit, then start again");
+        } else if (r.status == 401 && !password.empty() && login_status != 200) {
+            const int64_t left_ms = login_next_ms - monotonic_ms();
+            const int     left_s  = static_cast<int>((left_ms > 0 ? left_ms : 0) / 1000);
+            const std::string why = login_status == 429 ? std::string("logins throttled (HTTP 429)")
+                                  : login_status > 0   ? "login failed (HTTP " + std::to_string(login_status) + ")"
+                                  : login_status == 0  ? std::string("login failed (no session cookie in the reply)")
+                                                       : "login failed (" + http_error(login_status) + ")";
+            ::mvprintw(2, 0, "session ended; %s — logging in again in %ds", why.c_str(), left_s + 1);
         } else if (r.status != 200) {
             // Say what the server said instead of drawing zeros.
             ::mvprintw(2, 0, "server returned HTTP %d%s — retrying in 1s", r.status,
@@ -638,9 +740,10 @@ int tui_run(const char* host, int port, std::string (*ask_password)()) {
             const int level = static_cast<int>(sample_number(b, nullptr, "level"));
             bool known = false;
             for (const auto& lv : levels) known = known || lv.id == level;
-            if (!known && tick - levels_fetched_at >= 30) {   // at most every 30 ticks
+            if (refetch_levels || (!known && tick - levels_fetched_at >= 30)) {   // at most every 30 ticks
                 fetch_levels();
                 levels_fetched_at = tick;
+                refetch_levels    = false;
             }
             ::mvprintw(2, 0, "Level  %s", tui_detail::level_label(levels, level).c_str());
 
@@ -680,9 +783,12 @@ int tui_run(const char* host, int port, std::string (*ask_password)()) {
             const double retr     = sample_number(b, "tcp", "retransmits_per_sec");
             const double fs_used  = sample_number(b, "fs", "max_used_percent");
             const double fs_count = sample_number(b, "fs", "count");
-            if (has(10, "Procs", "proc"))
-                ::mvprintw(10, 0, "Procs  %.0f   %.0f blocked, %.0f zombie   iowait %.1f%%",
-                           procs, blocked, zombies, iowait);
+            // The iowait is the cpu group's: a baseline's holds zeros, and
+            // "iowait 0.0%" stood next to a CPU row of "measuring...".
+            if (has(10, "Procs", "proc")) {
+                ::mvprintw(10, 0, "Procs  %.0f   %.0f blocked, %.0f zombie", procs, blocked, zombies);
+                if (tui_detail::sample_has_group(b, "cpu")) ::printw("   iowait %.1f%%", iowait);
+            }
             if (has(11, "TCP", "tcp"))
                 ::mvprintw(11, 0, "TCP    %.0f established   %.1f retransmits/s", estab, retr);
             if (has(12, "ICMP", "icmp"))
@@ -720,9 +826,12 @@ int tui_run(const char* host, int port, std::string (*ask_password)()) {
         // returns ERR at once, and the loop fetched as fast as the daemon
         // answered, about 700 requests a second on its one HTTP thread:
         // the rest of the second is slept out.
+        // Any other key, and a resize, is drawn at the next tick: each
+        // went straight to the next fetch, so a held key or a paste sent
+        // the daemon's one HTTP thread a request per key.
         int ch = ::getch();
-        if (ch == 'q' || ch == 'Q' || ch == 27 /*ESC*/ || g_tui_interrupted) quit = true;
-        if (ch == ERR && !quit) {
+        if (ch == 'q' || ch == 'Q' || ch == 27 /*ESC*/ || quit_requested()) quit = true;
+        if (!quit) {
             struct timespec t1{};
             ::clock_gettime(CLOCK_MONOTONIC, &t1);
             const long spent_ms = (t1.tv_sec - t0.tv_sec) * 1000L + (t1.tv_nsec - t0.tv_nsec) / 1000000L;

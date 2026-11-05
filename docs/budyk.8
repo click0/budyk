@@ -27,7 +27,12 @@ Start the terminal UI against the daemon at the IPv4
 .I address
 (127.0.0.1) and
 .I port
-(8080); it asks for the password if the daemon wants one.
+(8080); it asks for the password if the daemon wants one, and logs in
+again when the session ends (a login that does not get through is
+tried again in a few seconds, a throttled one after its Retry-After;
+a refused password ends the attempts).
+.B q
+, Escape or Ctrl-C ends it, while a request waits too.
 .TP
 .B hash\-password
 Read a password (twice on a terminal) and print its Argon2id hash, for
