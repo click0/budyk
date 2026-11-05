@@ -15,6 +15,7 @@
 #include <cerrno>
 #include <climits>
 #include <clocale>
+#include <csignal>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -30,6 +31,9 @@
 namespace budyk {
 
 namespace {
+
+// Set by the SIGINT handler: Ctrl-C ends the TUI as `q` does.
+volatile std::sig_atomic_t g_tui_interrupted = 0;
 
 // --- minimal HTTP client -----------------------------------------------------
 // One request per connection against host:port. `extra_headers` is
@@ -549,6 +553,15 @@ int tui_run(const char* host, int port, std::string (*ask_password)()) {
     ::curs_set(0);
     ::keypad(stdscr, TRUE);
     ::wtimeout(stdscr, 1000);   // getch() blocks at most 1 s
+    // Ctrl-C ends the TUI as `q` does: initscr() gave SIGINT a handler
+    // of ncurses' own, which set the terminal back and exited 1, so a
+    // script running the TUI read a failure in a plain quit.
+    {
+        struct sigaction sa{};
+        sa.sa_handler = [](int) { g_tui_interrupted = 1; };
+        ::sigemptyset(&sa.sa_mask);
+        ::sigaction(SIGINT, &sa, nullptr);   // no SA_RESTART: getch() returns
+    }
 
     bool quit = false;
     int  tick = 0;
@@ -708,7 +721,7 @@ int tui_run(const char* host, int port, std::string (*ask_password)()) {
         // answered, about 700 requests a second on its one HTTP thread:
         // the rest of the second is slept out.
         int ch = ::getch();
-        if (ch == 'q' || ch == 'Q' || ch == 27 /*ESC*/) quit = true;
+        if (ch == 'q' || ch == 'Q' || ch == 27 /*ESC*/ || g_tui_interrupted) quit = true;
         if (ch == ERR && !quit) {
             struct timespec t1{};
             ::clock_gettime(CLOCK_MONOTONIC, &t1);

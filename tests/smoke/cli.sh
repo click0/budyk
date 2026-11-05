@@ -464,6 +464,70 @@ if "no longer accepted" not in text:
 print("ok   a rejected password is posted once, and the screen says so")
 EOF
 
+# Ctrl-C ends the TUI as `q` does, exit 0: initscr() gave SIGINT a
+# handler of ncurses' own, which set the terminal back and exited 1, so
+# a script running the TUI read a failure in a plain quit. The fake API
+# answers every request with a sample at once.
+python3 - "$BIN" <<'EOF' || fail=1
+import os, pty, select, signal, socket, sys, threading, time
+binary = sys.argv[1]
+srv = socket.socket()
+srv.bind(("127.0.0.1", 0))
+srv.listen(64)
+port = srv.getsockname()[1]
+sample = (b'[{"ts":1,"level":1,"groups":["cpu"],"cpu":{"total_percent":1.0,"count":1}}]')
+def serve():
+    while True:
+        try:
+            c, _ = srv.accept()
+        except OSError:
+            return
+        req = b""
+        while b"\r\n\r\n" not in req:
+            chunk = c.recv(4096)
+            if not chunk:
+                break
+            req += chunk
+        c.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\n"
+                  b"Connection: close\r\n\r\n" % len(sample) + sample)
+        c.close()
+threading.Thread(target=serve, daemon=True).start()
+pid, fd = pty.fork()
+if pid == 0:
+    os.environ["TERM"] = "xterm"
+    os.execv(binary, [binary, "tui", "--port", str(port)])
+out = b""
+end = time.time() + 5
+while time.time() < end and b"CPU" not in out:        # drawn once
+    try:
+        if select.select([fd], [], [], 0.1)[0]:
+            out += os.read(fd, 65536)
+    except OSError:
+        break
+os.kill(pid, signal.SIGINT)                          # Ctrl-C
+status = None
+end = time.time() + 5
+while time.time() < end:
+    got, st = os.waitpid(pid, os.WNOHANG)
+    if got == pid:
+        status = st
+        break
+    try:                                             # endwin() drains the terminal
+        if select.select([fd], [], [], 0.1)[0]:
+            os.read(fd, 65536)
+    except OSError:
+        time.sleep(0.1)
+if status is None:
+    os.kill(pid, signal.SIGKILL)
+    os.waitpid(pid, 0)
+    sys.exit("FAIL: the TUI did not end within 5 s of Ctrl-C")
+if not os.WIFEXITED(status) or os.WEXITSTATUS(status) != 0:
+    sys.exit("FAIL: the TUI ended on Ctrl-C with %s, not exit 0"
+             % ("signal %d" % os.WTERMSIG(status) if os.WIFSIGNALED(status)
+                else "exit %d" % os.WEXITSTATUS(status)))
+print("ok   Ctrl-C ends the TUI as q does: exit 0")
+EOF
+
 if grep -qE 'ERROR: (Address|Leak)Sanitizer|ThreadSanitizer|runtime error:' "$DIR/log" "$DIR"/san.* 2>/dev/null; then
     echo "FAIL: sanitizer report"; cat "$DIR"/san.* 2>/dev/null; fail=1
 fi

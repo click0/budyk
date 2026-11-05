@@ -96,7 +96,11 @@ started() {
 $SUDO service budyk onestart
 started
 $SUDO service budyk onestatus
-PID=$($SUDO cat /var/run/budyk/budyk.pid)   # 0600, budyk's
+# As anyone: the pid file daemon(8) made was 0600, budyk's, and rc.subr
+# read no pid from it ("budyk is not running").
+$SUDO su -m nobody -c "service budyk onestatus" | grep -q "is running as pid" ||
+    fail "'service budyk status' as nobody does not say it is running"
+PID=$($SUDO cat /var/run/budyk/budyk.pid)
 [ "$(ps -o user= -p "$PID" | tr -d ' ')" = budyk ] || fail "budyk does not run as budyk"
 sleep 1
 grep -q "budyk\[[0-9]*\]: budyk serve: started (config=$CONF/config.yaml" /var/log/messages ||

@@ -282,11 +282,20 @@ int budyk_collect_thermal_freebsd(budyk_sample_c* s) {
     double  hottest = -1e9;
     uint32_t count  = 0;
 
-    for (int n = 0; n < 256; ++n) {
+    /* Every CPU's, not up to the first without one: amdtemp(4) and
+     * coretemp(4) attach per package, so on a host with two the second
+     * package's CPUs can have the sysctl while the first's do not. */
+    static int ncpu = 0;
+    if (ncpu <= 0) {
+        size_t sz = sizeof(ncpu);
+        if (sysctlbyname("hw.ncpu", &ncpu, &sz, NULL, 0) != 0 || ncpu <= 0) ncpu = 256;
+        if (ncpu > 4096) ncpu = 4096;
+    }
+    for (int n = 0; n < ncpu; ++n) {
         char mib[48];
         int  m = snprintf(mib, sizeof(mib), "dev.cpu.%d.temperature", n);
         if (m <= 0 || (size_t)m >= sizeof(mib)) break;
-        if (note_temperature(mib, &hottest, &count) != 0) break;
+        (void)note_temperature(mib, &hottest, &count);
     }
     for (int n = 0; n < 64; ++n) {
         char mib[64];
