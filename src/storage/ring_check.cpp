@@ -151,8 +151,12 @@ int convert_ring(const char* path, uint8_t tier, uint32_t record_size,
 }
 
 bool RingCheck::errors() const {
+    return errors_but_unindexed() || unindexed > recovered;
+}
+
+bool RingCheck::errors_but_unindexed() const {
     if (header_rc != 0 || unknown_tier || newer_format || open_rc != 0) return true;
-    return damaged > 0 || wrong_level > 0 || read_errors > 0 || unindexed > recovered;
+    return damaged > 0 || wrong_level > 0 || read_errors > 0;
 }
 
 int check_ring(const char* path, bool repair, uint64_t now_ns, RingCheck* out) {

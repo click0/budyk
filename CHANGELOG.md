@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`budyk fsck` next to a running budyk could call the record being
+  written a problem** (exit 4, "a crash before the index update"): a
+  record reaches its slot before the index moves, and a check in that
+  moment read it as one a crash left behind (the emulated arm64 CI,
+  slow, saw it). With a budyk running, such a record is noted as being
+  written, no problem; with none, it is one a crash left, as before.
 - **The tick's own length was added to every period.** The loop slept
   the level's whole interval after the tick, so a 50 ms tick made L3
   0.95 Hz and a 100 ms level 6.7 Hz, and every rate was over a period
