@@ -211,9 +211,28 @@ elif phase == "catchup":
     started = time.time()
     deadline = started + 60
     filling = []
+    prev = None
     while True:
-        count = get("/api/samples")["count"]
-        filling.append("%.1f:%d" % (time.time() - started, count))
+        doc = get("/api/samples")
+        count = doc["count"]
+        entry = "%.1f:%d" % (time.time() - started, count)
+        # The newest sample's level, the gap between the two newest (the
+        # ticks' spacing), and the daemon's own CPU since the poll
+        # before: a level not selected, a tick that takes long, and
+        # whether it computes or waits (a CI run saw one sample per
+        # poll, 2 Hz, for 60 s, with nothing to tell which).
+        if doc["samples"]:
+            last = doc["samples"][-1]
+            ts = int(last["ts"])
+            cpu = last.get("self", {}).get("cpu_user_seconds", 0) + \
+                  last.get("self", {}).get("cpu_system_seconds", 0)
+            entry += ":L%s" % last.get("level")
+            if len(doc["samples"]) > 1:
+                entry += ":+%dms" % ((ts - int(doc["samples"][-2]["ts"])) / 1e6)
+            if prev is not None and ts > prev[0]:
+                entry += ":%.0f%%" % ((cpu - prev[1]) / ((ts - prev[0]) / 1e9) * 100)
+            prev = (ts, cpu)
+        filling.append(entry)
         if count >= 300 or time.time() >= deadline:
             break
         time.sleep(0.5)
