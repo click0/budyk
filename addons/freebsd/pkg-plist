@@ -1,5 +1,6 @@
 bin/budyk
 @sample(root,budyk,0640) etc/budyk/config.yaml.sample
+@postexec [ -f %D/etc/budyk/config.yaml ] && chgrp budyk %D/etc/budyk/config.yaml && chmod o-rwx,g+r,g-w %D/etc/budyk/config.yaml || true
 @sample etc/budyk/rules.lua.sample
 share/budyk/rules/examples.lua
 share/budyk/rules/freebsd-defaults.lua

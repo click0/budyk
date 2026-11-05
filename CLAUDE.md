@@ -398,7 +398,9 @@ The gates a local build does not show:
 - cgroup limits are not read: budyk in a container limited with `-m` or
   `--cpus` reports the host's memory and CPU count (`/proc/meminfo`,
   `/proc/stat`), so `mem.available_percent` cannot show the container's
-  own pressure.
+  own pressure. The filesystem readings in a container are its own
+  mounts (`/proc/self/mountinfo`), not the host's: the compose file
+  shares the host's network and pid namespaces, not its mount table.
 
 ### Kept on purpose for later milestones (do not remove as dead code)
 

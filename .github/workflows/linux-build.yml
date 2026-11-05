@@ -30,6 +30,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Nothing here writes to the repository: a token that could was handed
+# to every third-party action and script.
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
