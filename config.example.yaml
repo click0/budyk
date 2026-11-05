@@ -256,6 +256,13 @@ web:
   # else gets 403: a page that points its own name at 127.0.0.1 (DNS
   # rebinding) could read the API otherwise.
   # allowed_hosts: [budyk.example.com]
+  # KiB/s a client must take a response at, past the 5 s a connection
+  # has for its request, or it is cut off: the one HTTP thread serves
+  # one connection at a time, and a slow reader would hold it. The
+  # dashboard's 7-day history (1000 points) is about a megabyte, so a
+  # link under about 1 Mbit/s loses it at the default; set it lower
+  # there, at the cost of a slow reader's longer hold. 1 to 1048576.
+  # min_send_rate: 256
   auth:
     enabled: false
     # IMPORTANT — wrap the hash in quotes. The PHC string contains

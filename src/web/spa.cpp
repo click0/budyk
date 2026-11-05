@@ -480,6 +480,33 @@ async function fetchRange(sinceNs) {
 let histTimer = null;
 let histSamples = [];     // the last window fetched: a metric drawn from it
 let histSeq = 0;          // the newest request: an older reply is not drawn
+let histSinceNs = 0n;     // the window's start of the last fetch
+// The samples the page holds live: the catch-up frame's (the newest 300
+// of the hot buffer) and every tick's since, the newest LIVE_MAX. The
+// chart draws them after the rings' newest point: the rings lag by a
+// level's interval (5 minutes at L1), and in on-demand mode hold
+// nothing, where the chart said "no data" with 300 samples on the page.
+const LIVE_MAX = 300;
+let liveSamples = [];
+function noteLive(arr) {
+  if (arr.length > 1) {
+    liveSamples = arr.slice(-LIVE_MAX);          // a catch-up: the newest, whole
+  } else if (arr.length === 1) {
+    liveSamples.push(arr[0]);
+    if (liveSamples.length > LIVE_MAX) liveSamples.shift();
+  }
+}
+function withLive(samples, sinceNs) {
+  const lastTs = samples.length ? Number(samples[samples.length - 1].ts) : 0;
+  const since = Number(sinceNs);
+  const extra = liveSamples.filter(s => Number(s.ts) > lastTs && Number(s.ts) >= since);
+  return extra.length ? samples.concat(extra) : samples;
+}
+function redrawHistory() {
+  const merged = withLive(histSamples, histSinceNs);
+  drawChart(merged);
+  $("histInfo").textContent = merged.length ? `${merged.length} pts` : "no data";
+}
 async function loadHistory() {
   const r = RANGES[histRange];
   if (!r) return;
@@ -497,8 +524,8 @@ async function loadHistory() {
     const got = await fetchRange(sinceNs.toString());
     if (seq !== histSeq) return;
     histSamples = got;
-    drawChart(histSamples);
-    $("histInfo").textContent = histSamples.length ? `${histSamples.length} pts` : "no data";
+    histSinceNs = sinceNs;
+    redrawHistory();
   } catch (e) {
     if (seq !== histSeq) return;
     histSamples = [];
@@ -518,7 +545,7 @@ function wireHistoryControls() {
       histMetric = key;
       for (const c of mc.children) c.className = "";
       b.className = "on";
-      drawChart(histSamples);           // the same window: nothing to fetch
+      redrawHistory();                  // the same window: nothing to fetch
     };
     mc.appendChild(b);
   }
@@ -760,7 +787,11 @@ function openWs() {
       // them (it started from one tick on every reload, and the
       // backfill from api/samples?last=1 held one sample).
       if (arr.length > 1) backfillFileWatch(arr.slice(0, -1));
-      if (arr.length) render(arr[arr.length - 1]);
+      if (arr.length) {
+        render(arr[arr.length - 1]);
+        noteLive(arr);
+        redrawHistory();                 // the chart's newest points are these
+      }
       renderDetail(doc.detail);
     } catch (_) { /* ignore parse errors */ }
   };

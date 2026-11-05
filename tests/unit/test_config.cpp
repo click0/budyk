@@ -209,6 +209,17 @@ int main(int argc, char** argv) {
         assert(c.web_allowed_hosts[0] == "budyk.example.com" && c.web_allowed_hosts[1] == "dash.lan");
     }
 
+    // 7a-quater. web.min_send_rate: KiB/s, default 256, held to 1..1 MiB.
+    {
+        Config c;
+        assert(c.web_min_send_rate_kib == 256);
+        assert(config_load_string("web: { min_send_rate: 64 }\n", &c) == 0);
+        assert(c.web_min_send_rate_kib == 64);
+        Config lo;
+        assert(config_load_string("web: { min_send_rate: 0 }\n", &lo) == 0);
+        assert(lo.web_min_send_rate_kib == 256);              // out of range: the default
+    }
+
     // 7a-bis. rules.persist_state + state_path parse; defaults are
     //         persist=true, empty path (derived from data_dir later).
     {

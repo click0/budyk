@@ -36,6 +36,11 @@ struct Config {
     /// listens on loopback without a password (DNS rebinding,
     /// src/daemon/router.cpp). Case does not matter; no port.
     std::vector<std::string> web_allowed_hosts;
+    /// web.min_send_rate: KiB/s a client must take a response at, past
+    /// the I/O timeout, or it is cut off (the one HTTP thread serves one
+    /// connection at a time). The 7-day history (1000 points, about a
+    /// megabyte) needs a link of about 1 Mbit/s at the default.
+    int   web_min_send_rate_kib  = 256;
 
     int   tier1_max_mb           = 250;
     int   tier2_max_mb           = 150;

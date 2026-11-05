@@ -320,13 +320,18 @@ HttpHandler make_router(const RouterDeps& d) {
             // second, took the whole buffer each time (250 KB at the
             // default 300; at the most, 100 000, the HTTP thread's whole
             // second).
-            const uint64_t last = query_u64(req.query, "last", 0);
+            // Without `last`, or with 0: the newest kCatchupSamples, as
+            // the WebSocket's catch-up. The whole buffer went out by
+            // default (170 MB at hot_buffer.capacity 100000, the HTTP
+            // thread's ten seconds) for the dashboard's session probe.
+            uint64_t last = query_u64(req.query, "last", 0);
+            if (last == 0) last = kCatchupSamples;
             std::vector<budyk::Sample> snap;
             std::string detail;
             {
                 std::lock_guard<std::mutex> g(hot_mtx);
                 const size_t have = hot.size();
-                snap.resize(last > 0 && last < have ? static_cast<size_t>(last) : have);
+                snap.resize(last < have ? static_cast<size_t>(last) : have);
                 if (!snap.empty()) hot.dump_last(snap.data(), snap.size());
                 if (d.latest_detail != nullptr) detail = *d.latest_detail;
             }

@@ -332,6 +332,13 @@ web:
   allowed_hosts: [budyk.example.com]
 ```
 
+A response goes out at `web.min_send_rate` (KiB/s, default 256) at
+least, past the 5 s a connection has for its request: the one HTTP
+thread serves one connection at a time, and a slow reader would hold
+it. The dashboard's 7-day history (1000 points) is about a megabyte,
+so a link under about 1 Mbit/s loses it at the default; set it lower
+there (`min_send_rate: 64`), at the cost of a slow reader's longer hold.
+
 If the dashboard is password-protected, `budyk tui` asks for the password
 once at startup (without echoing it) and logs in. If the session later
 expires, for example after a daemon restart, it logs in again by itself.
@@ -679,7 +686,7 @@ line's "registered N alert channel(s)" counts channels that can send.
 | `GET` | `/api/health` | no | status, version, hostname |
 | `POST` | `/api/auth/login` | no | body `{"password": "..."}` as `application/json`, same origin; sets the `budyk_session_<tag>` cookie |
 | `POST` | `/api/auth/logout` | no | clears the session |
-| `GET` | `/api/samples` | yes | recent samples from the in-memory buffer; `?last=N` the newest N |
+| `GET` | `/api/samples` | yes | the newest 300 samples of the in-memory buffer (the catch-up's size); `?last=N` the newest N, up to the buffer |
 | `GET` | `/api/range` | yes | stored history: `since`, `until` (nanoseconds since the epoch), `limit` (up to 5000), and either `level` (`L1`–`L3`, a custom level's name, or `all` for every level merged and thinned over the window) or `tier` (`1` = L3 samples, `2` = L2, `3` = L1) |
 | `GET` | `/api/alerts` | yes | the latest 100 alerts (RAM only), oldest first: `ts`, `severity`, `rule`, `message`; new ones also come over `/api/ws` as `{"alerts":[...]}` |
 | `GET` | `/api/levels` | yes | every level: `id` (the value of a sample's `level`), `name`, `interval_ms`, `priority`, `builtin`, `collects` (false for L1 and L2 in on-demand mode), `metrics` (its set, by name) |
