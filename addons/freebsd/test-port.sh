@@ -82,6 +82,18 @@ id budyk
 [ -f /usr/local/share/man/man8/budyk.8.gz ] || fail "no man page"
 pkg info -D budyk | grep -q "$CONF/config.yaml" && ! pkg info -D budyk | grep -q "%%" ||
     fail "the pkg-message: $(pkg info -D budyk)"
+# An upgrade over a config edited under an older budyk, which installed
+# it root:wheel 0644: the edit is kept (the sample no longer matches it)
+# and the mode is made root:budyk 0640 (it stayed 0644: the @sample
+# keyword's mode is the fresh copy's alone).
+$SUDO chown root:wheel "$CONF/config.yaml"
+$SUDO chmod 0644 "$CONF/config.yaml"
+echo "# edited by hand" | $SUDO tee -a "$CONF/config.yaml" > /dev/null
+$SUDO pkg add -f "$PKG" > /dev/null
+$SUDO grep -q "# edited by hand" "$CONF/config.yaml" || fail "the reinstall replaced the edited config"   # 0640 now: root reads
+[ "$(stat -f %Su:%Sg:%Lp "$CONF/config.yaml")" = root:budyk:640 ] ||
+    fail "after a reinstall the edited config is $(stat -f %Su:%Sg:%Lp "$CONF/config.yaml"), not root:budyk:640"
+$SUDO sed -i '' '/# edited by hand/d' "$CONF/config.yaml"
 /usr/local/bin/budyk version
 
 echo "== the service"

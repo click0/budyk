@@ -80,6 +80,19 @@ exit $fail
 EOF
 chmod 0755 "$OUT/check-installed.sh"
 
+# The .deb's data is xz: a zstd .deb (dpkg-deb's default on new hosts)
+# cannot be read by dpkg before 1.21.18 (Debian 11, Ubuntu 22.04). curl
+# is recommended, not required: the alert channels run it.
+ar t "$DEB" | grep -qx 'data.tar.xz' && ok "the .deb is xz-compressed" ||
+    bad "the .deb's data is $(ar t "$DEB" | grep data.tar)"
+dpkg-deb -f "$DEB" Recommends | grep -q curl && ok "the .deb recommends curl" || bad "the .deb's Recommends"
+# The .rpm records the config as root:budyk 0640: `rpm --setperms` or
+# `--restore` made it world-readable again, and `rpm -V` flagged it.
+rpm -qp --dump "$RPM" 2>/dev/null | grep '^/etc/budyk/config.yaml ' | grep -q ' 0100640 root budyk ' &&
+    ok "the .rpm records the config root:budyk 0640" ||
+    bad "the .rpm's config entry: $(rpm -qp --dump "$RPM" 2>/dev/null | grep '^/etc/budyk/config.yaml ')"
+rpm -qp --recommends "$RPM" 2>/dev/null | grep -q curl && ok "the .rpm recommends curl" || bad "the .rpm's Recommends"
+
 # The man page with the packages' paths (read from the package: a
 # minimal system may not install man pages).
 dpkg-deb --fsys-tarfile "$DEB" | tar -xO ./usr/share/man/man8/budyk.8.gz | gzip -dc > "$OUT/budyk.8"
@@ -112,6 +125,16 @@ if [ -d /run/systemd/system ]; then
         bad "the service after an upgrade: MainPID $before -> $after"
     fi
 fi
+# The admin deleted the packaged config: the next install's postinst
+# failed on its chown ("error processing package budyk (--configure)").
+dpkg -r budyk >/dev/null
+rm -f /etc/budyk/config.yaml
+if dpkg -i "$DEB" >/dev/null 2>"$OUT/dpkg.err"; then
+    ok "dpkg -i with the packaged config deleted"
+else
+    bad "dpkg -i with the packaged config deleted: $(cat "$OUT/dpkg.err")"
+fi
+rm -f "$OUT/dpkg.err"
 echo "# a local change" >> /etc/budyk/config.yaml
 dpkg -r budyk >/dev/null
 [ ! -e /usr/bin/budyk ] && grep -q '# a local change' /etc/budyk/config.yaml && ok "dpkg -r: the binary gone, the config kept" ||
@@ -122,7 +145,7 @@ dpkg -P budyk >/dev/null
 
 # --- .rpm -----------------------------------------------------------------
 if docker info >/dev/null 2>&1; then
-    if docker run --rm -v "$OUT:/pkg:ro" fedora:41 sh -c "
+    if docker run --rm -v "$OUT:/pkg:ro" fedora:44 sh -c "
         dnf -y -q install /pkg/$(basename "$RPM") procps-ng curl util-linux gzip >/dev/null &&
         /pkg/check-installed.sh 18991 $VER &&
         rpm -e budyk && [ ! -e /usr/bin/budyk ] && echo 'ok   rpm -e: the binary gone'"; then

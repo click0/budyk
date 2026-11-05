@@ -2,12 +2,34 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # The image's HEALTHCHECK: /api/health at the address the daemon listens
-# on, read from the config it runs with (compose mounts config.yaml; the
-# image's own command reads the example config). It was 127.0.0.1:8080
-# whatever the config said, so a container with another port was
-# "unhealthy" for ever, and an orchestrator acting on that restarted a
-# working daemon in a loop.
-cfg=/etc/budyk/config.yaml
+# on, read from the config it runs with: the `--config` of the `budyk
+# serve` running in the container (compose mounts a config and names it
+# on the command line; the image's own command reads the example
+# config), else /etc/budyk/config.yaml, else the example. It was
+# 127.0.0.1:8080 whatever the config said, so a container with another
+# port was "unhealthy" for ever, and an orchestrator acting on that
+# restarted a working daemon in a loop; then the fixed path, so a
+# config mounted elsewhere (`serve --config /config/budyk.yaml`) was
+# not the one read.
+cfg=
+NL='
+'
+for f in /proc/[0-9]*/cmdline; do
+    args=$(tr '\0' '\n' < "$f" 2>/dev/null) || continue
+    # The arguments one per line (a path may hold a space): `budyk serve
+    # --config <path>`, whatever directory budyk is in.
+    IFS=$NL
+    set -- $args
+    unset IFS
+    [ "$#" -ge 2 ] && [ "${1##*/}" = budyk ] && [ "$2" = serve ] || continue
+    seen=
+    for a in "$@"; do
+        if [ "$seen" = 1 ]; then cfg=$a; break; fi
+        [ "$a" = "--config" ] && seen=1
+    done
+    [ -n "$cfg" ] && break
+done
+[ -n "$cfg" ] && [ -f "$cfg" ] || cfg=/etc/budyk/config.yaml
 [ -f "$cfg" ] || cfg=/etc/budyk/config.example.yaml
 listen=$(awk '$1 == "listen:" { gsub(/["'"'"']/, "", $2); print $2 }' "$cfg" | tail -n 1)
 port=$(awk '$1 == "port:" { gsub(/["'"'"']/, "", $2); print $2 }' "$cfg" | tail -n 1)

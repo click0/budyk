@@ -54,8 +54,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
+# Read-only for the build jobs: they run third-party actions and the
+# tree's own scripts, and a token that could write to the repository
+# reached every one of them (and the checkout's persisted credentials,
+# the VM copies of the workspace). The publish job alone writes.
 permissions:
-  contents: write   # needed by softprops/action-gh-release
+  contents: read
 
 jobs:
   # ----------------------------------------------------------------------
@@ -73,6 +77,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref }}
+          persist-credentials: false
       - id: v
         env:
           INPUT_TAG: ${{ inputs.tag }}
@@ -130,6 +135,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref }}
+          persist-credentials: false
 
       - name: Install toolchain and dependencies
         run: |
@@ -197,11 +203,13 @@ jobs:
           VER: ${{ needs.meta.outputs.version }}
         run: |
           set -ex
-          addons/linux/mkpkg.sh build-release/src/budyk "$VER" .
-          for f in budyk_*_amd64.deb budyk-*.x86_64.rpm; do
+          # Into a directory of their own: test-packages.sh mounts it
+          # into the Fedora container, and it mounted the workspace.
+          addons/linux/mkpkg.sh build-release/src/budyk "$VER" packages
+          (cd packages && for f in budyk_*_amd64.deb budyk-*.x86_64.rpm; do
             sha256sum "$f" > "$f.sha256"
-          done
-          sudo addons/linux/test-packages.sh . "$VER"
+          done)
+          sudo addons/linux/test-packages.sh packages "$VER"
 
       - name: Upload artefacts
         uses: actions/upload-artifact@v4
@@ -212,10 +220,10 @@ jobs:
             budyk-*-linux-amd64.tar.gz.sha256
             budyk-*-linux-amd64-debug.tar.gz
             budyk-*-linux-amd64-debug.tar.gz.sha256
-            budyk_*_amd64.deb
-            budyk_*_amd64.deb.sha256
-            budyk-*.x86_64.rpm
-            budyk-*.x86_64.rpm.sha256
+            packages/budyk_*_amd64.deb
+            packages/budyk_*_amd64.deb.sha256
+            packages/budyk-*.x86_64.rpm
+            packages/budyk-*.x86_64.rpm.sha256
           if-no-files-found: error
           retention-days: 14
 
@@ -238,6 +246,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref }}
+          persist-credentials: false
 
       - name: Build on FreeBSD
         uses: cross-platform-actions/action@v1.6.0
@@ -351,6 +360,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref }}
+          persist-credentials: false
 
       - name: Install toolchain
         run: |
@@ -479,8 +489,12 @@ jobs:
     if: needs.meta.outputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: write   # needed by softprops/action-gh-release
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
           path: dist

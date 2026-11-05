@@ -46,6 +46,9 @@ AmbientCapabilities=
 
 # Filesystem. The `-`: without /etc/budyk the unit failed in its
 # namespace setup (226/NAMESPACE) before budyk could say what is missing.
+# Another data_dir in the config needs it here too (`systemctl edit
+# budyk`: ReadWritePaths= for it, and an ExecStartPre= that creates
+# it), or budyk fails with "cannot lock ... Read-only file system".
 ReadWritePaths=/var/db/budyk
 ReadOnlyPaths=-/etc/budyk
 

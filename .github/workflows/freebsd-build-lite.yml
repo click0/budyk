@@ -19,6 +19,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Nothing here writes to the repository.
+permissions:
+  contents: read
+
 jobs:
   lite:
     runs-on: ubuntu-latest

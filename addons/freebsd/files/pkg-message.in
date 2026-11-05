@@ -14,4 +14,12 @@ Before opening the dashboard to the network, set a password: see
 `budyk hash-password` and web.auth in the config.
 EOM
 }
+{ type: upgrade
+  maximum_version: "0.8.7"
+  message: <<EOM
+%%PREFIX%%/etc/budyk/config.yaml is now root:budyk 0640 (it holds the
+alert channels' secrets and the password hash); one edited under an
+older budyk was left world-readable until this upgrade.
+EOM
+}
 ]

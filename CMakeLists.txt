@@ -168,7 +168,9 @@ include(cmake/docs.cmake)
 # ports tree no longer takes ${PREFIX}/man, and man(1) finds both.
 include(GNUInstallDirs)
 install(TARGETS budyk DESTINATION bin)
-install(FILES config.example.yaml DESTINATION etc/budyk)
+# CMAKE_INSTALL_SYSCONFDIR: `etc` under the prefix (/usr/local/etc/budyk),
+# but /etc/budyk for a prefix of /usr (it was /usr/etc/budyk there).
+install(FILES config.example.yaml DESTINATION ${CMAKE_INSTALL_SYSCONFDIR}/budyk)
 install(DIRECTORY rules/ DESTINATION share/budyk/rules)
 install(FILES docs/budyk.8 DESTINATION ${CMAKE_INSTALL_MANDIR}/man8)
 

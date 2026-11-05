@@ -16,6 +16,8 @@
 # directory /var/lib/budyk (0750); the config is root:budyk 0640 (it may
 # hold a password hash). The service is not started: `systemctl enable
 # --now budyk` does that. Removing stops it; purging removes the data.
+# The alert channels and `suggest-rules --ai` run curl(1): recommended,
+# not required (a host without alerts needs none).
 #
 #   addons/linux/mkpkg.sh path/to/budyk VERSION OUTDIR [ARCH]
 #
@@ -86,7 +88,7 @@ chmod 0644 "$ROOT/etc/budyk/config.yaml" "$ROOT/usr/lib/systemd/system/budyk.ser
 add_user='getent group budyk >/dev/null || groupadd --system budyk
 getent passwd budyk >/dev/null || useradd --system --gid budyk --home-dir /var/lib/budyk --no-create-home --shell /usr/sbin/nologin --comment "budyk monitoring daemon" budyk'
 setup='install -d -o budyk -g budyk -m 0750 /var/lib/budyk
-chown root:budyk /etc/budyk/config.yaml && chmod 0640 /etc/budyk/config.yaml
+if [ -e /etc/budyk/config.yaml ]; then chown root:budyk /etc/budyk/config.yaml && chmod 0640 /etc/budyk/config.yaml; fi
 if [ -d /run/systemd/system ]; then systemctl daemon-reload >/dev/null 2>&1 || true; fi'
 stop='if [ -d /run/systemd/system ]; then systemctl stop budyk.service >/dev/null 2>&1 || true; systemctl disable budyk.service >/dev/null 2>&1 || true; fi'
 reload='if [ -d /run/systemd/system ]; then systemctl daemon-reload >/dev/null 2>&1 || true; fi'
@@ -106,6 +108,7 @@ SIZE=$(du -sk "$ROOT" | cut -f1)
     echo "Maintainer: $MAINTAINER"
     echo "Installed-Size: $SIZE"
     echo "Depends: adduser | passwd"
+    echo "Recommends: curl, ca-certificates"
     echo "Section: admin"
     echo "Priority: optional"
     echo "Homepage: https://github.com/click0/budyk"
@@ -118,7 +121,9 @@ printf '#!/bin/sh\nset -e\nif [ "$1" = configure ]; then\n%s\n%s\nif [ -n "$2" ]
 printf '#!/bin/sh\nset -e\nif [ "$1" = remove ] || [ "$1" = deconfigure ]; then\n%s\nfi\n' "$stop" > "$DEB/DEBIAN/prerm"
 printf '#!/bin/sh\nset -e\n%s\nif [ "$1" = purge ]; then\n    rm -rf /var/lib/budyk\nfi\n' "$reload" > "$DEB/DEBIAN/postrm"
 chmod 0755 "$DEB/DEBIAN/postinst" "$DEB/DEBIAN/prerm" "$DEB/DEBIAN/postrm"
-dpkg-deb --root-owner-group --build "$DEB" "$OUT/budyk_${VER}_${ARCH}.deb" >/dev/null
+# xz: dpkg before 1.21.18 (Debian 11, Ubuntu 22.04) cannot read the zstd
+# dpkg-deb makes by default on newer hosts.
+dpkg-deb --root-owner-group -Zxz --build "$DEB" "$OUT/budyk_${VER}_${ARCH}.deb" >/dev/null
 
 # --- .rpm -------------------------------------------------------------------
 RPMTOP=$WORK/rpm
@@ -132,6 +137,13 @@ install -d "$RPMTOP/SPECS" "$RPMTOP/BUILD" "$RPMTOP/RPMS"
     echo "URL:       https://github.com/click0/budyk"
     echo "BuildArch: $RPMARCH"
     echo "Requires(pre): shadow-utils"
+    echo "Recommends: curl"
+    # rpm's file-owner generator (Fedora 42+) adds "Requires: group(budyk)"
+    # for the %attr below; %pre makes the user and the group, so the
+    # package provides them itself (without this the install failed:
+    # "nothing provides group(budyk)").
+    echo "Provides: user(budyk)"
+    echo "Provides: group(budyk)"
     echo "%global debug_package %{nil}"
     echo "%global __os_install_post %{nil}"
     echo
@@ -161,7 +173,7 @@ install -d "$RPMTOP/SPECS" "$RPMTOP/BUILD" "$RPMTOP/RPMS"
     echo "%files"
     echo "%attr(0755,root,root) /usr/bin/budyk"
     echo "%dir /etc/budyk"
-    echo "%config(noreplace) /etc/budyk/config.yaml"
+    echo "%attr(0640,root,budyk) %config(noreplace) /etc/budyk/config.yaml"
     echo "%config(noreplace) /etc/budyk/rules.lua"
     echo "/usr/lib/systemd/system/budyk.service"
     echo "/usr/share/man/man8/budyk.8.gz"

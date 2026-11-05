@@ -6,8 +6,9 @@
 
 budyk (Ukrainian "будик", alarm clock) is a self-contained monitoring
 daemon for FreeBSD and Linux servers. It ships as one static binary with
-no runtime dependencies and no database: metrics live in fixed-size ring
-files on disk, the dashboard is embedded in the binary, and alerting rules
+no runtime dependencies (the alert channels and `suggest-rules --ai`
+run `curl(1)`) and no database: metrics live in fixed-size ring files
+on disk, the dashboard is embedded in the binary, and alerting rules
 are plain Lua or YAML.
 
 ## Key idea: collect only as much as someone needs
@@ -248,12 +249,20 @@ FreeBSD 15.1.
   ```
 
   (the rules where the example config's `rules.path` looks; edit the
-  config first: `data_dir`, `listen`, `port`, the password hash).
+  config first: `listen`, `port`, the password hash). The unit lets
+  budyk write under `/var/db/budyk` alone (`ProtectSystem=strict` and
+  `ReadWritePaths`): another `data_dir` needs `systemctl edit budyk`
+  with `ReadWritePaths=` for it and the `ExecStartPre=` line that
+  creates it, or the daemon fails with "cannot lock ... Read-only file
+  system" and restarts in a loop.
 - **Docker:** a `Dockerfile` and `docker-compose.yml` are in
   [`addons/docker/`](addons/docker/). The compose file runs budyk with
   the host's network and process table and reads `config.yaml` next to
   it: `cp config.example.yaml addons/docker/config.yaml`, edit it, then
-  `docker compose -f addons/docker/docker-compose.yml up -d`.
+  `docker compose -f addons/docker/docker-compose.yml up -d`. The
+  filesystem readings are the container's mounts, not the host's: mount
+  what should be watched (`/home:/host/home:ro`), or run the binary on
+  the host for them.
 
 ## Quick start
 

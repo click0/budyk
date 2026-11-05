@@ -6,7 +6,8 @@
 
 budyk («будик») — автономний демон моніторингу для серверів на FreeBSD і
 Linux. Це один статичний бінарний файл без залежностей під час виконання
-і без бази даних. Метрики зберігаються в кільцевих файлах фіксованого
+(канали сповіщень і `suggest-rules --ai` запускають `curl(1)`) і без
+бази даних. Метрики зберігаються в кільцевих файлах фіксованого
 розміру, вебпанель вбудована в бінарник, а правила сповіщень пишуться
 звичайним Lua або YAML.
 
@@ -238,12 +239,35 @@ smoke-скрипти з крос-зібраним бінарником amd64 н�
   збирає, встановлює і запускає його повністю, як CI на 14.4 і 15.1.
 - **Linux:** пакети вище встановлюють захищений systemd-юніт; для
   бінарного файлу, встановленого вручну, він лежить у
-  [`addons/linux/budyk.service`](addons/linux/budyk.service).
+  [`addons/linux/budyk.service`](addons/linux/budyk.service). Юніт
+  працює від користувача `budyk` і читає `/etc/budyk/config.yaml`,
+  яких `cmake --install` не створює (приклад конфігу він кладе в
+  `etc/budyk/` префікса): після нього
+
+  ```sh
+  sudo useradd -r -s /sbin/nologin -d /var/db/budyk budyk
+  sudo install -d -o root -g budyk -m 0750 /etc/budyk
+  sudo install -o root -g budyk -m 0640 config.example.yaml /etc/budyk/config.yaml
+  sudo install -o root -g budyk -m 0640 rules/examples.lua /usr/local/etc/budyk/rules.lua
+  sudo install -m 0644 addons/linux/budyk.service /etc/systemd/system/budyk.service
+  sudo systemctl daemon-reload && sudo systemctl enable --now budyk
+  ```
+
+  (правила там, де їх шукає `rules.path` прикладу; спершу відредагуйте
+  конфіг: `listen`, `port`, геш пароля). Юніт дозволяє budyk писати
+  лише в `/var/db/budyk` (`ProtectSystem=strict` і `ReadWritePaths`):
+  інший `data_dir` потребує `systemctl edit budyk` із `ReadWritePaths=`
+  для нього та рядка `ExecStartPre=`, що його створює, інакше демон
+  падає з «cannot lock ... Read-only file system» і перезапускається по
+  колу.
 - **Docker:** `Dockerfile` і `docker-compose.yml` лежать у
   [`addons/docker/`](addons/docker/). Compose запускає budyk із мережею
   і таблицею процесів хоста та читає `config.yaml` поруч із собою:
   `cp config.example.yaml addons/docker/config.yaml`, відредагуйте, потім
-  `docker compose -f addons/docker/docker-compose.yml up -d`.
+  `docker compose -f addons/docker/docker-compose.yml up -d`. Показники
+  файлових систем — це монтування контейнера, а не хоста: підмонтуйте
+  те, за чим треба стежити (`/home:/host/home:ro`), або запускайте
+  бінарник на хості.
 
 ## Швидкий старт
 

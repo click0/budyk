@@ -13,6 +13,10 @@ port: 8080
 data_dir: "/var/db/budyk"  # the ring files, budyk.lock, rule_state.tsv,
                            # sessions.tsv; the Linux packages use
                            # /var/lib/budyk. Its parent must exist.
+                           # Under the systemd unit, another directory
+                           # needs a ReadWritePaths= for it (see the
+                           # unit): the rest of the system is read-only
+                           # to budyk there.
 
 # ---- Collection cadence (spec §3.4) --------------------------------------
 collection:

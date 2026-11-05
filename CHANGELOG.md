@@ -73,6 +73,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   re-login.
 - `budyk tui` drew "iowait 0.0%" on the Procs line while the CPU row
   said "measuring..." (the cpu group a baseline, its fields zeros).
+- **FreeBSD: an upgrade left a `config.yaml` edited under an older
+  budyk world-readable.** 0.8.6 made the file root:budyk 0640 for a
+  fresh install (the `@sample` keyword's mode is the copy's), while one
+  installed by 0.8.5 as root:wheel 0644 and edited since (the sample
+  no longer matched it, so pkg kept it) stayed 0644, with the alert
+  channels' secrets and the password hash in it. The package makes an
+  existing config root:budyk 0640 on install, and the pkg-message says
+  so on an upgrade.
+- **Linux packages: `curl(1)` is recommended** (the alert channels and
+  `suggest-rules --ai` run it; a host without alerts needs none), and
+  the README no longer says "no runtime dependencies" without that.
+  The .deb is xz-compressed (dpkg before 1.21.18, Debian 11 and
+  Ubuntu 22.04, cannot read the zstd newer hosts' dpkg-deb makes); the
+  .rpm records the config as root:budyk 0640 (`rpm --setperms` and
+  `--restore` made it world-readable again, `rpm -V` flagged it); the
+  .deb's postinst no longer fails when the admin deleted the packaged
+  config; the .rpm provides the `budyk` user and group it creates
+  (Fedora 42+'s rpm requires `group(budyk)` for the config's owner).
+- **`cmake --install` with a prefix of `/usr` put the example config
+  in `/usr/etc/budyk`**: it goes to `CMAKE_INSTALL_SYSCONFDIR`
+  (`/etc/budyk` there, `/usr/local/etc/budyk` otherwise, as before).
+- **The Docker health check read a fixed config path**, not the one
+  the daemon runs with: `serve --config /config/budyk.yaml` on another
+  port was "unhealthy" for ever. It reads the `--config` of the `budyk
+  serve` in the container, then `/etc/budyk/config.yaml`, then the
+  example.
+- **CI and release workflows ran with a token that could write to the
+  repository** in every job, third-party actions and VM copies of the
+  workspace included. They run read-only (`permissions: contents:
+  read`), the checkouts of the build jobs keep no credentials, the
+  publish job alone writes; the Linux packages are built into
+  `packages/`, which is what the Fedora container gets (it was the
+  workspace), now `fedora:44` (41 is end-of-life). Pinning the
+  third-party actions to commits is left to the maintainer.
+- Docs: the systemd unit allows writes under `/var/db/budyk` alone,
+  so another `data_dir` needs a drop-in (README, the unit, the
+  example config); the Ukrainian README has the hand-install steps;
+  the Docker compose file's filesystem readings are the container's
+  mounts (README, CLAUDE.md).
+
 
 
 - **The dashboard's history chart said "no data" in on-demand mode**, and
