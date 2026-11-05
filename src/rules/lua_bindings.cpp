@@ -669,6 +669,7 @@ int bind_all(lua_State* L) {
     // hosts that watch files errored on every tick here.
     static const budyk::FileWatchState kNoFiles;
     budyk_lua_bind_files(L, a->files != nullptr ? *a->files : kNoFiles);
+    budyk_lua_snapshot_bound(L);
     return 0;
 }
 
@@ -680,6 +681,52 @@ int budyk_lua_bind(lua_State* L, const budyk::Sample& s, const budyk_detail_c* d
     lua_pushcfunction(L, bind_all);
     lua_pushlightuserdata(L, &a);
     return lua_pcall(L, 1, 0, 0);
+}
+
+namespace {
+// The globals the bind sets, and registry[kBoundRegKey], their values
+// as set: a rule's assignment is found and undone against it.
+const char* const kBound[] = {
+    "cpu", "mem", "swap", "load", "disk", "net", "proc", "entropy", "self_",
+    "thermal", "tcp", "udp", "icmp", "fs", "clock", "files", "uptime_seconds",
+};
+constexpr const char* kBoundRegKey = "budyk.bound";
+} // namespace
+
+void budyk_lua_snapshot_bound(lua_State* L) {
+    lua_createtable(L, 0, static_cast<int>(sizeof(kBound) / sizeof(kBound[0])));   // t
+    lua_pushglobaltable(L);                                   // t G
+    for (const char* name : kBound) {
+        lua_pushstring(L, name);                              // t G name
+        lua_rawget(L, -2);                                    // t G value
+        lua_setfield(L, -3, name);                            // t G
+    }
+    lua_pop(L, 1);                                            // t
+    lua_setfield(L, LUA_REGISTRYINDEX, kBoundRegKey);
+}
+
+int budyk_lua_restore_bound(lua_State* L) {
+    lua_settop(L, 0);
+    if (lua_getfield(L, LUA_REGISTRYINDEX, kBoundRegKey) != LUA_TTABLE) {   // 1: t
+        lua_pushnil(L);
+        return 1;
+    }
+    lua_pushglobaltable(L);                                   // 2: G
+    const char* first = nullptr;
+    for (const char* name : kBound) {
+        lua_getfield(L, 1, name);                             // 3: as bound
+        lua_pushstring(L, name);
+        lua_rawget(L, 2);                                     // 4: as it is now
+        if (!lua_rawequal(L, 3, 4)) {
+            if (first == nullptr) first = name;
+            lua_pushstring(L, name);
+            lua_pushvalue(L, 3);
+            lua_rawset(L, 2);                                 // G[name] = as bound
+        }
+        lua_settop(L, 2);
+    }
+    if (first != nullptr) lua_pushstring(L, first); else lua_pushnil(L);
+    return 1;
 }
 
 void budyk_lua_register_collected(lua_State* L) {

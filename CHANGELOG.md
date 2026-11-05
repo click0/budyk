@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An alert that is not ASCII arrived wrong on ntfy and by mail.** A
+  rule's name went raw into ntfy's `Title` header and the mail's
+  `Subject`, where a header line is ASCII: shown as mojibake, or the
+  request refused. Both are RFC 2047 encoded words now (UTF-8, base64)
+  when a byte is not ASCII, plain otherwise. A message that is not
+  valid UTF-8 (a process name is anyone's bytes) was taken by ntfy as a
+  file, and the alert arrived as an attachment named `attachment.bin`:
+  the ntfy body, the mail body and the SMS are made valid UTF-8 (a bad
+  byte is U+FFFD). The mail says `Content-Transfer-Encoding: 8bit`, as
+  its body is.
+- **A rule could assign `uptime_seconds`, or a sample table, for the
+  rules after it.** `uptime_seconds = 0`, a typo for `==`, changed what
+  every rule after it in the tick read, in silence, until the next
+  tick's bind. What a rule assigns of the globals the bind sets (the
+  sample tables, `files`, `uptime_seconds`) is set back once the rule
+  ran, and is its error ("assigned 'uptime_seconds', which is budyk's:
+  set back"); a rules file that assigns one at file scope does not
+  load. Its own globals are set as before.
 - **FreeBSD: `service budyk status` as anyone but root said "budyk is
   not running"** while it ran: daemon(8) makes the pid file 0600,
   budyk's, and rc.subr read no pid from it. The rc.d script makes the

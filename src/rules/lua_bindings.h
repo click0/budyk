@@ -48,3 +48,13 @@ int  budyk_lua_uncollected    (lua_State* L, int idx);
 /// Registers collected(name): whether the sample bound last has that
 /// group ("disk", "self") or list ("disk.devices"); an unknown name raises.
 void budyk_lua_register_collected(lua_State* L);
+/// Keep what the bind set in _G (the sample tables, `files`,
+/// `uptime_seconds`) in the registry, for budyk_lua_restore_bound().
+/// Allocates: call it inside a protected call (bind_all does).
+void budyk_lua_snapshot_bound(lua_State* L);
+/// A C function for lua_pcall(): sets every global the bind set back to
+/// what the bind set, and returns the name of the first one found
+/// assigned since (a string), or nil. A rule that assigned
+/// `uptime_seconds = 0` (a typo for ==) changed what every rule after
+/// it in the tick read.
+int  budyk_lua_restore_bound(lua_State* L);

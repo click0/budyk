@@ -64,6 +64,25 @@ size_t utf8_len(const std::string& s, size_t i) {
 
 } // namespace
 
+std::string utf8_sanitize(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (static_cast<unsigned char>(s[i]) < 0x80) {
+            out.push_back(s[i]);
+            continue;
+        }
+        const size_t n = utf8_len(s, i);
+        if (n == 0) {
+            out += "\xEF\xBF\xBD";                    // U+FFFD
+        } else {
+            out.append(s, i, n);
+            i += n - 1;
+        }
+    }
+    return out;
+}
+
 std::string json_escape(const std::string& s) {
     std::string out;
     out.reserve(s.size() + 8);

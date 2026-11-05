@@ -1074,11 +1074,14 @@ int main() {
             "  seen_mem = mem and mem.available_percent\n"
             "  return true\n"
             "end, cooldown = 0 })\n") == 0);
-        // Tick 1: the bypasses work within the tick...
+        // Tick 1: the rawset into the proxy is seen within the tick; the
+        // global assigned is set back once the rule ran, and is its
+        // error (test 51)...
         assert(e.load_string("seen_cpu = nil seen_mem = nil") == 0);
         assert(e.eval_tick(mk(90.0, 25.0, 0.1, 0.0)) == 1);
-        assert(e.load_string("assert(seen_cpu == -1 and seen_mem == nil)") == 0);
-        // ...and are gone on the next one.
+        assert(e.load_string("assert(seen_cpu == -1 and seen_mem == 25)") == 0);
+        assert(e.rules()[0].last_error.find("assigned 'mem'") != std::string::npos);
+        // ...and both are gone on the next one.
         assert(e.eval_tick(mk(70.0, 30.0, 0.1, 0.0)) == 1);
         assert(e.load_string("assert(seen_cpu == 70 and seen_mem == 30)") == 0);
         e.shutdown();
@@ -2060,6 +2063,61 @@ int main() {
         assert(e.rules()[0].last_error.find("over 65536") != std::string::npos);
         assert(e.rules()[1].last_error.empty());
         e.exec_worker().stop(2000);
+        e.shutdown();
+    }
+
+    // 51. What a rule assigns of budyk's globals (the sample tables,
+    //     files, uptime_seconds) is set back once it ran, and is its
+    //     error: `uptime_seconds = 0` (a typo for ==) changed what every
+    //     rule after it in the tick read. The rules after it read what
+    //     the bind set; a rules file's own globals are set as before; a
+    //     file-scope assignment is the file's error at load.
+    {
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        assert(e.load_string(
+            "state = 0\n"
+            "watch('typo',   { when = function() uptime_seconds = 0 return true end, cooldown = 0 })\n"
+            "watch('drop',   { when = function() cpu = nil return true end, cooldown = 0 })\n"
+            "watch('mine',   { when = function() state = state + 1 return state == 1 end, cooldown = 0 })\n"
+            "watch('reads',  { when = function() return uptime_seconds == 1234 and cpu.total_percent == 42 end, cooldown = 0 })\n"
+            "watch('again',  { when = function() return true end, cooldown = 0,\n"
+            "                  action = function() uptime_seconds = 5 end })\n") == 0);
+        Sample s = mk(42, 0, 0, 0);
+        s.uptime_seconds = 1234;
+        assert(e.eval_tick(s) == 5);
+        assert(e.rules()[0].last_error.find("assigned 'uptime_seconds'") != std::string::npos);
+        assert(e.rules()[1].last_error.find("assigned 'cpu'") != std::string::npos);
+        assert(e.rules()[2].last_error.empty() && e.rules()[3].last_error.empty());
+        assert(e.rules()[4].last_error.find("assigned 'uptime_seconds'") != std::string::npos);
+        // The next tick (mine's state is past 1): the rule that reads
+        // them still finds the bound values (the action's assignment
+        // was set back too).
+        assert(e.eval_tick(s) == 4 && e.rules()[3].last_error.empty() &&
+               e.rules()[3].fire_count == 2);
+        LuaEngine f;
+        assert(f.init(false) == 0);
+        assert(f.load_string("files = {}\n") != 0);
+        assert(f.last_error().find("assigned 'files'") != std::string::npos);
+        f.shutdown();
+        e.shutdown();
+    }
+
+    // 52. A rules file that gives _G a metatable of its own (a
+    //     strict-globals guard) keeps working: the bind raw-sets, and
+    //     what the file's guard refuses is the rule's error as before.
+    {
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        assert(e.load_string(
+            "setmetatable(_G, { __newindex = function(t, k, v) rawset(t, k, v) end,\n"
+            "                   __index = function(t, k) error('undefined global ' .. k) end })\n"
+            "counter = 0\n"
+            "watch('own', { when = function() counter = counter + 1 return counter == 1 and cpu.total_percent == 0 end })\n"
+            "watch('undef', { when = function() return nosuch end })\n") == 0);
+        assert(e.eval_tick(mk(0, 0, 0, 0)) == 1);
+        assert(e.rules()[0].last_error.empty());
+        assert(e.rules()[1].last_error.find("undefined global nosuch") != std::string::npos);
         e.shutdown();
     }
 

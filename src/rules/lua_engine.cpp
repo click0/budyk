@@ -499,7 +499,27 @@ int LuaEngine::load_string(const char* code) {
         lua_pop(L_, 1);
         return -2;
     }
-    return 0;
+    return file_assigned_bound() ? -2 : 0;
+}
+
+bool LuaEngine::file_assigned_bound() {
+    std::string name;
+    if (!assigned_bound(&name)) return false;
+    last_error_ = "the rules file assigned '" + name + "', which is budyk's";
+    return true;
+}
+
+bool LuaEngine::assigned_bound(std::string* name) {
+    // The restore sets globals, which can allocate: in a protected call.
+    lua_pushcfunction(L_, budyk_lua_restore_bound);
+    if (lua_pcall(L_, 0, 1, 0) != LUA_OK) {
+        lua_pop(L_, 1);
+        return false;
+    }
+    const bool assigned = lua_type(L_, -1) == LUA_TSTRING;
+    if (assigned && name != nullptr) *name = lua_tostring(L_, -1);
+    lua_pop(L_, 1);
+    return assigned;
 }
 
 int LuaEngine::load_file(const char* path) {
@@ -515,7 +535,7 @@ int LuaEngine::load_file(const char* path) {
         lua_pop(L_, 1);
         return -2;
     }
-    return 0;
+    return file_assigned_bound() ? -2 : 0;
 }
 
 int LuaEngine::save_state(const char* path) const {
@@ -637,6 +657,22 @@ int LuaEngine::eval_tick(const Sample& s, const budyk_detail_c* detail) {
             --r.cooldown_remaining;
             continue;
         }
+
+        // What the rule assigned of budyk's globals (`uptime_seconds =
+        // 0`, a typo for ==, `cpu = nil`) is set back once it ran, and
+        // is its error: the rules after it read what the bind set, not
+        // the rule's, as they did until the next tick's bind.
+        struct Undo {
+            LuaEngine* e;
+            LuaRule*   r;
+            ~Undo() {
+                std::string g;
+                if (e->assigned_bound(&g)) {
+                    log_rule_error(&r->last_error, r->name.c_str(), "rule",
+                                   ("assigned '" + g + "', which is budyk's: set back").c_str());
+                }
+            }
+        } undo{this, &r};
 
         const int base = lua_gettop(L_);
         lua_rawgeti(L_, LUA_REGISTRYINDEX, r.when_ref);

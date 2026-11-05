@@ -21,4 +21,10 @@ std::string json_escape(const std::string& s);
 /// character after the backslash; a trailing backslash is kept.
 std::string json_unescape(const std::string& s);
 
+/// `s` as valid UTF-8: well-formed sequences pass through, every byte
+/// that is not part of one becomes U+FFFD. For text sent where UTF-8
+/// is expected without JSON's escaping: an ntfy body, a mail's body.
+/// Control characters are kept.
+std::string utf8_sanitize(const std::string& s);
+
 } // namespace budyk

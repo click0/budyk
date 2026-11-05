@@ -331,7 +331,11 @@ The gates a local build does not show:
    leaves the Lua heap is bounded too: an alert's name and message are
    cut (`kMaxAlertNameBytes`, `kMaxAlertMessageBytes`), `exec()`'s
    arguments together to 64 KiB, and `files` is a read-only proxy as
-   the sample tables are. `exec()` is gated by `--enable-exec` or
+   the sample tables are; what a rule assigns of the globals the bind
+   sets (the sample tables, `files`, `uptime_seconds`) is set back
+   once the rule ran and is its error (`budyk_lua_restore_bound()`
+   against the bind's snapshot; a file-scope assignment fails the
+   load). `exec()` is gated by `--enable-exec` or
    `rules.exec.enabled` plus an allowlist. A runaway rule gets an
    error, not the daemon. The reload's check of a new rules file runs
    in a probe engine (`LuaEngine::set_probe()`), which knows the level

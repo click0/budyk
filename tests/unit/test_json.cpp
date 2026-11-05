@@ -367,6 +367,21 @@ int main() {
         assert(alerts_to_json(nullptr, 0) == "{\"count\":0,\"alerts\":[]}\n");
     }
 
+    // 11. utf8_sanitize: well-formed UTF-8 and ASCII (control characters
+    //     too) pass; a stray byte, a truncated sequence, an overlong form
+    //     and a surrogate each become U+FFFD, byte by byte.
+    {
+        assert(utf8_sanitize("") == "");
+        assert(utf8_sanitize("plain\n\t text") == "plain\n\t text");
+        assert(utf8_sanitize("\xD0\xB1\xD1\x83\xD0\xB4\xD0\xB8\xD0\xBA") ==
+               "\xD0\xB1\xD1\x83\xD0\xB4\xD0\xB8\xD0\xBA");           // будик
+        assert(utf8_sanitize("\xF0\x9F\x98\x80") == "\xF0\x9F\x98\x80");   // U+1F600
+        assert(utf8_sanitize("a\xFFz") == "a\xEF\xBF\xBDz");
+        assert(utf8_sanitize("a\xD0") == "a\xEF\xBF\xBD");                // cut short
+        assert(utf8_sanitize("\xC0\xAF") == "\xEF\xBF\xBD\xEF\xBF\xBD");  // overlong '/'
+        assert(utf8_sanitize("\xED\xA0\x80") == "\xEF\xBF\xBD\xEF\xBF\xBD\xEF\xBF\xBD");
+    }
+
     std::printf("test_json: PASS\n");
     return 0;
 }
