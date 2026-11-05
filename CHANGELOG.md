@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.7] — 2026-11-05
+
+Six security fixes, each from the eighth review round. An exec or freeze
+allowlist with every entry commented out (YAML's null) allowed anything;
+it allows nothing and says so. On FreeBSD, an upgrade left a `config.yaml`
+edited under 0.8.5 world-readable, with the alert channels' secrets and
+the password hash; the port makes it root:budyk 0640. Behind a reverse
+proxy under a path, the session cookie went to every application on the
+host; a proxy that sends `X-Forwarded-Prefix` gets one for that path. A
+NUL byte in an LLM reply hid an `exec()` from `suggest-rules`'s check;
+control bytes are refused and the check reads the text whole. A SIGTERM
+waited out every inline `exec()` of the tick (two hung commands held it
+past systemd's 90 s, and the SIGKILL lost the rule state); the stop flag
+cancels the command and ends the tick. `freeze()` refused budyk's pid but
+not its threads' ids. CI and release workflows run with a read-only token.
+Then the fixes: the config and a YAML rules file are read as one document
+from a regular file (a directory named `rules.yaml` aborted the daemon, a
+FIFO held it); a YAML rule's typo, duplicate key or list where a value
+belongs is an error naming the rule, and a `when` that does not parse
+names the rule and its line; `1.1h` is a duration; the SIGHUP check and
+the engine load the same bytes. `suggest-rules` weighs each record by the
+time it stands for, checks the reply as this config's daemon would load
+it, writes no rule that would hold all the time, and refuses an empty
+window. The dashboard fetches the level table on every reconnect, draws
+the chart in time order after a clock step, keeps a failed history load
+visible, shows a 403's reason and fits a phone. `budyk tui` logs in again
+after a login that did not get through, ends on `q` and Ctrl-C while a
+request waits, bounds a reply, and asks once a second whatever the keys.
+The Linux packages recommend `curl`, the .deb is xz, the .rpm records the
+config's owner and provides the user and group it creates; the Docker
+health check reads the daemon's own config. A tick longer than its level's
+interval is logged, `web.min_send_rate` is a setting, and `fsck` next to
+a running daemon no longer mistakes the record being written for a crash.
+
 ### Added
 
 - `budyk tui`: `q`, Escape and Ctrl-C end it while a request waits too
@@ -2303,6 +2337,7 @@ it turned up two untested storage paths, which are now covered.
   opened, and init with the original size works again. tier_manager.cpp
   coverage went from 84.3% to 94.4%.
 
+[0.8.7]: https://github.com/click0/budyk/releases/tag/v0.8.7
 [0.8.6]: https://github.com/click0/budyk/releases/tag/v0.8.6
 [0.8.5]: https://github.com/click0/budyk/releases/tag/v0.8.5
 [0.8.4]: https://github.com/click0/budyk/releases/tag/v0.8.4
