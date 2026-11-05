@@ -136,11 +136,30 @@ bool own_host(const HttpRequest& req, const Config& cfg, const std::string& host
     return false;
 }
 
+// The path the session cookie is for: the proxy's X-Forwarded-Prefix
+// (`/budyk`) when budyk is served under a path, else `/`. With `Path=/`
+// always, the browser sent the token to every application on that host
+// (`/app/`'s backend and its logs). A prefix that is not a plain path
+// is `/`: the header is the proxy's to set, but a stray value must not
+// make a cookie line of it.
+std::string cookie_path(const HttpRequest& req) {
+    const std::string p = first_entry(req.header("X-Forwarded-Prefix"));
+    if (p.empty() || p[0] != '/' || p.size() > 200) return "/";
+    for (const char c : p) {
+        const bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+                        c == '/' || c == '-' || c == '_' || c == '.' || c == '~';
+        if (!ok) return "/";
+    }
+    // Without its trailing slash: a cookie for `/budyk` is sent to
+    // `/budyk/` and below.
+    return p.size() > 1 && p.back() == '/' ? p.substr(0, p.size() - 1) : p;
+}
+
 // Attributes of the session cookie: HttpOnly and SameSite=Strict always,
 // Secure when the request came over HTTPS, so the browser never sends
 // the bearer token over plain HTTP.
 std::string cookie_attrs(const HttpRequest& req) {
-    std::string a = "; HttpOnly; Path=/; SameSite=Strict";
+    std::string a = "; HttpOnly; Path=" + cookie_path(req) + "; SameSite=Strict";
     if (via_https(req)) a += "; Secure";
     return a;
 }

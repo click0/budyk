@@ -239,6 +239,30 @@ int main() {
             assert(!has(header(r, "Set-Cookie"), "Secure"));
         }
 
+        // Behind a proxy under a path (X-Forwarded-Prefix): the cookie's
+        // Path is that prefix, without its trailing slash, so the token
+        // is not sent to every application on the host; none, or one
+        // that is not a plain path, is Path=/ (it was Path=/ always).
+        assert(has(set, "; Path=/;"));
+        struct Prefix { const char* given; const char* path; };
+        const Prefix prefixes[] = {
+            {"/budyk", "; Path=/budyk;"}, {"/budyk/", "; Path=/budyk;"}, {"/a/b-c_d.e~", "; Path=/a/b-c_d.e~;"},
+            {"/", "; Path=/;"}, {"budyk", "; Path=/;"}, {"/bud yk", "; Path=/;"},
+            {"/x;Secure", "; Path=/;"}, {"/x\r\nSet-Cookie: a=b", "; Path=/;"}, {"", "; Path=/;"},
+        };
+        for (const Prefix& p : prefixes) {
+            HttpRequest via = post("/api/auth/login", "{\"password\":\"hunter2\"}", "10.0.0.4");
+            via.headers.push_back({"X-Forwarded-Prefix", p.given});
+            r = w.handler(via);
+            assert(r.status == 200);
+            assert(has(header(r, "Set-Cookie"), p.path));
+            HttpRequest out = post("/api/auth/logout", "");
+            out.headers.push_back({"Cookie", header(r, "Set-Cookie").substr(0, header(r, "Set-Cookie").find(';'))});
+            out.headers.push_back({"X-Forwarded-Prefix", p.given});
+            r = w.handler(out);
+            assert(r.status == 200 && has(header(r, "Set-Cookie"), p.path));   // cleared on the same path
+        }
+
         HttpRequest lo = post("/api/auth/logout", "");
         lo.headers.push_back({"Cookie", cookie});
         lo.headers.push_back({"X-Forwarded-Proto", "https"});

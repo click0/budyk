@@ -62,6 +62,17 @@ h1 button:hover { border-color: var(--muted); }
 .detail th:first-child, .detail td:first-child { text-align: left; }
 .detail td .bar { width: 8rem; display:inline-block; vertical-align: middle; }
 .down { color: var(--crit); }
+/* A phone: the readings were squeezed into a column a word or two wide
+   and the page was wider than the screen. Label and bar on one line,
+   the value under them; the detail tables scroll sideways. */
+@media (max-width: 40rem) {
+  body { padding: .8rem .8rem; }
+  .row { grid-template-columns: 6.5rem 1fr; gap: .3rem .6rem; }
+  .row .value { grid-column: 1 / -1; text-align: left; font-size: .85rem; }
+  .cores { grid-template-columns: 1fr; }
+  .detail, .alerts { overflow-x: auto; }
+  h1 { font-size: 1rem; }
+}
 .hist { max-width: 64rem; margin-top: 1.6rem; }
 .hist h2 { font-size: .95rem; font-weight: 600; margin: 0 0 .6rem 0; }
 .hist .ctl { display:flex; flex-wrap:wrap; gap:.35rem; align-items:center; margin-bottom:.6rem; }
@@ -172,6 +183,18 @@ let fileWatchHist = [];
 // Level table from /api/levels: id -> { name, interval_ms }. Samples carry
 // only the id; custom levels are defined in the daemon's config.
 let levels = {};
+// Fetched at start and again on every (re)connect: a daemon restarted
+// with other custom levels gives the same ids other names, and the
+// table from before the restart named a level by them.
+async function fetchLevels() {
+  try {
+    const lr = await fetch("api/levels", { credentials: "same-origin" });
+    if (!lr.ok) return;
+    const fresh = {};
+    for (const lv of await lr.json()) fresh[lv.id] = lv;
+    levels = fresh;
+  } catch (_) {}
+}
 
 function fmtLevel(id) {
   const lv = levels[id];
@@ -411,10 +434,14 @@ function drawChart(samples) {
   const m   = METRICS[histMetric];
   const W = 1000, H = 220, padL = 6, padR = 6, padT = 14, padB = 22;
 
-  // null: not collected there (a gap).
+  // null: not collected there (a gap). In time order: a clock step back
+  // leaves the rings, and the page's samples, out of it, and the chart
+  // took its first and last point for the axis (points off the chart,
+  // the axis reading backwards).
   const all = (samples || [])
     .map(s => ({ t: Number(s.ts) / 1e6, v: collected(s, m.group) ? m.pick(s) : null }))
-    .filter(p => Number.isFinite(p.t) && (p.v === null || Number.isFinite(p.v)));
+    .filter(p => Number.isFinite(p.t) && (p.v === null || Number.isFinite(p.v)))
+    .sort((a, b) => a.t - b.t);
   const pts = all.filter(p => p.v !== null);
 
   if (pts.length < 2) {
@@ -496,16 +523,25 @@ function noteLive(arr) {
     if (liveSamples.length > LIVE_MAX) liveSamples.shift();
   }
 }
+// The rings' points and the page's live samples, each instant once: the
+// live samples came after the rings' newest point alone, so after a
+// clock step back (the rings' newest from before the step) the chart
+// stopped following the ticks for the step's length.
 function withLive(samples, sinceNs) {
-  const lastTs = samples.length ? Number(samples[samples.length - 1].ts) : 0;
   const since = Number(sinceNs);
-  const extra = liveSamples.filter(s => Number(s.ts) > lastTs && Number(s.ts) >= since);
+  const seen = new Set(samples.map(s => String(s.ts)));
+  const extra = liveSamples.filter(s => Number(s.ts) >= since && !seen.has(String(s.ts)));
   return extra.length ? samples.concat(extra) : samples;
 }
+// A history load that failed said "error" until the next tick's frame
+// drew the live samples over it ("200 pts"): the window's failure is
+// shown until a load succeeds.
+let histError = false;
 function redrawHistory() {
   const merged = withLive(histSamples, histSinceNs);
   drawChart(merged);
-  $("histInfo").textContent = merged.length ? `${merged.length} pts` : "no data";
+  $("histInfo").textContent = histError ? (merged.length ? "history: error, live samples only" : "history: error")
+                            : merged.length ? `${merged.length} pts` : "no data";
 }
 async function loadHistory() {
   const r = RANGES[histRange];
@@ -525,12 +561,14 @@ async function loadHistory() {
     if (seq !== histSeq) return;
     histSamples = got;
     histSinceNs = sinceNs;
+    histError   = false;
     redrawHistory();
   } catch (e) {
     if (seq !== histSeq) return;
     histSamples = [];
-    $("histInfo").textContent = "error";
-    drawChart([]);
+    histSinceNs = sinceNs;
+    histError   = true;
+    redrawHistory();
   }
 }
 
@@ -599,13 +637,25 @@ async function doLogin() {
       const wait = r.headers.get("Retry-After");
       $("loginErr").textContent = "Too many attempts" + (wait ? ", try again in " + wait + " s" : "");
     }
-    else                  $("loginErr").textContent = "Server returned " + r.status;
+    else                  $("loginErr").textContent = "Server returned " + r.status + (await replySays(r));
   } catch (e) {
     $("loginErr").textContent = "Network error";
   } finally {
     loggingIn = false;
     $("signIn").disabled = false;
   }
+}
+
+// What a refused reply said, for the message: the daemon's 403 names
+// its reason (a Host that is not budyk's, a cross-origin login), and
+// "Server returned 403" alone said nothing of it. ": <text>" or "".
+async function replySays(r) {
+  try {
+    const text = (await r.text()).trim();
+    if (!text) return "";
+    try { const j = JSON.parse(text); if (j && j.error) return ": " + j.error; } catch (_) {}
+    return ": " + text.replace(/^budyk: /, "").slice(0, 200);
+  } catch (_) { return ""; }
 }
 
 // Ends the session: the daemon closes its WebSocket (1008) and the page
@@ -776,7 +826,7 @@ function openWs() {
   setStatus("connecting WebSocket…");
   const sock = new WebSocket(u.href);
   ws = sock;
-  sock.onopen    = () => { setStatus("live (WebSocket)"); fetchAlerts(); };
+  sock.onopen    = () => { setStatus("live (WebSocket)"); fetchLevels(); fetchAlerts(); };
   sock.onmessage = (e) => {
     try {
       const doc = JSON.parse(e.data);
@@ -833,14 +883,11 @@ async function start() {
   const r = await fetch("api/samples?last=1", { credentials: "same-origin" });
   if (r.status === 401) return showLogin();
   if (!r.ok) {
-    $("loginErr").textContent = "Server returned " + r.status;
+    $("loginErr").textContent = "Server returned " + r.status + (await replySays(r));
     return showLogin();
   }
   showDash();
-  try {
-    const lr = await fetch("api/levels", { credentials: "same-origin" });
-    if (lr.ok) for (const lv of await lr.json()) levels[lv.id] = lv;
-  } catch (_) {}
+  await fetchLevels();
   await fetchAlerts();
   // Wire the history chart (independent of the live WS feed); it loads
   // once the catch-up sample has given the server's clock.
