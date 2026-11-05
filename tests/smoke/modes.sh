@@ -317,8 +317,45 @@ else
 fi
 stop hup
 
+# 5. A tick longer than its level's interval is said -------------------------
+# The period is the tick's length then, and the rates are over it: a CI
+# host ticked a 100 ms level at 2 Hz for a minute, with nothing to tell
+# why. 120 rules that each spend most of the instruction limit make a
+# tick of some 200 ms against a 100 ms level.
+: > "$DIR/slow.lua"
+i=0
+while [ "$i" -lt 120 ]; do
+    echo "watch('burn$i', { when = function() local x = 0 for k = 1, 250000 do x = x + k end return false end, cooldown = 0 })" >> "$DIR/slow.lua"
+    i=$((i + 1))
+done
+cat > "$DIR/slow.yaml" <<EOF
+data_dir: $DIR/slow
+listen: 127.0.0.1
+port: $PORT
+rules: { path: $DIR/slow.lua }
+collection:
+  l1: { interval: 1 }
+  levels:
+    - { name: fast, interval: 0.1, priority: 40, when: "true", storage_mb: 1 }
+EOF
+start slow
+# The line comes once the first such tick is over: 7 s on the emulated
+# arm64 CI, 0.2 s here.
+i=0
+until grep -q "a tick took [0-9]* ms .*longer than the level's interval (fast: 100 ms)" "$DIR/slow.log"; do
+    i=$((i + 1))
+    [ "$i" -lt 200 ] || break
+    sleep 0.1
+done
+if grep -q "a tick took [0-9]* ms .*longer than the level's interval (fast: 100 ms)" "$DIR/slow.log"; then
+    echo "ok   a tick longer than its level's interval is said: $(grep -o 'a tick took [0-9]* ms (collecting [0-9]* ms' "$DIR/slow.log" | head -1)"
+else
+    echo "FAIL: a tick longer than its level's interval was not said in 20 s"; fail=1
+fi
+stop slow
+
 if [ "$fail" -ne 0 ]; then
-    for f in sets always ondemand hup; do echo "--- $f.log ---"; cat "$DIR/$f.log"; done
+    for f in sets always ondemand hup slow; do echo "--- $f.log ---"; cat "$DIR/$f.log"; done
     exit 1
 fi
 echo "modes smoke test: PASS"

@@ -81,8 +81,11 @@ std::vector<std::string> ring_files(const char* dir, int* err) {
 }
 
 // Prints what check_ring() found for one ring; true if it found an error
-// this run did not repair.
-bool report(const std::string& name, const RingCheck& c, bool repair) {
+// this run did not repair. `writer` is the pid of the budyk writing to
+// the directory, or nullptr: a record past write_idx is then the one
+// being written (it reaches its slot before the index moves), not one a
+// crash left behind.
+bool report(const std::string& name, const RingCheck& c, bool repair, const char* writer) {
     const RingFile::Header& h = c.header;
     // What to do about a header that cannot be read, by what it is: the
     // advice was "move it aside" for all, for a ring it could not read
@@ -165,6 +168,13 @@ bool report(const std::string& name, const RingCheck& c, bool repair) {
         std::printf("  note: %llu record%s more than a day ahead of this host's clock\n",
                     static_cast<unsigned long long>(c.future), c.future == 1 ? "" : "s");
     }
+    if (c.unindexed > 0 && writer != nullptr && !c.errors_but_unindexed()) {
+        std::printf("  note: %llu record%s past write_idx: budyk serve (pid %s) is writing "
+                    "%s now, and counts %s in as its index moves\n",
+                    static_cast<unsigned long long>(c.unindexed), c.unindexed == 1 ? "" : "s",
+                    writer, c.unindexed == 1 ? "it" : "them", c.unindexed == 1 ? "it" : "them");
+        return false;
+    }
     if (c.unindexed > 0) {
         std::printf("  %llu record%s written past write_idx and never counted (a crash "
                     "before the index update): %s\n",
@@ -227,6 +237,7 @@ int cmd_fsck(int argc, char* argv[]) {
     // reads, as the API does, and goes ahead.
     int lock_fd = -1;
     std::string holder;
+    const char* writer = nullptr;              // the running budyk's pid, when there is one
     if (repair) {
         lock_fd = lock_data_dir(dir, &holder);
         if (lock_fd == -EWOULDBLOCK) {
@@ -241,8 +252,10 @@ int cmd_fsck(int argc, char* argv[]) {
             return kExitFailed;
         }
     } else if (data_dir_locked(dir, &holder)) {
+        if (holder.empty()) holder = "?";
+        writer = holder.c_str();
         std::printf("note: a running budyk (pid %s) writes to %s; its newest records may "
-                    "change while they are read\n", holder.empty() ? "?" : holder.c_str(), dir);
+                    "change while they are read\n", writer, dir);
     }
 
     const uint64_t now = now_realtime_ns();
@@ -276,7 +289,7 @@ int cmd_fsck(int argc, char* argv[]) {
             ++left;
             continue;
         }
-        if (report(name, c, repair)) ++left;
+        if (report(name, c, repair, writer)) ++left;
         if (c.recovered > 0) ++repaired;
     }
     if (lock_fd >= 0) ::close(lock_fd);

@@ -114,6 +114,7 @@ def connect():
 class Frames:
     def __init__(self, s):
         self.s, self.buf, self.head = s, b"", False
+        self.arrived = None       # when the last frame's bytes were all in
     def frame(self):
         # One whole frame's JSON off the buffer, or None.
         if not self.head:
@@ -132,6 +133,9 @@ class Frames:
         if len(self.buf) < o + n:
             return None
         payload, self.buf = self.buf[o:o + n], self.buf[o + n:]
+        # The figure is the daemon's: the frame's bytes in, not parsed
+        # (json.loads of 300 samples is tens of ms on a slow VM).
+        self.arrived = time.time()
         return json.loads(payload)
     def next(self, deadline):
         # The next text frame's JSON, or None at the deadline.
@@ -207,9 +211,28 @@ elif phase == "catchup":
     started = time.time()
     deadline = started + 60
     filling = []
+    prev = None
     while True:
-        count = get("/api/samples")["count"]
-        filling.append("%.1f:%d" % (time.time() - started, count))
+        doc = get("/api/samples")
+        count = doc["count"]
+        entry = "%.1f:%d" % (time.time() - started, count)
+        # The newest sample's level, the gap between the two newest (the
+        # ticks' spacing), and the daemon's own CPU since the poll
+        # before: a level not selected, a tick that takes long, and
+        # whether it computes or waits (a CI run saw one sample per
+        # poll, 2 Hz, for 60 s, with nothing to tell which).
+        if doc["samples"]:
+            last = doc["samples"][-1]
+            ts = int(last["ts"])
+            cpu = last.get("self", {}).get("cpu_user_seconds", 0) + \
+                  last.get("self", {}).get("cpu_system_seconds", 0)
+            entry += ":L%s" % last.get("level")
+            if len(doc["samples"]) > 1:
+                entry += ":+%dms" % ((ts - int(doc["samples"][-2]["ts"])) / 1e6)
+            if prev is not None and ts > prev[0]:
+                entry += ":%.0f%%" % ((cpu - prev[1]) / ((ts - prev[0]) / 1e9) * 100)
+            prev = (ts, cpu)
+        filling.append(entry)
         if count >= 300 or time.time() >= deadline:
             break
         time.sleep(0.5)
@@ -219,8 +242,9 @@ elif phase == "catchup":
     best = None
     for _ in range(2):
         t0 = time.time()
-        m = Frames(connect()).next(t0 + 5)
-        dt = time.time() - t0
+        f = Frames(connect())
+        m = f.next(t0 + 5)
+        dt = (f.arrived if m else time.time()) - t0
         n = len(m["samples"]) if m else 0
         if best is None or (n, -dt) > (best[0], -best[1]):
             best = (n, dt)

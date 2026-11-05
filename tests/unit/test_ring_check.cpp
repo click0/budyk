@@ -158,6 +158,7 @@ int main() {
         set_write_idx(p, 9);
         RingCheck c = check(p, false);
         assert(c.records == 9 && c.unindexed == 1 && c.recovered == 0 && c.errors());
+        assert(!c.errors_but_unindexed());          // the unindexed record is all
         c = check(p, true);
         assert(c.unindexed == 1 && c.recovered == 1 && !c.errors());
         c = check(p, false);
@@ -232,6 +233,7 @@ int main() {
         flip_byte(p, 7);
         RingCheck c = check(p, true);
         assert(c.damaged == 2 && c.valid == 8 && c.errors());
+        assert(c.errors_but_unindexed());           // damage is an error, running budyk or not
         assert(c.damaged_slots.size() == 2 && c.damaged_slots[0] == 3 && c.damaged_slots[1] == 7);
         assert(c.recovered == 0);
 

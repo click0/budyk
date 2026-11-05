@@ -86,6 +86,38 @@ fi
 stop
 expect_fsck 0 "0 with problems left" "$DIR/data"
 
+# Next to a running budyk a record past write_idx is the one being
+# written (it reaches its slot before the index moves): a check in that
+# moment said "a crash before the index update", exit 4 (the emulated
+# arm64 CI, slow, saw it). This daemon ticks every 30 s, so the record
+# crafted past write_idx stays there for the check.
+cat > "$DIR/slow.yaml" <<EOF
+data_dir: $DIR/data_slow
+listen: 127.0.0.1
+port: $PORT
+collection:
+  l1: { interval: 30 }
+EOF
+"$BIN" serve --config "$DIR/slow.yaml" >> "$DIR/slow.log" 2>&1 &
+PID=$!
+i=0
+until curl -s -o /dev/null "http://127.0.0.1:$PORT/api/health"; do
+    i=$((i + 1))
+    [ "$i" -lt 50 ] || { echo "daemon did not start (slow.yaml)"; cat "$DIR/slow.log"; exit 1; }
+    sleep 0.1
+done
+sleep 0.5
+SLOW="$DIR/data_slow/tier3.ring"
+n=$(widx "$SLOW")
+if [ "$n" -ge 1 ]; then
+    widx "$SLOW" $((n - 1))
+    expect_fsck 0 "past write_idx: budyk serve (pid $PID) is writing it now" "$DIR/data_slow"
+    widx "$SLOW" "$n"
+else
+    echo "FAIL: the slow daemon stored nothing in 0.5 s"; fail=1
+fi
+stop
+
 RING="$DIR/data/level-burst.ring"
 n=$(widx "$RING")
 widx "$RING" $((n - 1))

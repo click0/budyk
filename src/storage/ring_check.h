@@ -63,6 +63,10 @@ struct RingCheck {
 
     /// Problems that are not repaired by this run (see budyk.8, fsck).
     bool errors() const;
+    /// errors() leaving out the unindexed records: a record reaches its
+    /// slot before the index moves, so next to a running budyk one past
+    /// write_idx may be the one being written now, no problem at all.
+    bool errors_but_unindexed() const;
 };
 
 /// Checks the ring file at `path` against `now_ns`. With `repair`, the
