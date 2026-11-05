@@ -2,9 +2,12 @@
 #include "rules/yaml_compat.h"
 #include "core/parse_int.h"
 #include "rules/alert.h"
+#include "util/text_file.h"
 #include "util/yaml_dom.h"
 
 extern "C" {
+#include <lauxlib.h>
+#include <lua.h>
 #include <yaml.h>
 }
 
@@ -46,18 +49,107 @@ std::string lua_escape(const char* s) {
     return out;
 }
 
+// YAML's null: a plain `~`, `null` or nothing at all (`message:` with no
+// value). A key with a null value is as if it were not there.
+bool is_null(const yaml_node_t* n) {
+    if (n->type != YAML_SCALAR_NODE || n->data.scalar.style != YAML_PLAIN_SCALAR_STYLE) {
+        return false;
+    }
+    const char* v = reinterpret_cast<const char*>(n->data.scalar.value);
+    return *v == '\0' || std::strcmp(v, "~") == 0 || std::strcmp(v, "null") == 0 ||
+           std::strcmp(v, "Null") == 0 || std::strcmp(v, "NULL") == 0;
+}
+
+// The keys a rule may have, in this order; a rule's fields by them.
+const char* const kRuleKeys[] = {"name", "when", "for_ticks", "cooldown",
+                                 "severity", "action", "message"};
+constexpr size_t kRuleKeyCount = sizeof(kRuleKeys) / sizeof(kRuleKeys[0]);
+
+// The rule's fields, read by walking its mapping once. A key that is
+// not one of kRuleKeys (`cooldwon`, `for`), one given twice, or a list
+// or mapping where a value belongs is an error: a typo dropped the
+// setting without a word (`serverity: critical` fired as a warning), a
+// duplicate kept the first. A null value is a key left out.
+int read_rule_fields(yaml_document_t* doc, const yaml_node_t* item, const std::string& at,
+                     const char* (&fields)[kRuleKeyCount], const yaml_node_t** when_node,
+                     std::string* error) {
+    bool seen[kRuleKeyCount] = {};
+    for (auto* p = item->data.mapping.pairs.start; p != item->data.mapping.pairs.top; ++p) {
+        const yaml_node_t* k = yaml_document_get_node(doc, p->key);
+        const yaml_node_t* v = yaml_document_get_node(doc, p->value);
+        const char* key = k != nullptr ? yaml_scalar(k) : nullptr;
+        if (key == nullptr || v == nullptr) {
+            *error = at + ": a key that is not a string";
+            return -EINVAL;
+        }
+        size_t i = 0;
+        while (i < kRuleKeyCount && std::strcmp(kRuleKeys[i], key) != 0) ++i;
+        if (i == kRuleKeyCount) {
+            *error = at + ": unknown key '" + key +
+                     "' (name, when, for_ticks, cooldown, severity, action, message)";
+            return -EINVAL;
+        }
+        if (seen[i]) {
+            *error = at + ": '" + key + "' given twice";
+            return -EINVAL;
+        }
+        seen[i] = true;
+        if (is_null(v)) continue;   // a key with no value: left out ('' is a value)
+        const char* s = yaml_scalar(v);
+        if (s == nullptr) {
+            *error = at + ": '" + key + "' is a " +
+                     (v->type == YAML_SEQUENCE_NODE ? "list" : "mapping") +
+                     " where a value belongs";
+            return -EINVAL;
+        }
+        fields[i] = s;
+        if (i == 1) *when_node = v;
+    }
+    return 0;
+}
+
+// Lua reads `when` before the file is put together: a syntax error in
+// the generated chunk named a line of that chunk and its first rule
+// (`[string "watch("r1", {..."]:56: 'end' expected`); here it names the
+// rule and the line of the YAML file. `L` is a scratch state (nullptr
+// when none could be made: the load's own check then stands).
+int check_when(lua_State* L, const char* when, const yaml_node_t* when_node,
+               const std::string& who, std::string* error) {
+    if (L == nullptr) return 0;
+    const std::string chunk = std::string("return ") + when;
+    const int rc = luaL_loadbufferx(L, chunk.data(), chunk.size(), "=when", "t");
+    if (rc == LUA_OK) {
+        lua_pop(L, 1);
+        return 0;
+    }
+    const char* msg = lua_tostring(L, -1);
+    std::string what = msg != nullptr ? msg : "cannot parse";
+    // "when:1: " is the chunk and the line, both ours.
+    if (what.compare(0, 8, "when:1: ") == 0) what.erase(0, 8);
+    *error = who + ": 'when' (line " + std::to_string(when_node->start_mark.line + 1) +
+             ") does not parse: " + what;
+    lua_pop(L, 1);
+    lua_settop(L, 0);
+    return -EINVAL;
+}
+
 // The rule's place in an error message: its name once it has one, else
 // its position in the list (from 1).
 int transpile_rule(yaml_document_t* doc, const yaml_node_t* item, size_t index,
-                   std::string* out, std::string* error) {
+                   lua_State* L, std::string* out, std::string* error) {
     const std::string at = "rule " + std::to_string(index);
     if (item == nullptr || item->type != YAML_MAPPING_NODE) {
         *error = at + " is not a mapping (name:, when:, ...)";
         return -EINVAL;
     }
 
-    const char* name = yaml_scalar(yaml_find_key(doc, item, "name"));
-    const char* when = yaml_scalar(yaml_find_key(doc, item, "when"));
+    const char* fields[kRuleKeyCount] = {};
+    const yaml_node_t* when_node = nullptr;
+    if (const int rc = read_rule_fields(doc, item, at, fields, &when_node, error); rc != 0) {
+        return rc;
+    }
+    const char* name = fields[0];
+    const char* when = fields[1];
     if (name == nullptr || name[0] == '\0') {
         *error = at + ": no 'name'";
         return -EINVAL;
@@ -77,12 +169,13 @@ int transpile_rule(yaml_document_t* doc, const yaml_node_t* item, size_t index,
             return -EINVAL;
         }
     }
+    if (const int rc = check_when(L, when, when_node, who, error); rc != 0) return rc;
 
-    const char* for_ticks = yaml_scalar(yaml_find_key(doc, item, "for_ticks"));
-    const char* cooldown  = yaml_scalar(yaml_find_key(doc, item, "cooldown"));
-    const char* severity  = yaml_scalar(yaml_find_key(doc, item, "severity"));
-    const char* action    = yaml_scalar(yaml_find_key(doc, item, "action"));
-    const char* message   = yaml_scalar(yaml_find_key(doc, item, "message"));
+    const char* for_ticks = fields[2];
+    const char* cooldown  = fields[3];
+    const char* severity  = fields[4];
+    const char* action    = fields[5];
+    const char* message   = fields[6];
 
     // Whole non-negative integers; "5s", "-1" or "abc" is an error, not
     // a silently dropped field.
@@ -119,14 +212,14 @@ int transpile_rule(yaml_document_t* doc, const yaml_node_t* item, size_t index,
 
     // Build the watch() call. `action` becomes a Lua closure that fires
     // alert(name, severity, message) or print(...); `escalate` is the
-    // spec's `{ alert, escalate }`. The `when` text is spliced verbatim —
-    // Lua's parser surfaces any syntax errors at load time, same as for
-    // hand-written rules.lua.
+    // spec's `{ alert, escalate }`. The `when` text is spliced verbatim
+    // (checked above), on a line of its own: a `--` comment at its end
+    // would take the `end` with it.
     *out += "watch(\"";
     *out += nameL;
     *out += "\", {\n  when = function() return ";
     *out += when;
-    *out += " end,\n  action = ";
+    *out += "\n  end,\n  action = ";
     if (is_escalate) *out += "{ ";
     *out += "function() ";
     if (is_log) {
@@ -160,7 +253,7 @@ int transpile_rule(yaml_document_t* doc, const yaml_node_t* item, size_t index,
     return 0;
 }
 
-int walk_sequence(yaml_document_t* doc, const yaml_node_t* seq,
+int walk_sequence(yaml_document_t* doc, const yaml_node_t* seq, lua_State* L,
                   std::string* out, std::string* error) {
     if (seq == nullptr || seq->type != YAML_SEQUENCE_NODE) {
         *error = "'rules:' is not a list";
@@ -170,10 +263,16 @@ int walk_sequence(yaml_document_t* doc, const yaml_node_t* seq,
     for (auto* it = seq->data.sequence.items.start;
          it     != seq->data.sequence.items.top; ++it) {
         const yaml_node_t* item = yaml_document_get_node(doc, *it);
-        const int r = transpile_rule(doc, item, ++index, out, error);
+        const int r = transpile_rule(doc, item, ++index, L, out, error);
         if (r != 0) return r;
     }
     return 0;
+}
+
+// The YAML problem, with its line, or what a second document is.
+std::string yaml_problem(const yaml_parser_t* parser) {
+    return std::string("YAML: ") + (parser->problem != nullptr ? parser->problem : "cannot parse") +
+           " at line " + std::to_string(parser->problem_mark.line + 1);
 }
 
 } // namespace
@@ -195,34 +294,67 @@ int yaml_rules_to_lua(const char* yaml_text, std::string* out, std::string* erro
 
     yaml_document_t doc;
     if (!yaml_parser_load(&parser, &doc)) {
-        *error = std::string("YAML: ") + (parser.problem != nullptr ? parser.problem : "cannot parse") +
-                 " at line " + std::to_string(parser.problem_mark.line + 1);
+        *error = yaml_problem(&parser);
         yaml_parser_delete(&parser);
         return -EINVAL;
     }
+
+    // A scratch Lua state for the `when` checks: no libraries, nothing
+    // of the engine. Without one (no memory) the load's check stands.
+    lua_State* L = luaL_newstate();
 
     int rc = 0;
     const yaml_node_t* root = yaml_document_get_root_node(&doc);
     if (root == nullptr) {
         // Empty document → no rules. Not an error.
     } else if (root->type == YAML_SEQUENCE_NODE) {
-        rc = walk_sequence(&doc, root, out, error);
+        rc = walk_sequence(&doc, root, L, out, error);
     } else if (root->type == YAML_MAPPING_NODE) {
         const yaml_node_t* rules = yaml_find_key(&doc, root, "rules");
         if (rules == nullptr) {
             *error = "no 'rules:' list in the document";
             rc = -EINVAL;
         } else {
-            rc = walk_sequence(&doc, rules, out, error);
+            rc = walk_sequence(&doc, rules, L, out, error);
         }
     } else {
         *error = "the document is neither a list of rules nor a mapping with 'rules:'";
         rc = -EINVAL;
     }
-
+    if (L != nullptr) lua_close(L);
     yaml_document_delete(&doc);
+
+    // Only the first document was read: rules after a `---` were dropped,
+    // and a syntax error there never reported.
+    if (rc == 0) {
+        yaml_document_t more;
+        if (!yaml_parser_load(&parser, &more)) {
+            *error = yaml_problem(&parser);
+            rc = -EINVAL;
+        } else {
+            const yaml_node_t* second = yaml_document_get_root_node(&more);
+            if (second != nullptr && !is_null(second)) {
+                *error = "a second YAML document (after ---): the file must hold one";
+                rc = -EINVAL;
+            }
+            yaml_document_delete(&more);
+        }
+    }
     yaml_parser_delete(&parser);
     return rc;
+}
+
+int yaml_rules_to_lua(const std::string& yaml_text, std::string* out, std::string* error) {
+    // The text goes on as a C string: a NUL byte ended it, and every
+    // rule after the byte was dropped in silence.
+    const size_t nul = yaml_text.find('\0');
+    if (nul != std::string::npos) {
+        if (error != nullptr) {
+            *error = "a NUL byte at offset " + std::to_string(nul) + ": not a text file";
+        }
+        return -EINVAL;
+    }
+    return yaml_rules_to_lua(yaml_text.c_str(), out, error);
 }
 
 int yaml_rules_to_lua_file(const char* path, std::string* out, std::string* error) {
@@ -232,25 +364,13 @@ int yaml_rules_to_lua_file(const char* path, std::string* out, std::string* erro
         *error = "no path";
         return -EINVAL;
     }
-
-    auto read_failed = [&](int err) {
-        *error = std::string("cannot read: ") + std::strerror(err);
-        return -err;
-    };
-    std::FILE* f = std::fopen(path, "rbe");
-    if (f == nullptr) return read_failed(errno);
-    if (std::fseek(f, 0, SEEK_END) != 0) { std::fclose(f); return read_failed(EIO); }
-    const long sz = std::ftell(f);
-    if (sz < 0)                          { std::fclose(f); return read_failed(EIO); }
-    std::fseek(f, 0, SEEK_SET);
-
-    std::string text(static_cast<size_t>(sz), '\0');
-    if (sz > 0 && std::fread(&text[0], 1, static_cast<size_t>(sz), f) != static_cast<size_t>(sz)) {
-        std::fclose(f);
-        return read_failed(EIO);
+    std::string text, why;
+    const int rc = read_text_file(path, &text, &why);
+    if (rc != 0) {
+        *error = "cannot read: " + why;
+        return rc;
     }
-    std::fclose(f);
-    return yaml_rules_to_lua(text.c_str(), out, error);
+    return yaml_rules_to_lua(text, out, error);
 }
 
 } // namespace budyk

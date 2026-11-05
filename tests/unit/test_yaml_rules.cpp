@@ -7,9 +7,11 @@
 #include "rules/lua_engine.h"
 #include "rules/yaml_compat.h"
 
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <cassert>
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -30,7 +32,7 @@ int main() {
         std::string lua;
         assert(yaml_rules_to_lua(y, &lua) == 0);
         assert(contains(lua, "watch(\"hot_cpu\""));
-        assert(contains(lua, "return cpu.total_percent > 90 end"));
+        assert(contains(lua, "return cpu.total_percent > 90\n  end"));
         // default action = alert with default severity = warning
         assert(contains(lua, "alert(\"hot_cpu\", \"warning\", \"hot_cpu\")"));
     }
@@ -335,6 +337,120 @@ int main() {
         assert(e.rule_count() == 1);
         assert(e.rules()[0].name == std::string("a\x01" "23"));
         e.shutdown();
+    }
+
+    // 17. A key that is not a rule's (a typo: `cooldwon`, `serverity`,
+    //     `for`), one given twice, or a list or mapping where a value
+    //     belongs is an error naming the rule and the key. Each was
+    //     dropped without a word: the typo's setting was lost, a
+    //     `severity: [critical]` fired as a warning.
+    {
+        struct Case { const char* field; const char* says; };
+        const Case bad[] = {
+            { "  cooldwon: 5\n",            "unknown key 'cooldwon'" },
+            { "  for: 5\n",                 "unknown key 'for'" },
+            { "  severity: [critical]\n",   "'severity' is a list where a value belongs" },
+            { "  for_ticks: { n: 5 }\n",    "'for_ticks' is a mapping where a value belongs" },
+            { "  cooldown: 5\n  cooldown: 6\n", "'cooldown' given twice" },
+            { "  message: ~\n  message: x\n",   "'message' given twice" },
+        };
+        for (const Case& c : bad) {
+            const std::string y = std::string("- name: typo\n  when: \"true\"\n") + c.field;
+            std::string lua, err;
+            assert(yaml_rules_to_lua(y.c_str(), &lua, &err) != 0);
+            assert(contains(err, "rule 'typo'") || contains(err, "rule 1"));
+            assert(contains(err, c.says));
+        }
+    }
+
+    // 18. A key with no value (`message:`, `~`, `null`) is one left out:
+    //     the message defaults to the name (it was an empty body), the
+    //     cooldown to the engine's (`cooldown: ~` was an error).
+    {
+        const char* y =
+            "- name: quiet\n"
+            "  when: \"true\"\n"
+            "  message:\n"
+            "  cooldown: ~\n"
+            "  severity: null\n";
+        std::string lua, err;
+        assert(yaml_rules_to_lua(y, &lua, &err) == 0);
+        assert(contains(lua, "alert(\"quiet\", \"warning\", \"quiet\")"));
+        assert(!contains(lua, "cooldown ="));
+        // A required key with no value is missing.
+        std::string b;
+        assert(yaml_rules_to_lua("- name: x\n  when: ~\n", &b, &err) != 0);
+        assert(contains(err, "no 'when'"));
+    }
+
+    // 19. A `when` that does not parse is an error naming the rule and
+    //     its line in the YAML file; the generated chunk's load named a
+    //     line of that chunk and its first rule (`[string "watch("r1",
+    //     {..."]:56: 'end' expected`).
+    {
+        const char* y =
+            "- name: r1\n"
+            "  when: \"true\"\n"
+            "- name: broken\n"
+            "  when: \"cpu.total_percent > \"\n";
+        std::string lua, err;
+        assert(yaml_rules_to_lua(y, &lua, &err) != 0);
+        assert(contains(err, "rule 'broken'"));
+        assert(contains(err, "(line 4)"));
+        assert(contains(err, "does not parse"));
+        assert(!contains(err, "r1") && !contains(err, "[string"));
+        // A trailing comment in `when` no longer takes the closing `end`.
+        std::string ok;
+        assert(yaml_rules_to_lua("- name: c\n  when: \"true -- always\"\n", &ok, &err) == 0);
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        assert(e.load_string(ok.c_str()) == 0 && e.rule_count() == 1);
+        e.shutdown();
+    }
+
+    // 20. A NUL byte in the text is refused: the text went on as a C
+    //     string, and every rule after the byte was dropped in silence.
+    {
+        std::string y = "- name: a\n  when: \"true\"\n";
+        y.push_back('\0');
+        y += "- name: b\n  when: \"true\"\n";
+        assert(y.size() == 51 && y[25] == '\0');
+        std::string lua, err;
+        assert(yaml_rules_to_lua(y, &lua, &err) != 0);
+        assert(contains(err, "a NUL byte at offset 25"));
+        assert(yaml_rules_to_lua(std::string(y.c_str()), &lua, &err) == 0);
+    }
+
+    // 21. The file must hold one YAML document: rules after a `---`
+    //     were dropped, and a syntax error after `...` never reported.
+    {
+        std::string lua, err;
+        assert(yaml_rules_to_lua("- name: a\n  when: \"true\"\n---\n- name: b\n  when: \"true\"\n",
+                                 &lua, &err) != 0);
+        assert(contains(err, "a second YAML document"));
+        assert(yaml_rules_to_lua("- name: a\n  when: \"true\"\n...\ngarbage: [\n",
+                                 &lua, &err) != 0);
+        assert(contains(err, "YAML:"));
+        // A `---` before the list, or one ending the file, is fine.
+        assert(yaml_rules_to_lua("---\n- name: a\n  when: \"true\"\n---\n", &lua, &err) == 0);
+    }
+
+    // 22. The path of a directory, or of a FIFO, is an error in words:
+    //     the directory was read as a file of 2^63 bytes (std::string's
+    //     length_error, and the daemon aborted, at start or on SIGHUP),
+    //     the FIFO held the daemon until something wrote to it.
+    {
+        char dir[] = "/tmp/budyk_yaml_dir_XXXXXX";
+        assert(mkdtemp(dir) != nullptr);
+        std::string lua, err;
+        assert(yaml_rules_to_lua_file(dir, &lua, &err) == -EISDIR);
+        assert(contains(err, "cannot read: Is a directory"));
+        const std::string fifo = std::string(dir) + "/rules.yaml";
+        assert(mkfifo(fifo.c_str(), 0600) == 0);
+        assert(yaml_rules_to_lua_file(fifo.c_str(), &lua, &err) == -ENOTSUP);
+        assert(contains(err, "not a regular file"));
+        ::unlink(fifo.c_str());
+        ::rmdir(dir);
     }
 
     std::printf("test_yaml_rules: PASS\n");

@@ -621,9 +621,12 @@ For simple threshold rules:
 ```
 
 Each entry is converted to a `watch()` call when the file is loaded. A
-severity or an action that is none of those, or a `for_ticks` that is
-not a whole number, is an error naming the rule, and the file is not
-loaded.
+severity or an action that is none of those, a `for_ticks` that is not
+a whole number, a key that is not one of the seven above (a typo), one
+given twice, or a list where a value belongs is an error naming the
+rule, and the file is not loaded; a `when` that does not parse names
+the rule and its line. A key with no value (`message:`) is one left
+out. The file holds one YAML document (nothing after a `---`).
 
 ### Suggested rules
 

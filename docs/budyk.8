@@ -135,6 +135,15 @@ counted in when the daemon starts again (and by
 so a crash of the daemon loses no stored record.
 .PP
 Monitoring rules are written in Lua and evaluated on each collection tick.
+A rules file named
+.I .yaml
+or
+.I .yml
+(any case) holds simple threshold rules, one mapping each (name, when,
+for_ticks, cooldown, severity, action, message), converted to Lua when
+it is loaded; a key not among those, a Lua expression that does not
+parse, or a second YAML document is an error naming the rule, and the
+file is not loaded.
 .SH FILES
 .TP
 .I /usr/local/etc/budyk/config.yaml

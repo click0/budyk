@@ -8,6 +8,7 @@
 #include <cstring>
 #include <string>
 
+#include <sys/stat.h>
 #include <unistd.h>
 
 using namespace budyk;
@@ -901,6 +902,89 @@ int main(int argc, char** argv) {
 #else
         assert(std::strcmp(default_config_path(etc), local) == 0);
 #endif
+    }
+
+    // An allowlist with every entry commented out is YAML's null: it was
+    // read as not there, and an empty exec allowlist lets exec() run any
+    // absolute path. It allows nothing, and says so; a list that is not
+    // an allowlist stays empty without a word.
+    {
+        Config c;
+        const std::string err = stderr_of(
+            "rules:\n"
+            "  exec:\n"
+            "    enabled: true\n"
+            "    allow:\n"
+            "      # - /usr/bin/systemctl\n"
+            "  freeze:\n"
+            "    allow: ~\n"
+            "security:\n"
+            "  file_watch:\n"
+            "    paths:\n"
+            "      # - /etc/passwd\n", &c);
+        assert(c.rules_exec_allow.size() == 1 && c.rules_exec_allow[0][0] != '/');
+        assert(c.rules_freeze_allow.size() == 1 && c.rules_freeze_allow[0].size() > 19);
+        assert(c.file_watch_paths.empty());
+        assert(has(err, "rules.exec.allow: empty (every entry commented out?); it allows nothing"));
+        assert(has(err, "rules.freeze.allow: empty"));
+        assert(!has(err, "file_watch"));
+    }
+
+    // One YAML document: `cat base.yaml site.yaml > config.yaml`, each
+    // starting with `---`, lost site.yaml's settings without a word, and
+    // a syntax error after `---` or `...` was never reported. A `---`
+    // first or last, and a second document that is empty, are fine.
+    {
+        Config c;
+        std::string error;
+        assert(config_load_string("port: 1\n---\nport: 2\n", &c, &error) == -5);
+        assert(has(error, "a second YAML document"));
+        assert(config_load_string("port: 1\n...\ngarbage: [\n", &c, &error) == -3);
+        assert(has(error, "line 3"));
+        assert(config_load_string("---\nport: 1\n---\n", &c, &error) == 0 && c.listen_port == 1);
+        assert(config_load_string("---\nport: 2\n...\n", &c, &error) == 0 && c.listen_port == 2);
+    }
+
+    // A config path that is a directory, or a FIFO, is refused in words
+    // and at once: the directory read as "input error at line 1, column
+    // 1", opening the FIFO waited for a writer.
+    {
+        char dir[] = "/tmp/budyk_cfg_dir_XXXXXX";
+        assert(mkdtemp(dir) != nullptr);
+        Config c;
+        std::string error;
+        assert(config_load(dir, &c, &error) == -2 && error == "is a directory");
+        const std::string fifo = std::string(dir) + "/config.yaml";
+        assert(mkfifo(fifo.c_str(), 0600) == 0);
+        assert(config_load(fifo.c_str(), &c, &error) == -2 && error == "not a regular file");
+        unlink(fifo.c_str());
+        rmdir(dir);
+    }
+
+    // A duration with one decimal and a unit: 1.1 * 3600 is
+    // 3960.0000000000005 in binary, and "1.1h" was refused as not whole
+    // seconds (4.1m, 2.2h too). To the millisecond.
+    {
+        Config c;
+        assert(stderr_of("web: { auth: { login_window: 1.1h } }\n", &c).empty());
+        assert(c.auth_login_window_sec == 3960);
+        assert(stderr_of("web: { auth: { login_window: 4.1m } }\n", &c).empty());
+        assert(c.auth_login_window_sec == 246);
+        assert(has(stderr_of("web: { auth: { login_window: 1.5s } }\n", &c), "not whole seconds"));
+        assert(c.auth_login_window_sec == 246);
+    }
+
+    // A freeze allowlist entry longer than the kernel keeps of a process
+    // name (15 bytes on Linux, 19 on FreeBSD) is kept, and the config
+    // says it matches by its first bytes: it never matched, in silence.
+    {
+        Config c;
+        const std::string err = stderr_of(
+            "rules: { freeze: { allow: [ nginx, postgres-checkpointer-long ] } }\n", &c);
+        assert(c.rules_freeze_allow.size() == 2);
+        assert(has(err, "rules.freeze.allow[1]: 'postgres-checkpointer-long' is longer than a "
+                        "process name"));
+        assert(!has(err, "allow[0]"));
     }
 
     std::printf("test_config: PASS\n");

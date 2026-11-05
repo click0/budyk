@@ -59,6 +59,12 @@ public:
 
     int  load_string(const char* code);
     int  load_file  (const char* path);
+    /// `code` whole (a NUL byte is a byte of it, not its end) as the chunk
+    /// `chunkname`: "@rules.lua" for a file's text (errors read
+    /// "rules.lua:12: ..."), "=rules.yaml (generated Lua)" for a text that
+    /// stands for one. The daemon reads the rules file once and loads the
+    /// text it checked (load_file() read the path again).
+    int  load_buffer(const std::string& code, const char* chunkname);
 
     /// Lua error text from the last failed load_string / load_file, e.g.
     /// "rules.lua:2: watch(x): 'action' must be a function, ...".
@@ -270,6 +276,9 @@ private:
     /// assigned_bound() after a rules file ran at load: true, with the
     /// file's error set, when it assigned one.
     bool file_assigned_bound();
+    /// load_string() and load_buffer(): `len` bytes of `code` as the
+    /// chunk `chunkname`, run at file scope.
+    int  load_chunk(const char* code, size_t len, const char* chunkname);
 
     lua_State*               L_               = nullptr;
     uint64_t                 instruction_limit_ = kDefaultInstructionLimit;

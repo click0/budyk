@@ -63,6 +63,7 @@ find_library(YAML_LIB_UTIL yaml REQUIRED)
 find_path(YAML_INCLUDE_DIR_UTIL yaml.h REQUIRED)
 add_library(budyk_util STATIC
     util/dir_lock.cpp
+    util/text_file.cpp
     util/tmpfile.cpp
     util/yaml_dom.cpp
 )

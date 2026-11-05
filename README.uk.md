@@ -590,12 +590,17 @@ watch("partition_full", {
   for_ticks: 3
   cooldown: 60
   severity: critical        # info | warning | critical
-  action: alert             # alert | log
+  action: alert             # alert | log | escalate (сповіщення і L3 на хвилину)
   message: "Disk writes above 200 MB/s"
 ```
 
 Під час завантаження файлу кожен запис перетворюється на виклик
-`watch()`.
+`watch()`. Невідомі severity чи action, `for_ticks` не цілим числом,
+ключ не з цих семи (одрук), ключ двічі або список там, де має бути
+значення, — помилка з назвою правила, і файл не завантажується; `when`,
+який не розбирається, називає правило та його рядок. Ключ без значення
+(`message:`) — як відсутній. Файл містить один YAML-документ (нічого
+після `---`).
 
 ### Підказки правил
 
