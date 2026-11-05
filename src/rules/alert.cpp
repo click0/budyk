@@ -162,7 +162,7 @@ bool run_curl(const std::vector<std::string>& args, int timeout_s,
     argv.push_back(nullptr);
     ExecResult res{};
     const int rc  = exec_command(argv.data(), timeout_s, &res, cancel);
-    const int err = errno;
+    const int err = res.err;             // the fork's, as saved: errno here is anyone's
     const std::string said = first_line(read_head(err_path, 4096));
     ::unlink(err_path);
     if (rc != 0) {

@@ -61,7 +61,7 @@
 // and the main thread's reads are on different threads (ThreadSanitizer
 // reported the race once serve.sh looked at the signal runs' log). A
 // lock-free atomic is async-signal-safe.
-static std::atomic<int> g_stop{0};
+static std::atomic<bool> g_stop{false};
 static std::atomic<int> g_reload{0};
 
 // Self-pipe that wakes the collection loop out of interruptible_sleep().
@@ -79,7 +79,7 @@ static int g_wake_pipe[2] = {-1, -1};
 extern "C" void budyk_serve_signal_handler(int sig) {
     const int saved = errno;
     if (sig == SIGHUP) g_reload = 1;
-    else               g_stop   = 1;
+    else               g_stop   = true;
     if (g_wake_pipe[1] >= 0) {
         const char b = 0;
         (void)!::write(g_wake_pipe[1], &b, 1);
@@ -272,8 +272,8 @@ int cmd_serve(int argc, char* argv[], const char* version) {
         // Not fatal: without it a new client waits for the current sleep
         // to end before the level steps up to L3.
         std::fprintf(stderr,
-            "budyk serve: wake pipe unavailable (errno=%d); clients will "
-            "switch the level to L3 on the next tick\n", errno);
+            "budyk serve: wake pipe unavailable (%s); clients will "
+            "switch the level to L3 on the next tick\n", std::strerror(errno));
         g_wake_pipe[0] = g_wake_pipe[1] = -1;
     }
 
@@ -462,6 +462,11 @@ int cmd_serve(int argc, char* argv[], const char* version) {
     // init() and what the config says of limits and gates.
     auto init_engine = [&cfg](budyk::LuaEngine& e) -> int {
         if (e.init(cfg.rules_enable_exec) != 0) return -1;
+        // A SIGTERM ends an inline exec() (wait = true) and the tick's
+        // rules after it: two rules waiting on hung commands held the
+        // shutdown for 120 s, past systemd's 90, and the SIGKILL lost
+        // the rule state and the open fold windows.
+        e.set_stop_flag(&g_stop);
         e.set_limits(static_cast<uint64_t>(cfg.rules_instruction_limit),
                      static_cast<size_t>(cfg.rules_memory_mb) << 20);
         if (!cfg.rules_exec_allow.empty()) e.set_exec_allowlist(cfg.rules_exec_allow);

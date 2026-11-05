@@ -211,7 +211,8 @@ int suggest_rules_llm(const std::string& api_key,
     };
     ExecResult res{};
     if (exec_command(argv, kCurlMaxTime + 15, &res, cancel) != 0) {
-        describe(error, std::string("cannot start curl(1): ") + std::strerror(errno));
+        // The fork's errno as exec_command() saved it: errno here is anyone's.
+        describe(error, std::string("cannot start curl(1): ") + std::strerror(res.err));
         return -3;
     }
     if (res.cancelled) {

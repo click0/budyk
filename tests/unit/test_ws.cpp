@@ -571,6 +571,37 @@ int main() {
         ::close(cv[1]);
     }
 
+    // 15. drop_sessions() finds the client it drops by fd and token both:
+    //     `valid` runs without the hub's lock, and meanwhile the HTTP
+    //     thread can drop a client whose socket failed, accept a new
+    //     connection with the same fd number and add() it (here, from
+    //     inside `valid`); by the fd alone that new, valid client was
+    //     the one closed.
+    {
+        WebSocketHub hub;
+        int a, a_peer, n = -1, n_peer = -1;
+        pair(&a, &a_peer);
+        hub.add(a, "tok-old");
+        ::close(a_peer);                         // the old client hung up
+        const size_t dropped = hub.drop_sessions([&](const std::string& t) {
+            if (t != "tok-old") return true;
+            assert(hub.service() == 1);          // the hub drops it: fd a is free
+            pair(&n, &n_peer);                   // the next connection takes that number
+            hub.add(n, "tok-new");
+            return false;
+        });
+        if (n == a) {
+            assert(dropped == 0 && hub.size() == 1);
+            assert(drain(n_peer).empty());       // no close frame to the new client
+            hub.broadcast("x");
+            assert(!drain(n_peer).empty());      // still served
+        } else {
+            std::printf("test_ws: 15 proves nothing here (fd %d reused as %d)\n", a, n);
+        }
+        hub.close_all();
+        ::close(n_peer);
+    }
+
     std::printf("test_ws: PASS\n");
     return 0;
 }

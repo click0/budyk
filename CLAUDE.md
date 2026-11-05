@@ -155,8 +155,10 @@ There is no event-loop library (no libuv, kqueue or epoll). The daemon is:
   process group, rlimits, a timeout, a cancel flag and a minimal
   environment (PATH, HOME, LANG, LC_*, TZ, TMPDIR, the proxy and the CA
   variables: nothing else of the daemon's reaches an `exec()` command or
-  curl). Every descriptor the daemon opens is close-on-exec;
-  `tests/smoke/serve.sh` checks that.
+  curl). An inline `exec()` (`wait = true`) on the main thread is
+  cancelled by the stop flag (`LuaEngine::set_stop_flag`), and the
+  tick runs no further rule once it is set. Every descriptor the daemon
+  opens is close-on-exec; `tests/smoke/serve.sh` checks that.
 - **Shared state:** the hot buffer under a mutex; the ring files via
   `pread`/`pwrite` plus the write index, an atomic in `RingFile` (`widx_`)
   that the writer also copies into the mmap'd header after each `pwrite`

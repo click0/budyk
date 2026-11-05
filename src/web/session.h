@@ -2,6 +2,7 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include <atomic>
 #include <map>
 #include <mutex>
 #include <string>
@@ -96,7 +97,10 @@ private:
     std::map<std::string, uint64_t> deadline_;   ///< token → expires_at_ns
     std::string        persist_path_;            ///< empty = RAM-only
     std::string        credential_;              ///< the hash's fingerprint, "" for none
-    mutable int        last_save_rc_ = 0;        ///< the last autosave's result, logged on change
+    /// The last autosave's result, logged on change. Atomic: the HTTP
+    /// thread (a login) and the main thread (an expired session evicted)
+    /// autosave at once, and both wrote it without a lock.
+    mutable std::atomic<int> last_save_rc_{0};
 };
 
 } // namespace budyk

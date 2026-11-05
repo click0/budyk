@@ -10,9 +10,11 @@ extern "C" {
 #include <lua.h>
 }
 
+#include <atomic>
 #include <cassert>
 #include <cerrno>
 #include <memory>
+#include <thread>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -2183,6 +2185,39 @@ int main() {
         assert(e.load_buffer("watch('b', { when = function() return true end })\n",
                              "=rules.yaml (generated Lua)") == 0);
         assert(e.rule_count() == 1);
+        e.shutdown();
+    }
+
+    // 54. The stop flag ends the tick: an inline exec() (wait = true) in
+    //     progress is cancelled, and the rules after it do not run. Two
+    //     rules waiting on hung commands held the daemon's SIGTERM for
+    //     120 s (60 each), past systemd's 90, and the SIGKILL lost the
+    //     rule state and the open fold windows.
+    if (access("/bin/sleep", X_OK) == 0) {
+        LuaEngine e;
+        assert(e.init(/*enable_exec*/ true) == 0);
+        std::atomic<bool> stop{false};
+        e.set_stop_flag(&stop);
+        assert(e.load_string(
+            "watch('slow', { when = function()\n"
+            "  local r = exec({'/bin/sleep', '20'}, { timeout = 30, wait = true })\n"
+            "  return r.ok == false\n"
+            "end })\n"
+            "watch('next', { when = function() return true end })\n") == 0);
+        std::thread t([&stop] {
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            stop = true;
+        });
+        const auto t0 = std::chrono::steady_clock::now();
+        const int fired = e.eval_tick(mk(0, 0, 0, 0));
+        const double took = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        t.join();
+        assert(took < 5.0);                     // not the command's 20 s
+        assert(fired == 1);                     // 'slow' fired (r.ok false: cancelled)
+        assert(e.rules()[0].fire_count == 1 && e.rules()[1].fire_count == 0);   // 'next' did not run
+        stop = false;
+        e.eval_tick(mk(0, 0, 0, 0));            // the flag down: the rules run again ('slow' waits
+        assert(e.rules()[1].fire_count == 1);   // its 20 s? no: its cooldown holds it, 'next' fires)
         e.shutdown();
     }
 

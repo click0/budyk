@@ -7,6 +7,7 @@
 #include "rules/worker.h"
 #include "security/file_watcher.h"
 
+#include <atomic>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -154,6 +155,14 @@ public:
     void set_probe(bool probe);
     bool probe() const;
 
+    /// A flag that ends the tick's rules: once it is true, eval_tick()
+    /// runs no further rule, and an inline exec() (wait = true) in
+    /// progress is cancelled (its command killed). The daemon hands it
+    /// its stop flag: two rules waiting on hung commands held a SIGTERM
+    /// for 120 s. nullptr (the default): nothing stops a tick.
+    void set_stop_flag(const std::atomic<bool>* flag);
+    const std::atomic<bool>* stop_flag() const;
+
     /// True while load_string() / load_file() runs the rules file. exec()
     /// called then returns the command as an action instead of running it
     /// (spec §3.6.2: action = { alert, exec("/path") }).
@@ -281,6 +290,7 @@ private:
     int  load_chunk(const char* code, size_t len, const char* chunkname);
 
     lua_State*               L_               = nullptr;
+    const std::atomic<bool>* stop_            = nullptr;
     uint64_t                 instruction_limit_ = kDefaultInstructionLimit;
     uint64_t                 instructions_used_ = 0;
     size_t                   alloc_bytes_       = 0;   ///< allocated, not yet charged

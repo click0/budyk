@@ -58,7 +58,8 @@ void SessionStore::autosave() const {
     // and a file that could not be written (a full disk, one left
     // root's by a `sudo budyk serve`) cost every browser its session at
     // the next restart without a word in the log.
-    if (rc != last_save_rc_) {
+    const int before = last_save_rc_.exchange(rc);
+    if (rc != before) {
         if (rc != 0) {
             std::fprintf(stderr, "budyk serve: cannot save the sessions to '%s': %s\n",
                          path.c_str(), std::strerror(-rc));
@@ -66,7 +67,6 @@ void SessionStore::autosave() const {
             std::fprintf(stderr, "budyk serve: the sessions are saved to '%s' again\n",
                          path.c_str());
         }
-        last_save_rc_ = rc;
     }
 }
 

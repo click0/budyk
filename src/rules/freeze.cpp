@@ -57,7 +57,15 @@ int proc_name_of(int pid, char* buf, std::size_t cap) {
 bool freeze_refused(int pid) {
     // budyk itself (a rule over proc.top with budyk at the top SIGSTOPped
     // the daemon, and nothing ever sent SIGCONT) and init.
-    return pid == 1 || pid == static_cast<int>(::getpid());
+    if (pid == 1 || pid == static_cast<int>(::getpid())) return true;
+#if defined(BUDYK_LINUX)
+    // One of budyk's own threads: kill() with a thread id signals the
+    // whole process, and /proc/<tid>/comm reads "budyk" as the pid's does.
+    char path[64];
+    std::snprintf(path, sizeof(path), "/proc/self/task/%d", pid);
+    if (::access(path, F_OK) == 0) return true;
+#endif
+    return false;
 }
 
 int freeze_pid(int pid) {

@@ -662,6 +662,7 @@ int LuaEngine::eval_tick(const Sample& s, const budyk_detail_c* detail) {
     if (!bind(s, detail)) return 0;
 
     for (auto& r : rules_) {
+        if (stop_ != nullptr && stop_->load()) break;   // shutting down: the rest can wait
         if (r.cooldown_remaining > 0) {
             --r.cooldown_remaining;
             continue;
@@ -795,6 +796,8 @@ uint64_t LuaEngine::alerts_dropped() const { return alerts_dropped_; }
 bool     LuaEngine::loading()        const { return loading_; }
 void     LuaEngine::set_probe(bool probe)   { probe_ = probe; }
 bool     LuaEngine::probe()          const { return probe_; }
+void     LuaEngine::set_stop_flag(const std::atomic<bool>* flag) { stop_ = flag; }
+const std::atomic<bool>* LuaEngine::stop_flag() const { return stop_; }
 
 int  LuaEngine::rule_count()      const { return static_cast<int>(rules_.size()); }
 const std::string& LuaEngine::last_error() const { return last_error_; }
