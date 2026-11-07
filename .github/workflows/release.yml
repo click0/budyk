@@ -204,12 +204,16 @@ jobs:
         run: |
           set -ex
           # Into a directory of their own: test-packages.sh mounts it
-          # into the Fedora container, and it mounted the workspace.
+          # into the Fedora container, and it mounted the workspace. Then
+          # up next to the tarballs: the artifact keeps the directory, and
+          # the publish job's `dist/*.deb` matched nothing (v0.8.7's
+          # release went out with no files).
           addons/linux/mkpkg.sh build-release/src/budyk "$VER" packages
-          (cd packages && for f in budyk_*_amd64.deb budyk-*.x86_64.rpm; do
-            sha256sum "$f" > "$f.sha256"
-          done)
           sudo addons/linux/test-packages.sh packages "$VER"
+          mv packages/budyk_*_amd64.deb packages/budyk-*.x86_64.rpm .
+          for f in budyk_*_amd64.deb budyk-*.x86_64.rpm; do
+            sha256sum "$f" > "$f.sha256"
+          done
 
       - name: Upload artefacts
         uses: actions/upload-artifact@v4
@@ -220,10 +224,10 @@ jobs:
             budyk-*-linux-amd64.tar.gz.sha256
             budyk-*-linux-amd64-debug.tar.gz
             budyk-*-linux-amd64-debug.tar.gz.sha256
-            packages/budyk_*_amd64.deb
-            packages/budyk_*_amd64.deb.sha256
-            packages/budyk-*.x86_64.rpm
-            packages/budyk-*.x86_64.rpm.sha256
+            budyk_*_amd64.deb
+            budyk_*_amd64.deb.sha256
+            budyk-*.x86_64.rpm
+            budyk-*.x86_64.rpm.sha256
           if-no-files-found: error
           retention-days: 14
 
@@ -479,6 +483,23 @@ jobs:
           ls -la
           cat ./*.sha256
           sha256sum -c ./*.sha256
+
+      # What the publish job attaches, by its patterns, on a dry run too:
+      # a release whose packages sat in a subdirectory of the artifact
+      # was published with no files, and the dry run had passed (the
+      # publish job is skipped there).
+      - name: The release's 20 files are here
+        working-directory: dist
+        run: |
+          set -eu
+          n=0
+          for p in '*.tar.gz' '*.tar.gz.sha256' '*.deb' '*.deb.sha256' '*.rpm' '*.rpm.sha256'; do
+            c=$(find . -maxdepth 1 -name "$p" | wc -l)
+            echo "$p: $c"
+            [ "$c" -gt 0 ] || { echo "::error::no file matches dist/$p"; exit 1; }
+            n=$((n + c))
+          done
+          [ "$n" -eq 20 ] || { echo "::error::$n release files, not 20"; exit 1; }
 
   # ----------------------------------------------------------------------
   # 6. Publish the GitHub Release: a tag push, or the `tag` input (the
