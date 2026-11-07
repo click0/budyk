@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The v0.8.7 release went out with no files.** 0.8.7 built the Linux
+  packages into `packages/` (so the Fedora container got that directory,
+  not the workspace), and the artifact kept the directory: the publish
+  job's `dist/*.deb` matched nothing and the job failed after the
+  release was created. The packages go up next to the tarballs, and the
+  dry run checks that the publish job's patterns match the 20 files
+  (it had passed: the publish job is skipped there).
+
 ## [0.8.7] — 2026-11-05
 
 Six security fixes, each from the eighth review round. An exec or freeze
