@@ -350,6 +350,40 @@ int main() {
         rmrf(d);
     }
 
+    // 8d. A window in the past after a clock step back: the binary search
+    //     for `until` assumed the ring in time order, landed among the
+    //     records from before the step and walked down from there, past
+    //     the run written since (above it): the window 1060..1070 gave
+    //     the two from before the step, not the two after it as well.
+    //     While the step is in the ring the walk starts at the newest
+    //     record; once the ring has wrapped past it, the search is back.
+    {
+        const std::string d = mkdtmp();
+        TierManager tm;
+        assert(tm.init(d.c_str(), 1, 1, 1) == 0);
+        for (uint64_t ts = 1000; ts <= 1200; ts += 10) assert(tm.store(mk(Level::L3, ts)) == 0);
+        for (uint64_t ts = 1050; ts <= 1100; ts += 10) assert(tm.store(mk(Level::L3, ts)) == 0);
+        std::vector<Sample> out;
+        assert(tm.query(1, 1060, 1070, 100, &out) == 4);   // 1060, 1070 twice
+        out.clear();
+        assert(tm.query(1, 1060, 1070, 1, &out) == 1);     // the newest written
+        assert(out[0].timestamp_nanos == 1070);
+        tm.close();
+        assert(tm.init(d.c_str(), 1, 1, 1) == 0);          // the next start knows it too
+        out.clear();
+        assert(tm.query(1, 1060, 1070, 100, &out) == 4);
+        // Wrapped past it (1 MB: some 1900 records): in order again, a
+        // window among the oldest ten in a few reads, as in 8c.
+        for (uint64_t i = 0; i < 2500; ++i) assert(tm.store(mk(Level::L3, 2000 + i)) == 0);
+        const uint64_t oldest = 2000 + 2500 - tm.tier1_count();
+        const uint64_t before = tm.tier1_reads();
+        out.clear();
+        assert(tm.query(1, oldest, oldest + 9, 100, &out) == 10);
+        assert(tm.tier1_reads() - before < 100);
+        tm.close();
+        rmrf(d);
+    }
+
     // N. Custom-level rings: a sample at a custom level goes to its own
     //    level-<name>.ring and comes back through query_level(). The ring
     //    is found by name, so after a config reorder gives the level a new
@@ -660,14 +694,18 @@ int main() {
         }
 
         // Run tier1 (1 MB) round so its oldest records are gone; tier2
-        // keeps every folded L2 record. Folded L2 records from before
-        // tier1's oldest are shown, later ones are not; every folded L1
-        // record is covered by tier2.
+        // keeps every folded L2 record. Folded L2 records whose window
+        // begins before tier1's oldest are shown, later ones are not;
+        // every folded L1 record is covered by tier2 (its oldest folded
+        // record stands for the window before it). The window tier1's
+        // oldest falls in is shown folded too: it was dropped for all of
+        // it, and level=all had nothing for the part tier1 lost.
         for (uint64_t ts = 2001; ts <= 9000; ++ts) assert(tm.store(mk(Level::L3, ts)) == 0);
         all.clear();
         assert(tm.query_all(0, 0, 1000000, &all) > 0);
         uint64_t oldest_raw = UINT64_MAX;
         size_t folded_l2 = 0;
+        bool straddle = false;
         for (const auto& x : all) {
             if (!x.folded && x.level == Level::L3 && x.timestamp_nanos < oldest_raw) {
                 oldest_raw = x.timestamp_nanos;
@@ -677,10 +715,12 @@ int main() {
         for (const auto& x : all) {
             if (!x.folded) continue;
             assert(x.level == Level::L2);
-            assert(x.timestamp_nanos < oldest_raw);
+            assert(x.timestamp_nanos - 10 < oldest_raw);    // its window begins before tier1's
+            if (x.timestamp_nanos >= oldest_raw) straddle = true;
             ++folded_l2;
         }
         assert(folded_l2 > 0);
+        assert(straddle);
         std::vector<Sample> l2;
         assert(tm.query(2, 0, 0, 1000000, &l2) > static_cast<int>(folded_l2));
         tm.close();

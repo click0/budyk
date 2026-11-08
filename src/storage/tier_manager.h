@@ -65,6 +65,7 @@ public:
         uint32_t    from_record_size = 0;
         uint64_t    kept    = 0;
         uint64_t    dropped = 0;
+        int         dir_sync_errno = 0;   ///< the data_dir's sync after the rename failed
     };
     const std::vector<Converted>& converted() const;
 

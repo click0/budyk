@@ -24,11 +24,14 @@ namespace {
 //   +20  u64    capacity
 //   +28  u64    write_idx   records written; not 8-byte aligned, so it is
 //                           copied in and out (widx_ is the atomic)
-//   +36  u8[28] reserved
+//   +36  u64    step_back   step_back_index(), 0 if none (back_ the atomic);
+//                           an older budyk left it 0 and does not write it
+//   +44  u8[20] reserved
 constexpr size_t   kHeaderSize      = 64;
 constexpr uint32_t kFormatVersion   = 1;
 constexpr char     kMagicBytes[8]   = {'B', 'D', 'Y', 'K', 'R', 'B', '\0', '\x01'};
 constexpr size_t   kWriteIdxOffset  = 28;
+constexpr size_t   kStepBackOffset  = 36;
 
 // Whether the header of the ring file open at `fd` is all zero bytes.
 bool header_is_blank(int fd) {
@@ -147,7 +150,58 @@ int RingFile::open_impl(const char* path, uint8_t tier, uint32_t record_size,
     capacity_    = capacity;
     widx_.store(le_get_u64(h + kWriteIdxOffset), std::memory_order_release);
     begun_.store(widx_.load(std::memory_order_relaxed), std::memory_order_release);
+    back_.store(le_get_u64(h + kStepBackOffset), std::memory_order_release);
+    last_ts_   = 0;
+    have_last_ = false;
+    if (!read_only) {
+        // The newest records: the one the next append follows, and a step
+        // back among them that the header does not have (an older budyk
+        // wrote the ring, or a power loss left a previous lap under the
+        // index).
+        const uint64_t widx  = widx_.load(std::memory_order_relaxed);
+        const uint64_t valid = widx < capacity_ ? widx : capacity_;
+        const uint64_t look  = valid < kStepBackScan ? valid : kStepBackScan;
+        scan_order(widx - look, widx);
+    }
     return 0;
+}
+
+bool RingFile::raw_ts(uint64_t logical, uint64_t* ts) const {
+    uint8_t b[8];
+    const off_t off = static_cast<off_t>(kHeaderSize + (logical % capacity_) * record_size_);
+    if (record_size_ < sizeof(b) || ::pread(fd_, b, sizeof(b), off) != static_cast<ssize_t>(sizeof(b))) {
+        return false;
+    }
+    *ts = le_get_u64(b);
+    return true;
+}
+
+void RingFile::scan_order(uint64_t from, uint64_t to) {
+    const uint64_t widx   = widx_.load(std::memory_order_relaxed);
+    const uint64_t oldest = widx - (widx < capacity_ ? widx : capacity_);
+    if (from < oldest) from = oldest;
+    // From the record before `from`, which the first of them follows (the
+    // records advance_write_index() counted in follow the newest before).
+    uint64_t prev = 0;
+    bool     have = false;
+    uint64_t newest_back = 0;
+    for (uint64_t k = from > oldest ? from - 1 : from; k < to; ++k) {
+        uint64_t ts = 0;
+        if (!raw_ts(k, &ts)) { have = false; continue; }
+        if (have && ts < prev) newest_back = k;
+        prev = ts;
+        have = true;
+    }
+    if (newest_back > back_.load(std::memory_order_relaxed)) note_step_back(newest_back);
+    have_last_ = have;
+    last_ts_   = have ? prev : 0;
+}
+
+void RingFile::note_step_back(uint64_t logical) {
+    if (mmap_base_ != nullptr && !read_only_) {
+        le_put_u64(static_cast<uint8_t*>(mmap_base_) + kStepBackOffset, logical);
+    }
+    back_.store(logical, std::memory_order_release);
 }
 
 int RingFile::read_header(const char* path, Header* out, int* err) {
@@ -207,6 +261,9 @@ void RingFile::close() {
     tier_        = 0;
     widx_.store(0, std::memory_order_release);
     begun_.store(0, std::memory_order_release);
+    back_.store(0, std::memory_order_release);
+    last_ts_   = 0;
+    have_last_ = false;
 }
 
 int RingFile::append(const void* record, size_t len) {
@@ -227,11 +284,24 @@ int RingFile::append(const void* record, size_t len) {
         return -3;
     }
 
+    // Stamped before the record ahead of it (a clock step back): said
+    // before the index takes the record in, so a reader that sees the
+    // record live sees the step too.
+    const uint64_t ts = le_get_u64(static_cast<const uint8_t*>(record));
+    if (have_last_ && ts < last_ts_) note_step_back(idx);
+    last_ts_   = ts;
+    have_last_ = true;
+
     // Advance write_idx only after the record is durably placed. A crash
     // between pwrite and this increment loses at most the last record.
     le_put_u64(static_cast<uint8_t*>(mmap_base_) + kWriteIdxOffset, idx + 1);
     widx_.store(idx + 1, std::memory_order_release);
     return 0;
+}
+
+int RingFile::sync() {
+    if (fd_ < 0) return -EBADF;
+    return ::fsync(fd_) != 0 ? -errno : 0;
 }
 
 int RingFile::read_at(uint64_t index, void* out, size_t len) const {
@@ -251,10 +321,12 @@ uint32_t RingFile::record_size() const { return record_size_; }
 
 int RingFile::advance_write_index(uint64_t n) {
     if (fd_ < 0 || read_only_) return -1;
-    const uint64_t idx = widx_.load(std::memory_order_acquire) + n;
+    const uint64_t from = widx_.load(std::memory_order_acquire);
+    const uint64_t idx  = from + n;
     le_put_u64(static_cast<uint8_t*>(mmap_base_) + kWriteIdxOffset, idx);
     begun_.store(idx, std::memory_order_release);
     widx_.store(idx, std::memory_order_release);
+    scan_order(from, idx);   // the records counted in: the next append follows the newest
     return 0;
 }
 
@@ -272,6 +344,14 @@ uint64_t RingFile::write_begun() const {
     if (fd_ < 0) return 0;
     if (read_only_) return write_index();   // another process's writes: not seen
     return begun_.load(std::memory_order_acquire);
+}
+
+uint64_t RingFile::step_back_index() const {
+    if (fd_ < 0) return 0;
+    if (read_only_) {   // another process may be writing: the header as it is now
+        return le_get_u64(static_cast<const uint8_t*>(mmap_base_) + kStepBackOffset);
+    }
+    return back_.load(std::memory_order_acquire);
 }
 
 uint64_t RingFile::count() const {

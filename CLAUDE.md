@@ -86,15 +86,18 @@ the code still differ, the code wins and this file says how.
   into the L2 and L1 rings, L2 into the L1 ring): one L2 record per L2
   interval, one L1 record per L1 interval, flagged `folded`;
   `query_all()` (`/api/range?level=all`) shows
-  each stretch once, at the finest level still on disk. A ring is in
+  each stretch once, at the finest level still on disk (a folded record
+  is dropped only where a finer ring reaches back to its window's
+  start). A ring is in
   write order, which a clock step back or a power loss (a previous lap's
   records under the write index) can leave out of time order: a `query()`
   walks newest-first from the record `until` names (a binary search) and
   looks past a stretch of older records (`kDisorderLookback`, 1024)
-  before it stops; `query_all()`'s binary searches do not, and neither
-  does the search for `until`: a run written since a clock step back,
-  above where it lands, is not read (nothing in the tree sends `until`).
-  A conversion
+  before it stops. The header keeps the newest step back
+  (`RingFile::step_back_index()`, +36: kept by `append()`, found among
+  the newest 1024 records on open); while it is in the ring, the walk
+  starts at the newest record instead. `query_all()`'s binary searches
+  do not look at it. A conversion
   of an older ring copies the record a crash left unindexed too.
 - **Web:** hand-written HTTP/1.1 + WebSocket (RFC 6455) server in `src/web`;
   the SPA is a string literal in `src/web/spa.cpp`.

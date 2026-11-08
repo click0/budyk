@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fcntl.h>
 #include <signal.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
@@ -411,6 +412,93 @@ int main() {
         assert(std::string(RingFile::describe(-17)).find("symbolic link") != std::string::npos);
         ::unlink(target.c_str());
         ::rmdir(dir);
+    }
+
+    // 14. step_back_index(): the newest record stamped before the one
+    //     written ahead of it (a clock step back), kept in the header,
+    //     seen by a read-only open and by the next start; an open also
+    //     finds one among the newest records that an older budyk wrote
+    //     (its header field 0), and the records advance_write_index()
+    //     counts in are what the next append follows.
+    {
+        char path[256];
+        tmp_path(path, sizeof(path));
+        ::unlink(path);
+        std::vector<uint8_t> rec(rsize);
+        size_t len = 0;
+        RingFile r;
+        assert(r.open(path, 1, static_cast<uint32_t>(rsize), 2000) == 0);
+        auto put = [&](uint64_t ts) {
+            assert(record_encode(make_sample(ts, Level::L3, 1.0), rec.data(), rec.size(), &len) == 0);
+            assert(r.append(rec.data(), rec.size()) == 0);
+        };
+        for (uint64_t ts = 10; ts <= 30; ts += 10) put(ts);     // 0..2
+        assert(r.step_back_index() == 0);
+        put(30);                                                // 3: the same time, in order
+        assert(r.step_back_index() == 0);
+        put(25);                                                // 4: a step back
+        assert(r.step_back_index() == 4);
+        for (uint64_t ts = 26; ts < 26 + 1100; ++ts) put(ts);   // 5..1104, in order
+        assert(r.step_back_index() == 4);
+        r.close();
+        // 1100 records later: past what an open looks over, so from the header.
+        assert(r.open(path, 1, static_cast<uint32_t>(rsize), 2000) == 0);
+        assert(r.step_back_index() == 4);
+        r.close();
+        RingFile ro;
+        assert(ro.open_read_only(path, 1, static_cast<uint32_t>(rsize), 2000) == 0);
+        assert(ro.step_back_index() == 4);
+        ro.close();
+
+        // An older budyk's ring: the field 0, a step back among the
+        // newest 1024 records; an open for writing finds and keeps it.
+        assert(r.open(path, 1, static_cast<uint32_t>(rsize), 2000) == 0);
+        put(500);                                               // 1105: a step back
+        for (uint64_t ts = 501; ts < 520; ++ts) put(ts);        // 1106..1124
+        assert(r.step_back_index() == 1105);
+        r.close();
+        {
+            const int fd = ::open(path, O_WRONLY | O_CLOEXEC);
+            const uint8_t zero[8] = {};
+            assert(fd >= 0 && ::pwrite(fd, zero, sizeof(zero), 36) == static_cast<ssize_t>(sizeof(zero)));
+            ::close(fd);
+        }
+        assert(ro.open_read_only(path, 1, static_cast<uint32_t>(rsize), 2000) == 0);
+        assert(ro.step_back_index() == 0);                      // read only: as the header says
+        ro.close();
+        assert(r.open(path, 1, static_cast<uint32_t>(rsize), 2000) == 0);
+        assert(r.step_back_index() == 1105);
+        r.close();
+        assert(ro.open_read_only(path, 1, static_cast<uint32_t>(rsize), 2000) == 0);
+        assert(ro.step_back_index() == 1105);                   // written back
+        ro.close();
+
+        // A record that reached its slot but not the index (a crash), at
+        // 1000; counted in, the next append (600) is a step back from it.
+        assert(r.open(path, 1, static_cast<uint32_t>(rsize), 2000) == 0);
+        assert(record_encode(make_sample(1000, Level::L3, 1.0), rec.data(), rec.size(), &len) == 0);
+        {
+            const int fd = ::open(path, O_WRONLY | O_CLOEXEC);
+            const off_t off = static_cast<off_t>(64 + 1125 * rsize);
+            assert(fd >= 0 && ::pwrite(fd, rec.data(), rec.size(), off) == static_cast<ssize_t>(rec.size()));
+            ::close(fd);
+        }
+        assert(r.advance_write_index(1) == 0);                  // 1125
+        assert(r.step_back_index() == 1105);
+        put(600);                                               // 1126
+        assert(r.step_back_index() == 1126);
+        // One counted in that is itself stamped before the record ahead.
+        assert(record_encode(make_sample(550, Level::L3, 1.0), rec.data(), rec.size(), &len) == 0);
+        {
+            const int fd = ::open(path, O_WRONLY | O_CLOEXEC);
+            const off_t off = static_cast<off_t>(64 + 1127 * rsize);
+            assert(fd >= 0 && ::pwrite(fd, rec.data(), rec.size(), off) == static_cast<ssize_t>(rec.size()));
+            ::close(fd);
+        }
+        assert(r.advance_write_index(1) == 0);                  // 1127
+        assert(r.step_back_index() == 1127);
+        r.close();
+        ::unlink(path);
     }
 
     std::printf("test_ring_file: PASS (record=%zu bytes)\n", rsize);

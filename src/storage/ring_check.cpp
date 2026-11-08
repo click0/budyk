@@ -17,16 +17,20 @@ namespace {
 constexpr uint64_t kDayNs = 86400ULL * 1000000000ULL;
 constexpr size_t   kMaxListedSlots = 8;
 
-// fsync(2) of the file or directory at `path`: 0 or -errno.
-int sync_path(const char* path) {
-    const int fd = ::open(path, O_RDONLY | O_CLOEXEC);
+// fsync(2) of the directory at `path`: 0 or -errno. O_DIRECTORY and
+// O_NONBLOCK: what the service user put under the name is no FIFO that
+// holds root's start.
+int sync_dir(const char* path) {
+    const int fd = ::open(path, O_RDONLY | O_DIRECTORY | O_NONBLOCK | O_CLOEXEC);
     if (fd < 0) return -errno;
-    const int rc = ::fsync(fd) != 0 ? -errno : 0;
+    const int rc = g_convert_dir_fsync(fd) != 0 ? -errno : 0;
     ::close(fd);
     return rc;
 }
 
 } // namespace
+
+int (*g_convert_dir_fsync)(int fd) = ::fsync;
 
 bool level_fits_ring(uint8_t tier, uint8_t level) {
     switch (tier) {
@@ -74,8 +78,10 @@ uint64_t count_unindexed(const RingFile& ring, uint64_t now_ns) {
 }
 
 int convert_ring(const char* path, uint8_t tier, uint32_t record_size,
-                 uint64_t capacity, uint64_t* kept, uint64_t* dropped) {
+                 uint64_t capacity, uint64_t* kept, uint64_t* dropped,
+                 int* dir_sync_err) {
     *kept = *dropped = 0;
+    if (dir_sync_err != nullptr) *dir_sync_err = 0;
     RingFile::Header h;
     int err = 0;
     if (RingFile::read_header(path, &h, &err) != 0) return err != 0 ? -err : -EINVAL;
@@ -130,21 +136,26 @@ int convert_ring(const char* path, uint8_t tier, uint32_t record_size,
         ++*kept;
     }
     *dropped += skip;
-    out.close();
-    old.close();
     // The converted ring on disk before it takes the old one's name, and
     // the rename in the directory after: a power cut soon after the
     // rename otherwise could find, on a filesystem that does not flush a
     // file renamed over another (XFS), the name with no data in it and
-    // the old ring gone.
-    if (rc == 0) rc = sync_path(tmp.c_str());
+    // the old ring gone. Synced through its own descriptor: opened again
+    // by name, a FIFO the service user put there held root's start.
+    if (rc == 0) rc = out.sync();
+    out.close();
+    old.close();
     if (rc == 0 && ::rename(tmp.c_str(), path) != 0) rc = -errno;
     if (rc == 0) {
+        // Renamed: the ring is converted either way, and a failed sync of
+        // the directory here failed the start, which then found a ring of
+        // this version and never synced it.
         const std::string p = path;
         const size_t slash = p.rfind('/');
         const std::string dir = slash == std::string::npos ? "." : slash == 0 ? "/" : p.substr(0, slash);
-        rc = sync_path(dir.c_str());
-        return rc;                            // renamed: the old ring is gone either way
+        const int d = sync_dir(dir.c_str());
+        if (dir_sync_err != nullptr) *dir_sync_err = -d;
+        return 0;
     }
     ::unlink(tmp.c_str());
     return rc;

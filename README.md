@@ -36,7 +36,7 @@ CPU and under 1 KB a minute to disk; with a dashboard open at 1 Hz, at
 most 25 MB and 1 % of one CPU; L3 within 2 s of a client connecting,
 and its 300-record catch-up within 100 ms. The static amd64 binary is
 under 5 MB stripped. On a CI runner the release build uses about
-3.5 MB and 0.1 % of a CPU at L3.
+4.5 MB and 0.1 to 0.2 % of a CPU at L3.
 
 ## How it works
 

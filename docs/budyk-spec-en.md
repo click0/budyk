@@ -325,7 +325,8 @@ All fields little-endian.
   +16  record_size: u32                 fixed size of a record
   +20  capacity:    u64                 number of slots
   +28  write_idx:   u64                 records written (see below)
-  +36  _reserved:   u8[28]
+  +36  step_back:   u64                 newest record stamped before the one ahead of it, 0 if none
+  +44  _reserved:   u8[20]
 
 [ Record 0 ] [ Record 1 ] ... [ Record N-1 ]
 
@@ -346,7 +347,15 @@ header goes in with `pwrite` before the file is mapped (a store through
 the mapping into a sparse file's hole is SIGBUS on a full disk). On start
 a record that reached its slot but not the index is counted in, so a
 crash loses no stored record; a ring of an older codec version is
-converted on start.
+converted on start. `step_back` is the logical index of the newest
+record whose timestamp is earlier than that of the record written
+before it (a clock step back, or a previous lap's records left under
+the index by a power loss); the writer keeps it, and an open for
+writing also looks over the newest 1024 records for one (a ring an
+older budyk wrote leaves the field 0). While it is at or below the
+oldest live record, the ring is in time order and a query finds the
+end of its window by a binary search; otherwise it walks from the
+newest record.
 
 ### 3.6. Rule Engine (Lua-based)
 
