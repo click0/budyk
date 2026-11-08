@@ -6,6 +6,7 @@
 #include "core/sample_c.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 
 namespace budyk {
@@ -44,8 +45,17 @@ std::string samples_to_json(const Sample* samples, size_t n,
 
 /// Alerts as the body of /api/alerts and as a WebSocket frame:
 /// {"count":N,"alerts":[{"ts","severity","rule","message"},...]}, the
-/// strings escaped, oldest first.
-std::string alerts_to_json(const AlertEvent* alerts, size_t n);
+/// strings escaped, oldest first. With `max_bytes`, the newest that fit
+/// in it, and `"omitted":K` for the K older ones left out (they are in
+/// the log, and the last kRecentAlerts in /api/alerts).
+std::string alerts_to_json(const AlertEvent* alerts, size_t n,
+                           size_t max_bytes = SIZE_MAX);
+
+/// The WebSocket alerts frame's `max_bytes`: a tick's alerts (256 at
+/// most, a message up to 4 KiB, six bytes for each control byte
+/// escaped) came to 6 MiB, far over a client's backlog. The dashboard
+/// shows the newest 20.
+constexpr size_t kMaxAlertsFrameBytes = 256 * 1024;
 
 /// Pull the value of a top-level string field out of a small JSON
 /// object: `"<key>" : "<value>"`, with the value's escapes decoded.

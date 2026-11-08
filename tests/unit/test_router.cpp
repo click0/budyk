@@ -697,8 +697,10 @@ int main() {
         const ssize_t n = ::read(sp[1], head, sizeof(head));
         assert(n >= 12 && std::memcmp(head, "HTTP/1.1 101", 12) == 0);
         // Behind by more than kMaxBacklog once a megabyte more is owed:
-        // dropped, the socket closed.
+        // dropped at the next frame, the socket closed.
         w.ws.broadcast(std::string(WebSocketHub::kMaxBacklog, 'x'));
+        assert(w.ws.size() == 1);
+        w.ws.broadcast("next");
         assert(w.ws.size() == 0);
         assert(::fcntl(sp[0], F_GETFD) == -1 && errno == EBADF);
         ::close(sp[1]);

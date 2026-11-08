@@ -3,10 +3,12 @@
 #include "core/sample.h"
 #include "web/json.h"
 
+#include <algorithm>
 #include <cassert>
 #include <memory>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <string>
 
 using namespace budyk;
@@ -365,6 +367,35 @@ int main() {
                     "\"rule\":\"disk \\\"full\\\"\",\"message\":\"line1\\nline2\"},"
                     "{\"ts\":6,\"severity\":\"info\",\"rule\":\"x\",\"message\":\"\"}]}\n");
         assert(alerts_to_json(nullptr, 0) == "{\"count\":0,\"alerts\":[]}\n");
+    }
+
+    // 10b. alerts_to_json with a byte budget (the WebSocket frame): the
+    //      newest that fit, oldest first, and how many were left out. A
+    //      tick's 256 alerts of 4 KiB messages of control bytes, each
+    //      escaped to six, came to 6 MiB in one frame.
+    {
+        std::vector<AlertEvent> many;
+        for (uint64_t i = 0; i < 256; ++i) {
+            many.push_back({i, "warning", "r", std::string(4096, '\x01')});
+        }
+        const std::string all = alerts_to_json(many.data(), many.size());
+        assert(all.size() > 6u * 1024 * 1024);
+        const std::string cut = alerts_to_json(many.data(), many.size(), kMaxAlertsFrameBytes);
+        assert(cut.size() <= kMaxAlertsFrameBytes);
+        assert(cut.find("\"omitted\":") != std::string::npos);
+        // The newest kept: ts 255 last, and as many before it as fit.
+        assert(cut.find("{\"ts\":255,") != std::string::npos);
+        assert(cut.find("{\"ts\":0,") == std::string::npos);
+        const size_t kept = static_cast<size_t>(std::count(cut.begin(), cut.end(), '{')) - 1;
+        assert(kept >= 9);                     // some 24.6 KB each
+        char head[64];
+        std::snprintf(head, sizeof(head), "{\"count\":%zu,\"omitted\":%zu,", kept, 256 - kept);
+        assert(cut.compare(0, std::strlen(head), head) == 0);
+        // Small alerts all fit: no "omitted".
+        const AlertEvent a[] = { { 5, "info", "x", "y" }, { 6, "info", "x", "z" } };
+        assert(alerts_to_json(a, 2, kMaxAlertsFrameBytes) == alerts_to_json(a, 2));
+        // None fits: none, all counted.
+        assert(alerts_to_json(a, 2, 10) == "{\"count\":0,\"omitted\":2,\"alerts\":[]}\n");
     }
 
     // 11. utf8_sanitize: well-formed UTF-8 and ASCII (control characters

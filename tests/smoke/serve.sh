@@ -524,6 +524,94 @@ if pgrep -f "^/bin/sleep 100$" > /dev/null 2>&1; then
     echo "FAIL: the inline exec's command outlived the daemon"; fail=1; pkill -f "^/bin/sleep 100$"
 fi
 
+# A tick of 256 alerts of 4 KiB messages of control bytes (6 MiB
+# escaped, in one frame) dropped every WebSocket client that had not
+# read it all at once: one that looked away for half a second got EOF.
+# The frame holds the newest that fit in 256 KiB and says how many it
+# left out, and the client stays.
+cat > "$DIR/flood.lua" <<'EOF'
+n = 0
+watch('flood', { cooldown = 0, when = function()
+  n = n + 1
+  if n >= 2 then
+    for i = 1, 300 do alert('flood', 'info', string.rep('\1', 4096)) end
+  end
+  return false
+end })
+EOF
+cat > "$DIR/flood.yaml" <<EOF
+data_dir: $DIR/flooddata
+listen: 127.0.0.1
+port: $PORT
+collection: { mode: always, l1: { interval: 1 }, l3: { interval: 1 } }
+rules: { path: $DIR/flood.lua }
+EOF
+"$BIN" serve --config "$DIR/flood.yaml" > "$DIR/flood.log" 2>&1 &
+PID=$!
+i=0
+until curl -s -o /dev/null "http://127.0.0.1:$PORT/api/health"; do
+    i=$((i + 1)); [ "$i" -lt 100 ] || break; sleep 0.1
+done
+python3 - "$PORT" > "$DIR/flood.out" 2>&1 <<'EOF' || { echo "FAIL: $(cat "$DIR/flood.out")"; fail=1; }
+import base64, os, socket, sys, time
+port = int(sys.argv[1])
+s = socket.create_connection(("127.0.0.1", port))
+s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 16384)
+key = base64.b64encode(os.urandom(16)).decode()
+s.send(("GET /api/ws HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\n"
+        "Connection: Upgrade\r\nSec-WebSocket-Key: %s\r\n"
+        "Sec-WebSocket-Version: 13\r\n\r\n" % key).encode())
+s.settimeout(1.0)
+buf = b""
+while b"\r\n\r\n" not in buf:
+    buf += s.recv(4096)
+buf = buf.split(b"\r\n\r\n", 1)[1]
+# Until the flood frame and a sample after it are seen, or a generous
+# deadline (the ticks are slow on an emulated CPU). Look away once, so
+# the 256 KiB frame goes out over several writes, not one.
+sample_after, end, flood, eof, looked_away = False, time.time() + 40, None, False, False
+while time.time() < end and not (flood is not None and sample_after):
+    if not looked_away:
+        time.sleep(0.5)                 # not reading, while a flood tick goes out
+        looked_away = True
+    try:
+        chunk = s.recv(65536)
+        if not chunk:
+            eof = True
+            break
+        buf += chunk
+    except socket.timeout:
+        pass
+    while len(buf) >= 2:
+        n, off = buf[1] & 0x7f, 2
+        if n == 126:
+            if len(buf) < 4: break
+            n, off = int.from_bytes(buf[2:4], "big"), 4
+        elif n == 127:
+            if len(buf) < 10: break
+            n, off = int.from_bytes(buf[2:10], "big"), 10
+        if len(buf) < off + n: break
+        f = buf[off:off + n].decode()
+        buf = buf[off + n:]
+        if '"rule":"flood"' in f:
+            flood = f
+        elif flood is not None and '"samples":[' in f:
+            sample_after = True
+s.close()
+if eof:
+    sys.exit("the WebSocket client was dropped (EOF) by the alerts frame")
+if flood is None:
+    sys.exit("no flood alerts frame")
+if len(flood) > 256 * 1024 or '"omitted":' not in flood:
+    sys.exit("flood frame: %d bytes, %s" % (len(flood), flood[:80]))
+if not sample_after:
+    sys.exit("no samples after the flood frame")
+print("ok   a tick of 6 MiB of alerts goes out in 256 KiB, its client kept")
+EOF
+cat "$DIR/flood.out"
+kill -TERM "$PID"; wait "$PID" || true
+PID=
+
 if [ "$fail" -ne 0 ]; then
     echo "--- daemon log ---"; cat "$DIR/log"
     exit 1

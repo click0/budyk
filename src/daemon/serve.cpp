@@ -838,7 +838,10 @@ int cmd_serve(int argc, char* argv[], const char* version) {
                 for (auto& a : fired) recent_alerts.push_back(a);
                 while (recent_alerts.size() > budyk::kRecentAlerts) recent_alerts.pop_front();
             }
-            if (ws.size() > 0) ws.broadcast(budyk::alerts_to_json(fired.data(), fired.size()));
+            if (ws.size() > 0) {
+                ws.broadcast(budyk::alerts_to_json(fired.data(), fired.size(),
+                                                   budyk::kMaxAlertsFrameBytes));
+            }
         }
     };
 
