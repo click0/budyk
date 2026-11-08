@@ -2153,59 +2153,62 @@ int main() {
     //      thread's CPU time: comparing two long strings is one VM
     //      instruction and an O(n) memcmp, and 200 000 of two 5 MiB
     //      strings held the tick 55 s under the default limits.
+    const auto cpu_now = [] {
+        struct timespec ts{};
+        assert(::clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts) == 0);
+        return static_cast<double>(ts.tv_sec) + static_cast<double>(ts.tv_nsec) / 1e9;
+    };
+    double cmp_cpu = 0;   // CPU time of one comparison of two 2 MiB strings, s (45d too)
     {
         LuaEngine e;
         assert(e.init(false) == 0);
         const uint64_t limit = e.cpu_limit_ns();          // 1 s at the defaults (10 s sanitized)
         assert(limit == 1000000000ULL || limit == 10000000000ULL);
         assert(e.load_string(
-            "a = string.rep('x', 4 << 20)\n"
-            "b = string.rep('x', 4 << 20)\n"
+            "a = string.rep('x', 2 << 20)\n"
+            "b = string.rep('x', 2 << 20)\n"
             "watch('cmp', { when = function()\n"
             "  for i = 1, 200000 do if a == b then end end\n"
             "  return false\n"
             "end })\n") == 0);
         // The clock is read once a hook interval (1000 instructions, some
-        // 330 of these comparisons) and the interval shrinks once one
-        // went slowly, so the limit may be overrun by the first: 50 ms
-        // here, seconds on an emulated CPU (FreeBSD arm64 under QEMU).
-        // What 100 comparisons take on this machine gives the allowance.
-        // Both are the thread's CPU time, as the limit is, not the wall
-        // clock's, which a loaded or emulated host stretches (measured on
-        // the wall clock, the allowance still fell short there).
-        const auto cpu_now = [] {
-            struct timespec ts{};
-            assert(::clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts) == 0);
-            return static_cast<double>(ts.tv_sec) + static_cast<double>(ts.tv_nsec) / 1e9;
-        };
+        // 260 of these comparisons), so the limit may be overrun by one:
+        // 40 ms here, where the interval then shrinks, but seconds on an
+        // emulated CPU (FreeBSD arm64 under QEMU: 18 to 50 ms a
+        // comparison), where the first interval crosses the limit by
+        // itself. The allowance is two intervals of nothing but
+        // comparisons, at what 100 of them take on this machine: the
+        // emulated CPU's speed drifted threefold within the test. Both
+        // are the thread's CPU time, as the limit is.
         LuaEngine probe;
         assert(probe.init(false) == 0);
         assert(probe.load_string(
-            "a = string.rep('x', 4 << 20)\n"
-            "b = string.rep('x', 4 << 20)\n"
+            "a = string.rep('x', 2 << 20)\n"
+            "b = string.rep('x', 2 << 20)\n"
             "watch('cmp', { when = function()\n"
             "  for i = 1, 100 do if a == b then end end\n"
             "  return false\n"
             "end })\n") == 0);
         const double p0 = cpu_now();
         assert(probe.eval_tick(mk(0, 0, 0, 0)) == 0);
-        const double per = (cpu_now() - p0) / 100;
+        cmp_cpu = (cpu_now() - p0) / 100;
         assert(probe.rules()[0].last_error.empty());
         probe.shutdown();
         const auto w0 = std::chrono::steady_clock::now();
         const double t0 = cpu_now();
         assert(e.eval_tick(mk(0, 0, 0, 0)) == 0);
         const double took = cpu_now() - t0;
-        std::fprintf(stderr, "test_lua_engine: 45c took %.3f s of CPU (%.3f s wall), "
-                     "%.3f ms of CPU a comparison, limit %.3f s\n", took,
+        std::fprintf(stderr, "test_lua_engine: 45c took %.3f s of CPU (%.3f s wall), %llu clock "
+                     "reads, %.3f ms of CPU a comparison, limit %.3f s\n", took,
                      std::chrono::duration<double>(std::chrono::steady_clock::now() - w0).count(),
-                     per * 1e3, static_cast<double>(limit) / 1e9);
+                     static_cast<unsigned long long>(e.clock_reads()), cmp_cpu * 1e3,
+                     static_cast<double>(limit) / 1e9);
         char want[64];
         std::snprintf(want, sizeof(want), "CPU time limit of %llu ms exceeded",
                       static_cast<unsigned long long>(limit / 1000000));
         assert(e.rules()[0].last_error.find(want) != std::string::npos);
         // Some 30 s unbounded (200 000 comparisons).
-        assert(took < static_cast<double>(limit) / 1e9 + 400 * per + 0.5);
+        assert(took < static_cast<double>(limit) / 1e9 + 2000 * cmp_cpu + 0.5);
         // The CPU time is each call's, not the engine's: rules that each
         // take a few ms, tick after tick, past the limit in all, run on.
         LuaEngine busy;
@@ -2235,30 +2238,36 @@ int main() {
 
     // 45d. The hook's interval follows the work: while comparisons of
     //      long strings run, the clock is read every millisecond or so
-    //      (once in 1000 instructions, some 330 comparisons, they could
+    //      (once in 1000 instructions, some 260 comparisons, they could
     //      overrun the limit by that much each time), and once cheap
     //      instructions follow it is read once in 1000 again. Read on
     //      every instruction after one slow interval, as it was, a rules
     //      file of 80 million instructions took minutes to load in an
     //      emulated VM, and 40 million took 10 s of CPU here, not 0.3 s.
     {
-        const char* slow =
+        // Some 0.1 s of comparisons, and more than one interval of them
+        // (an emulated CPU takes 7 s or more for those 400).
+        const double want_n = 0.1 / cmp_cpu;
+        const int n = want_n < 400 ? 400 : want_n > 3000 ? 3000 : static_cast<int>(want_n);
+        char slow[256];
+        std::snprintf(slow, sizeof(slow),
             "a = string.rep('x', 2 << 20)\n"
             "b = string.rep('x', 2 << 20)\n"
             "watch('slow', { when = function()\n"
-            "  for i = 1, 1000 do if a == b then end end\n"
+            "  for i = 1, %d do if a == b then end end\n"
             "  return false\n"
-            "end })\n";
+            "end })\n", n);
         LuaEngine e;
         assert(e.init(false) == 0);
         e.set_limits(100'000'000, 64u << 20);
         assert(e.load_string(slow) == 0);
         assert(e.eval_tick(mk(0, 0, 0, 0)) == 0);
         assert(e.rules()[0].last_error.empty());
-        // 3000 instructions: 3 reads at the full interval; some 100 at
-        // half a millisecond of comparisons each (30 or so where they
-        // take 30 us).
-        assert(e.clock_reads() > 10);
+        std::fprintf(stderr, "test_lua_engine: 45d %d comparisons, %llu clock reads\n", n,
+                     static_cast<unsigned long long>(e.clock_reads()));
+        // One read in 1000 instructions at the full interval (at most 12);
+        // one every 0.5 to 1 ms of comparisons past the first: some 70.
+        assert(e.clock_reads() > 20);
         e.shutdown();
         LuaEngine c;
         assert(c.init(false) == 0);
@@ -2267,7 +2276,7 @@ int main() {
             "a = string.rep('x', 2 << 20)\n"
             "b = string.rep('x', 2 << 20)\n"
             "watch('then_cheap', { when = function()\n"
-            "  for i = 1, 1000 do if a == b then end end\n"
+            "  for i = 1, 400 do if a == b then end end\n"
             "  local x = 0 for i = 1, 5000000 do x = x + i end\n"
             "  return false\n"
             "end })\n") == 0);
