@@ -588,7 +588,7 @@ watch("swap_under_load", {
 | `clock` | `offset_ms`, `max_error_ms`, `synced`, `present` |
 | `self_` | `rss_bytes`, `peak_rss_bytes`, `cpu_user_seconds`, `cpu_system_seconds` |
 | `uptime_seconds` | число |
-| `files` | `files["/шлях"].modifies`, `.deletes`, `.tampered` (коли увімкнено `security.file_watch`; інакше — порожня таблиця, тож спільний файл правил працює всюди) |
+| `files` | `files["/шлях"].modifies`, `.deletes`, `.tampered` (коли увімкнено `security.file_watch`: запис для кожного шляху під наглядом, і правило, що його читає, виконується, коли шлях змінюється, також між тіками; інакше — порожня таблиця, тож спільний файл правил працює всюди) |
 
 Усередині деяких із них — деталізація найновішої вибірки у вигляді
 колекцій лише для читання: `cpu.cores` (масив: `#cpu.cores`,

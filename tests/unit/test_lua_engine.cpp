@@ -498,6 +498,60 @@ int main() {
         e.shutdown();
     }
 
+    // 18b. A watched file changed between ticks (eval_files()): only the
+    //      rules that read `files` run; the others keep their sustain
+    //      counts, and no cooldown counts down (a cooldown counts the
+    //      level's ticks: a busy watched file passed a 5 h one in 15 s,
+    //      and `return true` fired on every change). A configured path
+    //      has an entry before its first event. count_down_cooldowns()
+    //      is an idle tick's count.
+    {
+        budyk::LuaEngine e;
+        assert(e.init(false) == 0);
+        budyk::FileWatchState st;
+        st.watched.push_back("/w");
+        e.set_file_state(st);
+        assert(e.load_string(R"(
+            watch("const", { when = function() return true end, cooldown = 0 })
+            watch("up",    { when = function() return uptime_seconds > 50 end,
+                             for_ticks = 3, cooldown = 0 })
+            watch("cool",  { when = function() return true end, cooldown = 3 })
+            watch("f",     { when = function() return files["/w"].tampered end, cooldown = 0 })
+            watch("cpu_f", { when = function()
+                                 return files["/w"].tampered and cpu.total_percent >= 0
+                             end, cooldown = 0 })
+        )") == 0);
+        budyk::Sample full{};
+        full.groups         = budyk::kGroupsAll;
+        full.uptime_seconds = 100;
+        assert(e.eval_tick(full) == 2);                 // const, cool
+        for (const auto& r : e.rules()) assert(r.last_error.empty());   // files["/w"] is there
+        assert(e.rules()[1].consecutive_hits == 1);
+        assert(e.rules()[2].cooldown_remaining == 3);
+
+        st.tampered_this_tick.insert("/w");
+        st.modifies["/w"] = 1;
+        e.set_file_state(st);
+        budyk::Sample fw{};
+        fw.groups         = budyk::kGroupFileWatch;
+        fw.uptime_seconds = 0;                           // would reset 'up' if it ran
+        assert(e.eval_files(fw) == 1);                   // f; cpu_f skipped (no cpu)
+        assert(e.rules()[0].fire_count == 1);            // const did not run
+        assert(e.rules()[1].consecutive_hits == 1);      // up kept its count
+        assert(e.rules()[2].cooldown_remaining == 3);    // no count down
+        assert(e.rules()[3].fire_count == 1);
+        assert(e.rules()[4].fire_count == 0 && e.rules()[4].last_error.empty());
+        assert(e.eval_files(fw) == 1);                   // a second change: f again
+        assert(e.rules()[2].cooldown_remaining == 3);
+
+        e.count_down_cooldowns();
+        assert(e.rules()[2].cooldown_remaining == 2);
+        assert(e.eval_tick(full) == 3);                  // const, f, cpu_f (still tampered)
+        assert(e.rules()[1].consecutive_hits == 2);
+        assert(e.rules()[2].cooldown_remaining == 1);
+        e.shutdown();
+    }
+
     // 21. tampered_this_tick is cleared between ticks — a rule that
     //     fires on .tampered won't keep firing forever once the event
     //     drains. We seed a tampered path, eval once (fires), then

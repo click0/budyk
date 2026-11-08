@@ -8,9 +8,11 @@
 
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include <cassert>
+#include <chrono>
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
@@ -406,7 +408,103 @@ int main() {
         assert(::unlink((dir + "/moved-in").c_str()) == 0);
         assert(wait_for(fw, dir, FileChangeKind::Modified, &events));
         assert(fw.count() == 1);
+        // A file written inside it is not a change of the directory:
+        // inotify reported one, kqueue does not see one (a rules file
+        // shared by both platforms read two things).
+        const std::string inner = dir + "/inner";
+        touch(inner, "x");
+        assert(wait_for(fw, dir, FileChangeKind::Modified, &events));   // made: an entry
+        events.clear();
+        fw.poll(0, &events);
+        events.clear();
+        touch(inner, "more");
+        assert(::chmod(inner.c_str(), 0600) == 0);
+        fw.poll(300, &events);
+        assert(!has(events, dir, FileChangeKind::Modified));
         fw.shutdown();
+        ::unlink(inner.c_str());
+        ::rmdir(dir.c_str());
+    }
+
+    // 15. A path not there yet, under a directory not there yet either:
+    //     its creation wakes poll() (the nearest directory there is
+    //     watched for it). It was found by the next poll's lookup only,
+    //     once a tick in the daemon: up to the L1 interval late, and a
+    //     file made and removed in between never seen.
+    {
+        char tmpl[] = "/tmp/budyk_fwp_XXXXXX";
+        assert(::mkdtemp(tmpl) != nullptr);
+        const std::string dir = tmpl, sub = dir + "/sub", path = sub + "/later";
+        FileWatcher fw;
+        assert(fw.init() == 0);
+        assert(fw.add(path) == 0);
+        assert(fw.count() == 0 && fw.pending() == 1);
+        std::vector<FileChangeEvent> events;
+        assert(fw.poll(0, &events) == 0);
+        const pid_t child = ::fork();
+        assert(child >= 0);
+        if (child == 0) {
+            ::usleep(300000);
+            ::mkdir(sub.c_str(), 0700);
+            ::usleep(200000);
+            touch(path, "now");
+            ::_exit(0);
+        }
+        const auto t0 = std::chrono::steady_clock::now();
+        auto elapsed_ms = [&t0] {
+            return std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - t0).count();
+        };
+        // Each poll waits up to 3 s: woken by the events, not its timeout.
+        while (!has(events, path, FileChangeKind::Created) && elapsed_ms() < 7000) {
+            fw.poll(3000, &events);
+        }
+        const long long took = elapsed_ms();
+        int status = 0;
+        ::waitpid(child, &status, 0);
+        assert(has(events, path, FileChangeKind::Created));
+        assert(took < 2500);
+        assert(fw.count() == 1 && fw.pending() == 0);
+        fw.shutdown();
+        ::unlink(path.c_str());
+        ::rmdir(sub.c_str());
+        ::rmdir(dir.c_str());
+    }
+
+    // 16. A watched directory is also the one a pending path in it waits
+    //     on (inotify: one wd). The path's arrival lets that watch go and
+    //     the directory is still watched; the path's own removal and
+    //     return are seen through it again.
+    {
+        char tmpl[] = "/tmp/budyk_fws_XXXXXX";
+        assert(::mkdtemp(tmpl) != nullptr);
+        const std::string dir = tmpl, x = dir + "/x";
+        FileWatcher fw;
+        assert(fw.init() == 0);
+        assert(fw.add(dir) > 0);
+        assert(fw.add(x) == 0);
+        std::vector<FileChangeEvent> events;
+        fw.poll(0, &events);
+        touch(x, "here");
+        assert(wait_for(fw, x, FileChangeKind::Created, &events));
+        assert(wait_for(fw, dir, FileChangeKind::Modified, &events));
+        events.clear();
+        const std::string outside = make_tmp();
+        assert(::rename(outside.c_str(), (dir + "/moved-in").c_str()) == 0);
+        assert(wait_for(fw, dir, FileChangeKind::Modified, &events));
+        events.clear();
+        assert(::unlink(x.c_str()) == 0);
+        assert(wait_for(fw, x, FileChangeKind::Deleted, &events));
+        events.clear();
+        touch(x, "back");
+        const auto t0 = std::chrono::steady_clock::now();
+        fw.poll(3000, &events);
+        if (!has(events, x, FileChangeKind::Created)) fw.poll(3000, &events);
+        assert(has(events, x, FileChangeKind::Created));
+        assert(std::chrono::steady_clock::now() - t0 < std::chrono::milliseconds(2500));
+        fw.shutdown();
+        ::unlink(x.c_str());
+        ::unlink((dir + "/moved-in").c_str());
         ::rmdir(dir.c_str());
     }
 

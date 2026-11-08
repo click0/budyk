@@ -97,6 +97,18 @@ public:
     /// its error is logged once.
     int  eval_tick(const Sample& s, const budyk_detail_c* detail = nullptr);
 
+    /// A watched file changed between two ticks: the rules whose when()
+    /// reads `files` run on `s` (a sample of the file_watch group alone),
+    /// as eval_tick() runs them; the others are left as they were, their
+    /// sustain counts and errors too. No cooldown counts down: a cooldown
+    /// counts the level's ticks, and a busy watched file made them pass
+    /// at four a second. Returns the number of rules that fired.
+    int  eval_files(const Sample& s);
+
+    /// A tick that collects nothing (on-demand mode without a client):
+    /// every cooldown counts it, as a collecting tick's eval_tick() does.
+    void count_down_cooldowns();
+
     /// Custom-level entry conditions (collection.levels[].when). The
     /// expression is compiled as `return (<expr>)` in the rules sandbox.
     /// Add after init(), and again after a reload. Returns 0, -1 if the
@@ -204,6 +216,10 @@ public:
     /// carry on.
     static void charge(lua_State* L, uint64_t n);
 
+    /// The rule running in the engine that owns `L` read `files`
+    /// (lua_bindings.cpp's proxy): eval_files() runs only such rules.
+    static void note_files_read(lua_State* L);
+
     /// exec() hardening: when the allowlist is non-empty, exec() rejects
     /// any argv[0] that is not exactly one of the listed absolute paths.
     /// An empty allowlist allows any absolute-path command (still subject
@@ -260,6 +276,9 @@ public:
 private:
     /// Runs a rule's actions when it fires (see LuaRule::actions_ref).
     void run_actions(LuaRule* r);
+    /// eval_tick() and eval_files(): the rules on `s`, every one or
+    /// (`files_only`) those whose when() reads `files`.
+    int  eval_rules(const Sample& s, const budyk_detail_c* detail, bool files_only);
 
     /// Lua allocator (lua_Alloc) that enforces memory_limit_, and the
     /// count hook that enforces instruction_limit_. Both find the engine
@@ -318,6 +337,7 @@ private:
     uint64_t                    alerts_dropped_tick_ = 0;   ///< since the last take_alerts()
     bool                        probe_ = false;
     bool                        loading_        = false;
+    bool                        files_read_     = false;   ///< the running rule read `files`
     bool                     has_file_state_  = false;
     FileWatchState           file_state_;
 };

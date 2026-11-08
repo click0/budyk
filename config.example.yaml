@@ -224,13 +224,17 @@ rules:
 #       topic: "+15559876543"
 
 # ---- Security ------------------------------------------------------------
-# File-change watcher (inotify on Linux, kqueue on FreeBSD). Each path
-# is checked on every tick; events surface as the `files` Lua global
-# with per-path counters and a tick-scoped `tampered` flag:
+# File-change watcher (inotify on Linux, kqueue on FreeBSD). A change
+# runs the rules that read `files` when it happens (no sooner than 250 ms
+# after a tick), as a pass of its own: nothing is collected or stored
+# for it, the other rules wait for the tick, and a cooldown counts the
+# level's ticks, not these passes. Events surface as the `files` Lua
+# global, an entry for every path from the start, with per-path counters
+# and a pass-scoped `tampered` flag:
 #   files["/etc/sudoers"].modifies   (number — cumulative)
 #   files["/etc/sudoers"].deletes    (number — cumulative)
 #   files["/etc/sudoers"].tampered   (bool   — true iff the path
-#                                     fired any event this tick)
+#                                     fired an event since the last pass)
 #
 # Rule example:
 #   watch("sudoers_tamper", {
@@ -246,12 +250,19 @@ rules:
 # The service (the packages' unit, the FreeBSD rc.d script) runs as the
 # user budyk, and a file it cannot read cannot be watched: /etc/sudoers
 # is 0440 root. The log says so ("cannot watch '/etc/sudoers': Permission
-# denied"); give budyk read access (setfacl) for such a file. A path that
+# denied"); give budyk read access to such a file through its group or
+# a default ACL on its directory (setfacl -d -m u:budyk:r /etc): an ACL on
+# the file itself goes with the first save by rename (visudo, vipw), and
+# the new file is logged as "there but cannot be watched". A path that
 # does not exist yet is watched, and reported as changed, as soon as it
-# does; a directory reports a file made, removed or moved in or out of it
-# (/etc/sudoers.d, /etc/cron.d); a symlink is followed once, at the file
-# it names then. In on-demand mode the files are read on every tick, with
-# or without a client, and a change runs the rules.
+# does (the nearest directory above it is watched for it); a directory
+# reports itself and a file made, removed or moved in or out of it
+# (/etc/sudoers.d, /etc/cron.d), not a write to a file inside: list such
+# a file too. A symlink is followed once, at the file it names then. Only
+# regular files and directories are watched (a FIFO is refused). On
+# FreeBSD every watched path is held open (kqueue): its filesystem cannot
+# be unmounted while budyk runs. In on-demand mode the files are read on
+# every tick too, with or without a client.
 #
 # security:
 #   file_watch:

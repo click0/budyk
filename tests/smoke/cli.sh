@@ -9,7 +9,9 @@
 #   - suggest-rules names a ring it cannot read, and why; watch-files
 #     with nothing to watch and hash-password with an argument or a full
 #     output fail (they exited 0); watch-files waits for a path that is
-#     not there yet (alone, it was refused);
+#     not there yet (alone, it was refused), prints every change in its
+#     timeout (it exited at the first), each as it comes, and a SIGTERM
+#     ends `--timeout -1` with 0;
 #   - suggest-rules says when its output cannot be written (/dev/full),
 #     and refuses a --window past a year however it is written (a huge
 #     number wrapped to some hours);
@@ -162,6 +164,32 @@ if "$BIN" watch-files --timeout 5000 "$DIR/later" > "$DIR/out" 2> "$DIR/err" &&
     echo "ok   watch-files waits for a path that is not there yet"
 else echo "FAIL: watch-files on a path not there yet: $(cat "$DIR/out" "$DIR/err")"; fail=1; fi
 wait
+# Every change in the timeout is printed, as it comes (it exited at the
+# first: a write, then a removal a second later, showed the write alone),
+# and with -1 a SIGTERM ends it, exit 0, its lines already out on a pipe
+# (stdout to a file or a pipe waited for the exit).
+: > "$DIR/w2"
+( sleep 0.5; echo a >> "$DIR/w2"; sleep 0.7; rm "$DIR/w2" ) &
+if "$BIN" watch-files --timeout 2500 "$DIR/w2" > "$DIR/out" 2> "$DIR/err" &&
+   grep -q "^modified .*/w2" "$DIR/out" && grep -q "^deleted .*/w2" "$DIR/out"; then
+    echo "ok   watch-files prints every change in its timeout"
+else echo "FAIL: watch-files printed the first change alone: $(cat "$DIR/out" "$DIR/err")"; fail=1; fi
+wait
+: > "$DIR/w3"
+"$BIN" watch-files --timeout -1 "$DIR/w3" > "$DIR/out" 2> "$DIR/err" &
+WPID=$!
+sleep 0.5
+lines_first=$(wc -l < "$DIR/out")            # "watching 1 file(s)", before any change
+echo a >> "$DIR/w3"
+sleep 0.5
+lines_before=$(wc -l < "$DIR/out")
+kill -TERM "$WPID" 2>/dev/null || true
+wrc=0
+wait "$WPID" || wrc=$?
+if [ "$wrc" = 0 ] && [ "$lines_first" -ge 1 ] && [ "$lines_before" -ge 2 ] &&
+   grep -q "^modified .*/w3" "$DIR/out"; then
+    echo "ok   watch-files --timeout -1: lines out as they come, a SIGTERM ends it with 0"
+else echo "FAIL: watch-files --timeout -1: $lines_first, then $lines_before line(s) before the TERM, exit $wrc: $(cat "$DIR/out" "$DIR/err")"; fail=1; fi
 if printf 'pw\n' | "$BIN" hash-password --rounds 3 > /dev/null 2> "$DIR/err"; then
     echo "FAIL: hash-password took an argument it does not have"; fail=1
 else echo "ok   hash-password refuses an argument"; fi
