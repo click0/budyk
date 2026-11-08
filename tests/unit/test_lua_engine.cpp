@@ -2174,11 +2174,12 @@ int main() {
         // The clock is read once a hook interval (1000 instructions, some
         // 260 of these comparisons), so the limit may be overrun by one:
         // 40 ms here, where the interval then shrinks, but seconds on an
-        // emulated CPU (FreeBSD arm64 under QEMU: 18 to 50 ms a
-        // comparison), where the first interval crosses the limit by
+        // emulated CPU, where the first interval crosses the limit by
         // itself. The allowance is two intervals of nothing but
-        // comparisons, at what 100 of them take on this machine: the
-        // emulated CPU's speed drifted threefold within the test. Both
+        // comparisons, at what 100 of them take on this machine: on
+        // FreeBSD arm64 under QEMU, 100 comparisons of 4 MiB strings took
+        // 36 ms each, and the call that followed was stopped after 27 s,
+        // not the 10 s that speed gives one interval. Both
         // are the thread's CPU time, as the limit is.
         LuaEngine probe;
         assert(probe.init(false) == 0);
@@ -2246,7 +2247,7 @@ int main() {
     //      emulated VM, and 40 million took 10 s of CPU here, not 0.3 s.
     {
         // Some 0.1 s of comparisons, and more than one interval of them
-        // (an emulated CPU takes 7 s or more for those 400).
+        // (an emulated CPU takes seconds for those 400).
         const double want_n = 0.1 / cmp_cpu;
         const int n = want_n < 400 ? 400 : want_n > 3000 ? 3000 : static_cast<int>(want_n);
         char slow[256];
