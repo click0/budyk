@@ -1096,6 +1096,141 @@ int main() {
         if (can_lock) ::chmod(locked.c_str(), 0700);
     }
 
+    // 13. NVMe native multipath: each path of a namespace (nvme0c0n1) is a
+    //     hidden disk next to the head (nvme0n1), and both count every
+    //     I/O: the totals read twice what moved. A hidden disk is left
+    //     out (/sys/class/block/<n>/hidden), a name of the paths' form
+    //     too where sysfs does not say.
+    {
+        Fixture fx;
+        budyk_linux_set_proc_root(fx.root.c_str());
+        fx.file("sys/class/block/nvme0n1/hidden", "0\n");
+        fx.file("sys/class/block/nvme0c0n1/hidden", "1\n");
+        fx.file("sys/class/block/sda/size", "100\n");
+        auto stats = [&](unsigned long long n) {
+            std::string ds;
+            char buf[160];
+            for (const char* name : {"nvme0n1", "nvme0c0n1", "sda", "nvme1c2n3"}) {
+                std::snprintf(buf, sizeof(buf), " 259 0 %s 1 0 %llu 0 1 0 %llu 0 0 0 0\n",
+                              name, 2 * n, 4 * n);
+                ds += buf;
+            }
+            fx.file("diskstats", ds);
+        };
+        budyk_disk_ctx_c dctx;
+        std::memset(&dctx, 0, sizeof(dctx));
+        budyk_sample_c s;
+        std::memset(&s, 0, sizeof(s));
+        for (unsigned long long t = 1; t <= 2; ++t) {
+            s.timestamp_nanos = t * 1'000'000'000ULL;
+            stats(t);
+            assert(budyk_collect_disk_linux(&dctx, &s) == 0);
+        }
+        assert(s.disk.device_count == 2);                          // nvme0n1, sda
+        assert(s.disk.read_bytes_per_sec == 2 * 2 * 512 && s.disk.write_bytes_per_sec == 2 * 4 * 512);
+        budyk_linux_set_proc_root(nullptr);
+    }
+
+    // 14. Thermal: an unwired Super I/O input (+127 or -128 °C for ever)
+    //     and a sensor that says it is faulty are no readings (a host read
+    //     127 °C for its life); drivetemp is not read (its read is a
+    //     command to the drive: no spin-down, and a hung disk held the
+    //     tick); the thermal core's twin of a zone is not counted again.
+    {
+        Fixture fx;
+        fx.file("sys/class/thermal/thermal_zone0/temp", "40000\n");
+        fx.file("sys/class/hwmon/hwmon0/name", "nct6798\n");
+        fx.file("sys/class/hwmon/hwmon0/temp1_input", "45000\n");
+        fx.file("sys/class/hwmon/hwmon0/temp3_input", "127000\n");
+        fx.file("sys/class/hwmon/hwmon0/temp4_input", "-128000\n");
+        fx.file("sys/class/hwmon/hwmon0/temp5_input", "99000\n");
+        fx.file("sys/class/hwmon/hwmon0/temp5_fault", "1\n");
+        fx.file("sys/class/hwmon/hwmon1/name", "drivetemp\n");
+        fx.file("sys/class/hwmon/hwmon1/temp1_input", "80000\n");
+        fx.file("sys/class/hwmon/hwmon2/name", "acpitz\n");
+        fx.file("sys/class/hwmon/hwmon2/temp1_input", "40000\n");
+        assert(::symlink("../../thermal/thermal_zone0",
+                         (fx.root + "/sys/class/hwmon/hwmon2/device").c_str()) == 0);
+        budyk_sample_c s;
+        std::memset(&s, 0, sizeof(s));
+        assert(budyk_collect_thermal_linux(&s) == 0);
+        assert(s.thermal.present && s.thermal.sensor_count == 2);  // the zone, temp1
+        assert(near(s.thermal.max_celsius, 45.0));
+    }
+
+    // 15. iowait that went back (the kernel moves a woken task's wait to
+    //     idle) is taken off idle: each part was clamped alone, and idle
+    //     read 175 % (the parts 180 %), a core's total 0.
+    {
+        const uint64_t prev[6] = {100, 100, 500, 0, 0, 1000};
+        const uint64_t now[6]  = {103, 102, 420, 0, 0, 1175};    // 100 ticks in all
+        uint64_t d[6];
+        budyk_cpu_part_deltas(now, prev, d);
+        assert(d[0] == 3 && d[1] == 2 && d[2] == 0 && d[5] == 95);
+        const uint64_t more[6] = {100, 100, 300, 0, 0, 1050};     // more back than idle moved
+        budyk_cpu_part_deltas(more, prev, d);
+        assert(d[2] == 0 && d[5] == 0);
+    }
+
+    // 16. A port of a switch chip (DSA: lan1 on a router board) is a
+    //     device whose link is its conduit (iflink, eth0's ifindex): the
+    //     traffic crosses both and was counted twice.
+    {
+        Fixture fx;
+        budyk_linux_set_proc_root(fx.root.c_str());
+        for (const char* dev : {"eth0", "lan1"}) {
+            fx.file(std::string("sys/class/net/") + dev + "/device/vendor", "0x8086\n");
+        }
+        fx.file("sys/class/net/eth0/ifindex", "2\n");
+        fx.file("sys/class/net/eth0/iflink", "2\n");
+        fx.file("sys/class/net/lan1/ifindex", "5\n");
+        fx.file("sys/class/net/lan1/iflink", "2\n");
+        auto netdev = [&](unsigned long long n) {
+            std::string nd = "Inter-|\n face |\n";
+            char buf[160];
+            for (const char* name : {"eth0", "lan1"}) {
+                std::snprintf(buf, sizeof(buf), "  %s: %llu 1 0 0 0 0 0 0 %llu 1 0 0 0 0 0 0\n",
+                              name, 1000 * n, 100 * n);
+                nd += buf;
+            }
+            fx.file("net/dev", nd);
+        };
+        budyk_net_ctx_c nctx;
+        std::memset(&nctx, 0, sizeof(nctx));
+        budyk_sample_c s;
+        std::memset(&s, 0, sizeof(s));
+        for (unsigned long long t = 1; t <= 2; ++t) {
+            s.timestamp_nanos = t * 1'000'000'000ULL;
+            netdev(t);
+            assert(budyk_collect_network_linux(&nctx, &s) == 0);
+        }
+        assert(s.net.rx_bytes_per_sec == 1000 && s.net.tx_bytes_per_sec == 100);   // eth0's
+        budyk_linux_set_proc_root(nullptr);
+    }
+
+    // 17. A filesystem automounted on an autofs mount is left out (each
+    //     stat() and statvfs() of its point is a use: its idle timer
+    //     never ran out), and so is virtiofs, whose statfs() waits on the
+    //     host's virtiofsd as NFS's waits on its server.
+    {
+        Fixture fx;
+        const std::string a = fx.root + "/auto", v = fx.root + "/share", e = fx.root + "/data";
+        for (const std::string& dir : {a, v, e}) assert(::mkdir(dir.c_str(), 0700) == 0);
+        fx.file("self/mountinfo",
+                "40 25 0:40 / " + a + " rw - autofs systemd-1 rw,fd=50\n"
+                "41 40 8:17 / " + a + " rw - ext4 /dev/sdb1 rw\n"
+                "42 25 0:42 / " + v + " rw - virtiofs share rw\n"
+                "43 25 8:1 / " + e + " rw - ext4 /dev/sda1 rw\n");
+        budyk_linux_set_proc_root(fx.root.c_str());
+        std::unique_ptr<budyk_detail_c> d(new budyk_detail_c());
+        budyk_sample_c s;
+        std::memset(&s, 0, sizeof(s));
+        assert(budyk_collect_fs_linux_ex(&s, d.get()) == 0);
+        assert(s.fs.count == 1 && d->nmounts == 1);
+        assert(std::string(d->mounts[0].mount) == e);
+        budyk_linux_set_proc_root(nullptr);
+    }
+
     std::printf("test_linux_collector: PASS\n");
     return 0;
 }

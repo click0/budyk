@@ -25,6 +25,11 @@ static int skipped_type(const char* t) {
         "rpc_pipefs", "securityfs", "selinuxfs", "squashfs", "sysfs",
         "tracefs", "nfs", "nfs4", "cifs", "smb3", "smbfs", "ncpfs", "afs",
         "ceph", "glusterfs", "9p", "lustre", "gpfs", "sshfs",
+        /* statfs() waits on a daemon or a cluster lock too: virtiofs on
+         * the host's virtiofsd, orangefs and coda on their clients, ocfs2
+         * and gfs2 on the DLM (a fencing held the tick), beegfs on its
+         * servers. */
+        "virtiofs", "orangefs", "coda", "ocfs2", "gfs2", "beegfs",
     };
     for (size_t i = 0; i < sizeof(kSkip) / sizeof(kSkip[0]); ++i) {
         if (strcmp(t, kSkip[i]) == 0) return 1;
@@ -65,6 +70,21 @@ static uint64_t hash_str(const char* s) {
  * mounts is a few KB here. Past the array a line is taken as it is. */
 #define BUDYK_FS_MAX_LINES 8192
 static uint64_t g_points[BUDYK_FS_MAX_LINES];
+
+/* The autofs mounts of the first pass (their mount id and point): a
+ * filesystem mounted on one is an automount, left out. Each stat() and
+ * statvfs() of its point counts as a use (autofs_d_manage()), so its idle
+ * timer never ran out and it stayed mounted for ever (a backup disk with
+ * x-systemd.idle-timeout, the ESP). */
+#define BUDYK_FS_MAX_AUTOFS 256
+static struct { unsigned id; uint64_t point; } g_autofs[BUDYK_FS_MAX_AUTOFS];
+
+static int on_autofs(unsigned parent, uint64_t point, size_t nautofs) {
+    for (size_t i = 0; i < nautofs; ++i) {
+        if (g_autofs[i].id == parent && g_autofs[i].point == point) return 1;
+    }
+    return 0;
+}
 
 static int mounted_over(size_t index, size_t nlines) {
     for (size_t j = index + 1; j < nlines; ++j) {
@@ -108,12 +128,21 @@ int budyk_collect_fs_linux_ex(budyk_sample_c* s, budyk_detail_c* d) {
     FILE* f = fopen(path, "re");
     if (f == NULL) return -errno;
 
-    /* First pass: every line's mount point, for mounted_over(). */
-    size_t nlines = 0;
+    /* First pass: every line's mount point, for mounted_over(), and the
+     * autofs mounts, for on_autofs(). */
+    size_t nlines = 0, nautofs = 0;
     char   line[4096];
     while (nlines < BUDYK_FS_MAX_LINES && fgets(line, sizeof(line), f) != NULL) {
         char dev[1024], mnt[1024], type[64], opts[1024];
-        g_points[nlines++] = parse_mountinfo(line, mnt, type, dev, opts) ? hash_str(mnt) : 0;
+        unsigned id = 0, parent = 0;
+        const int ids = sscanf(line, "%u %u", &id, &parent);
+        const int ok  = parse_mountinfo(line, mnt, type, dev, opts);
+        g_points[nlines++] = ok ? hash_str(mnt) : 0;
+        if (ok && ids == 2 && strcmp(type, "autofs") == 0 && nautofs < BUDYK_FS_MAX_AUTOFS) {
+            g_autofs[nautofs].id    = id;
+            g_autofs[nautofs].point = hash_str(mnt);
+            ++nautofs;
+        }
     }
     if (fseek(f, 0, SEEK_SET) != 0) {
         const int e = errno;
@@ -127,8 +156,11 @@ int budyk_collect_fs_linux_ex(budyk_sample_c* s, budyk_detail_c* d) {
     while (fgets(line, sizeof(line), f) != NULL) {
         const size_t at = index++;
         char dev[1024], mnt[1024], type[64], opts[1024];
+        unsigned id = 0, parent = 0;
+        const int ids = sscanf(line, "%u %u", &id, &parent);
         if (!parse_mountinfo(line, mnt, type, dev, opts)) continue;
         if (at < nlines && mounted_over(at, nlines)) continue;
+        if (ids == 2 && nautofs > 0 && on_autofs(parent, hash_str(mnt), nautofs)) continue;
         if (skipped_type(type) || read_only(opts)) continue;
         budyk_linux_unescape_mount(mnt);
         budyk_linux_unescape_mount(dev);

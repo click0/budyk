@@ -16,6 +16,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   release was created. The packages go up next to the tarballs, and the
   dry run checks that the publish job's patterns match the 20 files
   (it had passed: the publish job is skipped there).
+- **NVMe native multipath doubled the disk totals**: each path of a
+  namespace (`nvme0c0n1`, a disk the kernel hides) counts every I/O as
+  the head (`nvme0n1`) does. Hidden disks are left out.
+- **An unwired Super I/O temperature input became the host's
+  temperature**: nct67xx and it87 chips read +127 °C (or -128) for an
+  input with nothing on it, and `thermal.max_celsius` read 127 for the
+  host's life. Such readings, and sensors that say they are faulty, are
+  none.
+- **drivetemp's sensors were read every tick**: each read is a command to
+  the drive, which kept disks set to spin down spinning, and a hung disk
+  held the tick for up to a minute. They are not read. The thermal
+  core's hwmon twin of an ACPI zone is no longer counted twice.
+- **A filesystem automounted on autofs stayed mounted for ever**: each
+  stat of its mount point counted as a use and its idle timer never ran
+  out. It is left out, and so are virtiofs, orangefs, coda, ocfs2, gfs2
+  and beegfs, whose statfs can wait on a daemon or a cluster lock.
+- **hidepid: another process of budyk's user** (an alert's curl, an
+  `exec()` command) made the hidden process table a reading of two;
+  pid 1 decides alone.
+- **iowait going back** (the kernel moves a woken task's wait to idle)
+  read idle over 100 % and a core's total 0; what it lost is taken off
+  idle.
+- **A DSA switch port and its conduit both counted** in the network
+  totals: an interface whose link is another interface is left out.
+- **FreeBSD: with `security.bsd.see_other_uids=0`** (bsdinstall's "Hide
+  processes running as other users") budyk's user saw its own processes
+  only, and `proc.total` read 2; the group is left out, as under Linux's
+  hidepid. On ILP32 the ICMP counters were misread (`u_long` against the
+  kernel's `uint64_t`); the group is left out there.
+- **Docs:** `net.interfaces[...].up` is the interface's set-up flag, not
+  its link; the thermal sources; the 32-bit counter wrap a known gap.
 
 ## [0.8.7] — 2026-11-05
 

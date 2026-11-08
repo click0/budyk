@@ -97,12 +97,32 @@ char budyk_freebsd_proc_counted_state(int stat, long tdflags, int p_system) {
     return st;
 }
 
+/* An int sysctl's value, or `dflt` when it is not there. */
+static int sysctl_int(const char* name, int dflt) {
+    int v = 0;
+    size_t len = sizeof(v);
+    return sysctlbyname(name, &v, &len, NULL, 0) == 0 && len == sizeof(v) ? v : dflt;
+}
+
 /* With d, also the top processes: CPU time from ki_runtime (µs), told
  * apart from a reused pid by ki_start; system processes (P_SYSTEM: the
  * kernel, idle, interrupt threads) left out, as top(1) does without -S. */
 int budyk_collect_proc_freebsd_ex(budyk_sample_c* s, budyk_detail_c* d) {
     if (s == NULL) return -EINVAL;
     memset(&s->proc, 0, sizeof(s->proc));
+
+    /* Processes of other users hidden (security.bsd.see_other_uids=0:
+     * bsdinstall's "Hide processes running as other users"; see_other_gids
+     * 0; mac_seeotheruids(4)): as budyk's user, the port's service,
+     * kern.proc.proc lists budyk's own processes only, and proc.total = 2
+     * was a reading. The group is left out, logged once, as Linux's
+     * under hidepid. */
+    if (geteuid() != 0 &&
+        (sysctl_int("security.bsd.see_other_uids", 1) == 0 ||
+         sysctl_int("security.bsd.see_other_gids", 1) == 0 ||
+         sysctl_int("security.mac.seeotheruids.enabled", 0) == 1)) {
+        return -EACCES;
+    }
 
     /* ki_start is p_start plus the boot time, on the wall clock: a clock
      * step (ntpd -g at boot, date(1)) moved every process's start, the

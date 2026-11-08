@@ -11,6 +11,20 @@
  *   cpu  user nice system idle iowait irq softirq steal guest guest_nice
  * Per-core lines follow as "cpu0", "cpu1", ...  Counts are in USER_HZ.
  */
+/* The parts' deltas (budyk_cpu_ctx_c.part order: user, system, iowait,
+ * irq, steal, idle), none below 0. iowait may go back between two reads
+ * (kernel/sched/cputime.c: a task woken on another CPU moves its wait to
+ * idle): what it lost is taken off idle, as vmstat does. Each part was
+ * clamped alone, and idle read 175 % (the parts 180 %) and a core's
+ * total 0. */
+void budyk_cpu_part_deltas(const uint64_t now[6], const uint64_t prev[6], uint64_t out[6]) {
+    for (int i = 0; i < 6; ++i) out[i] = now[i] >= prev[i] ? now[i] - prev[i] : 0;
+    if (now[2] < prev[2]) {
+        const uint64_t back = prev[2] - now[2];
+        out[5] = out[5] >= back ? out[5] - back : 0;
+    }
+}
+
 /* One core's share of each part since its previous read, and its busy
  * total; parts in budyk_cpu_ctx_c.part order, total in [6]. */
 static void core_percent(const uint64_t now[7], const uint64_t prev[7], int has_prev,
@@ -19,11 +33,10 @@ static void core_percent(const uint64_t now[7], const uint64_t prev[7], int has_
     if (!has_prev) return;
     const uint64_t dt = now[6] >= prev[6] ? now[6] - prev[6] : 0;
     if (dt == 0) return;
+    uint64_t d[6];
+    budyk_cpu_part_deltas(now, prev, d);
     double pct[6];
-    for (int i = 0; i < 6; ++i) {
-        const uint64_t d = now[i] >= prev[i] ? now[i] - prev[i] : 0;
-        pct[i] = (double)d * 100.0 / (double)dt;
-    }
+    for (int i = 0; i < 6; ++i) pct[i] = (double)d[i] * 100.0 / (double)dt;
     out->user_percent   = pct[0];
     out->system_percent = pct[1];
     out->iowait_percent = pct[2];
@@ -106,10 +119,9 @@ int budyk_collect_cpu_linux_ex(budyk_cpu_ctx_c* ctx, budyk_sample_c* s, budyk_de
         s->cpu.total_percent = dt > 0
             ? (double)db * 100.0 / (double)dt
             : 0.0;
-        for (int i = 0; i < 6; ++i) {
-            const uint64_t dp = part[i] >= ctx->part[i] ? part[i] - ctx->part[i] : 0;
-            pct[i] = dt > 0 ? (double)dp * 100.0 / (double)dt : 0.0;
-        }
+        uint64_t dp[6];
+        budyk_cpu_part_deltas(part, ctx->part, dp);
+        for (int i = 0; i < 6; ++i) pct[i] = dt > 0 ? (double)dp[i] * 100.0 / (double)dt : 0.0;
     }
     s->cpu.user_percent   = pct[0];
     s->cpu.system_percent = pct[1];

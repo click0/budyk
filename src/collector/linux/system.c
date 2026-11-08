@@ -179,8 +179,11 @@ int budyk_collect_proc_linux_ex(budyk_sample_c* s, budyk_detail_c* d) {
      * unit's user): readdir() lists budyk's own processes only, and
      * proc.total = 1 read as a reading, nothing logged. Pid 1 is always
      * there; one that cannot be read means the rest are hidden too, and
-     * the group is left out, logged once ("Permission denied"). */
-    if (s->proc.total <= 1 && strcmp(root, "/proc") == 0 && access("/proc/1/stat", R_OK) != 0) {
+     * the group is left out, logged once ("Permission denied"). On pid 1
+     * alone: any other process of budyk's user (an alert's curl, an
+     * exec() command) is visible too, and the count of two was stored as
+     * a reading. */
+    if (strcmp(root, "/proc") == 0 && access("/proc/1/stat", R_OK) != 0) {
         return -EACCES;
     }
     return 0;
@@ -251,7 +254,12 @@ int budyk_collect_self_linux(budyk_sample_c* s) {
 
 /* One temperature file (millidegrees Celsius, 45000 = 45.0°C) into the
  * running hottest / count; a file that is not there or does not read
- * (a sensor with no reading, "Input/output error") is skipped. */
+ * (a sensor with no reading, "Input/output error") is skipped, and so is
+ * a reading no sensor makes: an input of a Super I/O chip (nct67xx,
+ * it87) with nothing wired to it reads +127 or -128 °C (the ends of an
+ * 8-bit reading) for ever, and a host read 127 °C for its life, any
+ * real overheat under it. One that says so in temp<N>_fault is skipped
+ * too (hwmon_fault()). */
 static void thermal_read(const char* path, double* hottest, uint32_t* count) {
     FILE* f = fopen(path, "re");
     if (f == NULL) return;
@@ -260,16 +268,57 @@ static void thermal_read(const char* path, double* hottest, uint32_t* count) {
     fclose(f);
     if (ok != 1) return;
     const double celsius = (double)milli / 1000.0;
+    if (celsius >= 127.0 || celsius <= -60.0) return;
     if (celsius > *hottest) *hottest = celsius;
     ++*count;
 }
 
+/* Whether hwmon chip `chip` (its directory) is read: not drivetemp, whose
+ * read is a SCSI command to the drive (it holds a disk spinning that was
+ * set to spin down, and a disk that hangs holds the tick for up to a
+ * minute), and not the thermal core's twin of a zone (its `device` is
+ * the thermal_zone, read as a zone already: each ACPI zone counted
+ * twice). */
+static int hwmon_read(const char* chip) {
+    char path[768], target[512];
+    snprintf(path, sizeof(path), "%s/name", chip);
+    FILE* f = fopen(path, "re");
+    if (f != NULL) {
+        char name[64] = "";
+        const int ok = fscanf(f, "%63s", name);
+        fclose(f);
+        if (ok == 1 && strcmp(name, "drivetemp") == 0) return 0;
+    }
+    snprintf(path, sizeof(path), "%s/device", chip);
+    const ssize_t n = readlink(path, target, sizeof(target) - 1);
+    if (n > 0) {
+        target[n] = '\0';
+        const char* last = strrchr(target, '/');
+        if (strncmp(last != NULL ? last + 1 : target, "thermal_zone", 12) == 0) return 0;
+    }
+    return 1;
+}
+
+/* Whether temp<N>_input's sensor says it is faulty (temp<N>_fault 1). */
+static int hwmon_fault(const char* chip, const char* input) {
+    char path[768];
+    const size_t stem = strlen(input) - 6;              /* "temp3" of "temp3_input" */
+    snprintf(path, sizeof(path), "%s/%.*s_fault", chip, (int)stem, input);
+    FILE* f = fopen(path, "re");
+    if (f == NULL) return 0;
+    int fault = 0;
+    if (fscanf(f, "%d", &fault) != 1) fault = 0;
+    fclose(f);
+    return fault == 1;
+}
+
 /* Thermal — the hottest reading across /sys/class/thermal/thermal_zone*\/
  * temp (ACPI zones: laptops, some servers) and /sys/class/hwmon/hwmon*\/
- * temp*_input (the chip drivers: k10temp, coretemp, nvme, drivetemp,
- * IPMI). Most servers have hwmon only, and read "no sensor" from the
- * zones alone. present=0 (sensor_count=0, max_celsius=0.0) when neither
- * is there (containers, jails, virt without ACPI).
+ * temp*_input (the chip drivers: k10temp, coretemp, nvme, IPMI; not
+ * drivetemp, see hwmon_read()). Most servers have hwmon only, and read
+ * "no sensor" from the zones alone. present=0 (sensor_count=0,
+ * max_celsius=0.0) when neither is there (containers, jails, virt
+ * without ACPI).
  */
 int budyk_collect_thermal_linux(budyk_sample_c* s) {
     if (s == NULL) return -EINVAL;
@@ -305,6 +354,7 @@ int budyk_collect_thermal_linux(budyk_sample_c* s) {
             char chip[640];
             const int n = snprintf(chip, sizeof(chip), "%s/%s", dirpath, ent->d_name);
             if (n <= 0 || (size_t)n >= sizeof(chip)) continue;
+            if (!hwmon_read(chip)) continue;
             DIR* cd = opendir(chip);
             if (cd == NULL) continue;
             struct dirent* in;
@@ -316,6 +366,7 @@ int budyk_collect_thermal_linux(budyk_sample_c* s) {
                 }
                 const int m = snprintf(path, sizeof(path), "%s/%s", chip, in->d_name);
                 if (m <= 0 || (size_t)m >= sizeof(path)) continue;
+                if (hwmon_fault(chip, in->d_name)) continue;
                 thermal_read(path, &hottest, &count);
             }
             closedir(cd);

@@ -361,6 +361,11 @@ int budyk_collect_cpu_linux(budyk_cpu_ctx_c* ctx, budyk_sample_c* s);
 /// The same, filling d->cores too when d is not NULL (the _ex collectors
 /// below likewise fill their part of the detail).
 int budyk_collect_cpu_linux_ex(budyk_cpu_ctx_c* ctx, budyk_sample_c* s, budyk_detail_c* d);
+/// The deltas of the six parts (user, system, iowait, irq, steal, idle)
+/// between two reads, none below 0; iowait that went back (the kernel
+/// moves a woken task's wait to idle) is taken off idle.
+/// src/collector/linux/cpu.c.
+void budyk_cpu_part_deltas(const uint64_t now[6], const uint64_t prev[6], uint64_t out[6]);
 
 /// Disk / network collection also needs across-tick state — both accumulate
 /// monotonic byte counters and compute per-second rates from the delta.
