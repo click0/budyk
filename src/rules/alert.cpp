@@ -275,9 +275,15 @@ bool curl_smtp(const char* url,
         ::unlink(body_path);
         return false;
     }
-    const bool ok = run_curl({"-sS", "--mail-from", from, "--mail-rcpt", to,
-                              "-T", body_path, "--max-time", "15", "-K", cfg_path},
-                             20, cancel, why);
+    std::vector<std::string> args = {"-sS", "--mail-from", from, "--mail-rcpt", to,
+                                     "-T", body_path, "--max-time", "15", "-K", cfg_path};
+    // smtp:// with a password: STARTTLS required. curl does not upgrade
+    // an smtp:// connection unless told to, and sent AUTH, the password
+    // in it, in clear to a submission port that offered STARTTLS. A relay
+    // without TLS fails ("STARTTLS not supported"); smtps:// is TLS from
+    // the start, and a relay with no password is left as it was.
+    if (!user_pass.empty() && ::strncasecmp(url, "smtp://", 7) == 0) args.emplace_back("--ssl-reqd");
+    const bool ok = run_curl(args, 20, cancel, why);
     ::unlink(body_path);
     ::unlink(cfg_path);
     return ok;

@@ -554,7 +554,7 @@ Functions available to rules:
 | Function | Purpose |
 |----------|---------|
 | `alert(name, severity, message)` | Raise an alert: logged, sent to every configured channel and to the dashboards, kept for `/api/alerts`. `severity` is `"info"`, `"warning"` (default) or `"critical"`. The name is cut to 256 bytes and the message to 4096, marked `… (N bytes cut)`; past 256 alerts in one tick the rest reach the log and the channels, not the dashboards. |
-| `print(...)` | Write to the daemon log (the bytes written count against `rules.limits.instructions`, as `collectgarbage()` counts the heap it walks; `collectgarbage("stop")` and the tuning options are not available). |
+| `print(...)` | Write to the daemon log (the bytes written count against `rules.limits.instructions`, as an `alert()`'s do and `collectgarbage()` counts the heap it walks; `collectgarbage("stop")` and the tuning options are not available). |
 | `exec(cmd [, timeout_s])` | Run a program: a string or an argv table, absolute path, 30 s timeout by default (in the rules file itself it returns the command as an action instead, see above). **Off by default.** Enable with `rules.exec.enabled` or `--enable-exec`, and restrict it with `rules.exec.allow`. The command runs in the background: the call returns `{ queued = true }` at once (or `{ queued = false, error = "exec queue full" }`), the rules carry on, and the outcome is logged. To run it inline and get its result, `exec(cmd, { timeout = 5, wait = true })` returns `{ ok, exit_status, signal, timed_out, elapsed_seconds }`; the tick waits, so that timeout is capped at 60 s. |
 | `freeze(pid)` / `unfreeze(pid)` | Send `SIGSTOP` / `SIGCONT`. **Off by default.** Enable with `rules.freeze.enabled` or `--enable-freeze`, and restrict by process name with `rules.freeze.allow`. |
 | `collected(name)` | Whether the sample has a group (`"disk"`, `"self"`) or list (`"disk.devices"`); see [What each level collects](#what-each-level-collects). Raises for an unknown name. |
@@ -625,7 +625,10 @@ A rule cannot stall the daemon. Each call into Lua (a `when`, an
 action, a custom level's `when`, the rules file being loaded) may run
 at most `rules.limits.instructions` VM instructions (default 1 000 000,
 about 10 ms), and the engine may hold at most `rules.limits.memory_mb`
-(default 16). A rule that overruns gets an error logged once and is
+(default 16). Work the count does not see, such as comparing two long
+strings (one instruction, however long they are), is held to the
+thread's CPU time: 1 µs for each instruction of the limit, 1 s at the
+default. A rule that overruns gets an error logged once and is
 skipped on that tick; the other rules and collection carry on.
 Library work done in C counts too: the pattern functions (`find`,
 `match`, `gmatch`, `gsub`) charge their steps, and `table.move` its
@@ -711,7 +714,7 @@ dropped and logged until it drains.
 | `ntfy` | ntfy.sh or a self-hosted ntfy server |
 | `discord` | Discord webhook |
 | `telegram` | Telegram Bot API (chat, group or channel) |
-| `smtp` | E-mail through an SMTP / SMTPS relay |
+| `smtp` | E-mail through an SMTP / SMTPS relay (`smtp://` with a `token` requires STARTTLS) |
 | `twilio` | SMS through Twilio |
 
 See [`config.example.yaml`](config.example.yaml) for the fields each type

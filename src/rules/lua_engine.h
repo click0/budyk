@@ -80,7 +80,10 @@ public:
     /// their defaults). Cooldown is stored as a tick count — a long
     /// downtime therefore does NOT decrement it, which errs on the safe
     /// side (stay quiet a little longer rather than storm).
-    ///   save_state: 0 on success, -errno on write failure.
+    ///   save_state: 0 on success, -errno on write failure. A state the
+    ///   same as the one this engine last wrote to `path` is not written
+    ///   again: the daemon saves every 60 s, and wrote and fsynced the
+    ///   file on every idle L1 tick.
     ///   load_state: 0 on success or missing file (fresh install).
     int  save_state(const char* path) const;
     int  load_state(const char* path);
@@ -200,10 +203,23 @@ public:
     /// Instructions are counted rather than time so the limit means the
     /// same on a slow machine, under a sanitizer, or in a test. Takes
     /// effect at once, before or after init().
+    ///
+    /// Work the count does not see is bounded by the thread's CPU time
+    /// (cpu_limit_ns(): 1 us an instruction of the limit, 1 s at least;
+    /// ten times that in a sanitizer build): a comparison of two long
+    /// strings is one instruction, an O(n) memcmp in Lua's VM that budyk
+    /// cannot charge, and 200 000 of two 5 MiB strings held the tick 55 s
+    /// under the default limits.
     static constexpr uint64_t kDefaultInstructionLimit = 1'000'000;
     static constexpr size_t   kDefaultMemoryLimit      = 16u << 20;   ///< 16 MiB
     void     set_limits(uint64_t instructions, size_t memory_bytes);
     uint64_t instruction_limit() const;
+    /// The CPU time one call into Lua may take, in ns (see above).
+    uint64_t cpu_limit_ns()      const;
+    /// How many times the last call into Lua read the thread's CPU time:
+    /// once a hook interval, which shrinks while instructions are slow
+    /// (a comparison of long strings) and grows back when they are not.
+    uint64_t clock_reads()       const;
     size_t   memory_limit()      const;
     /// Bytes currently held by the Lua state (0 when not initialised).
     size_t   memory_used()       const;
@@ -215,6 +231,9 @@ public:
     /// further instruction raises too, so a pcall() in the rule cannot
     /// carry on.
     static void charge(lua_State* L, uint64_t n);
+    /// charge() for `bytes` written or copied out of the Lua heap (a log
+    /// line, an alert), at the allocator's rate.
+    static void charge_bytes(lua_State* L, size_t bytes);
 
     /// The rule running in the engine that owns `L` read `files`
     /// (lua_bindings.cpp's proxy): eval_files() runs only such rules.
@@ -289,7 +308,9 @@ private:
     static LuaEngine* engine_of(lua_State* L);
     /// Raises the limit's error and sets the hook to fire on every
     /// instruction until the next begin_call().
-    static int   raise_limit(lua_State* L, const LuaEngine* self);
+    static int   raise_limit(lua_State* L, LuaEngine* self);
+    /// The same for cpu_limit_ns().
+    static int   raise_cpu_limit(lua_State* L, LuaEngine* self);
     /// Resets the instruction count and the hook's interval; called
     /// before every entry into Lua.
     void begin_call();
@@ -316,6 +337,10 @@ private:
     uint64_t                 instruction_limit_ = kDefaultInstructionLimit;
     uint64_t                 instructions_used_ = 0;
     size_t                   alloc_bytes_       = 0;   ///< allocated, not yet charged
+    int                      hook_interval_     = 0;   ///< the count hook's, now
+    uint64_t                 call_cpu_ns_       = 0;   ///< the thread's CPU time at begin_call()
+    uint64_t                 hook_cpu_ns_       = 0;   ///< and at the last hook
+    uint64_t                 clock_reads_       = 0;   ///< by the hook, since begin_call()
     size_t                   memory_limit_      = kDefaultMemoryLimit;
     size_t                   memory_used_       = 0;
     std::vector<LuaRule>     rules_;
@@ -338,6 +363,8 @@ private:
     bool                        probe_ = false;
     bool                        loading_        = false;
     bool                        files_read_     = false;   ///< the running rule read `files`
+    mutable std::string         saved_path_;   ///< where save_state() last wrote,
+    mutable std::string         saved_text_;   ///< and what
     bool                     has_file_state_  = false;
     FileWatchState           file_state_;
 };

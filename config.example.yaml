@@ -56,7 +56,8 @@ collection:
     escalate_after: 300    # an anomaly that holds this long (seconds, on
                            # every tick) switches L3 on until it clears;
                            # 0 = never
-    escalation_thresholds:
+    escalation_thresholds:  # a reading over one is an anomaly (set them for
+                            # the host: a load of 10 is quiet on 32 cores)
       load_1m: 4.0
       cpu_percent: 85
       swap_used_percent: 50
@@ -153,9 +154,12 @@ rules:
   # action, a custom level's `when`, the rules file being loaded) may
   # execute at most `instructions` VM instructions — about 10 ms at
   # the default — and the whole engine may hold at most `memory_mb`.
-  # A rule that overruns gets an error logged once and is skipped on
-  # that tick; the other rules and the daemon carry on. This is what
-  # stops a `while true do end` typo from halting collection.
+  # Work the count does not see (a comparison of two long strings is
+  # one instruction) is held to the thread's CPU time: 1 µs for each
+  # instruction of the limit, 1 s at least (at the default). A rule
+  # that overruns gets an error logged once and is skipped on that
+  # tick; the other rules and the daemon carry on. This is what stops a
+  # `while true do end` typo from halting collection.
   limits:
     instructions: 1000000  # 10000 .. 1000000000
     memory_mb: 16          # 1 .. 1024
@@ -205,7 +209,9 @@ rules:
 #
 #     # SMTP — curl smtp[s]://host:port, RFC822 body composed in-process.
 #     # `token` is "user:pass" (basic auth) — omit for an unauthenticated
-#     # relay.
+#     # relay. smtps:// is TLS from the start (465); smtp:// with a token
+#     # requires STARTTLS (587), and a relay that does not offer it fails
+#     # the send: the password went over it in clear.
 #     - name:  ops-mail
 #       type:  smtp
 #       url:   "smtps://smtp.example.com:465"

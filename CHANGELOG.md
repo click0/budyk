@@ -156,6 +156,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   said it prints them for the timeout; it does, each as it comes (its
   first line waited for the exit on a pipe), and a SIGTERM or Ctrl-C ends
   `--timeout -1` with 0. The start-up line counts the paths not there yet.
+- **A rule comparing long strings held the collector tick for a
+  minute** under the default limits: `a == b` on two 5 MiB strings is
+  one VM instruction and a 5 MiB memcmp, which the instruction count
+  cannot see (200 000 of them: 55 s). Work the count does not see is
+  held to the thread's CPU time, 1 µs an instruction of
+  `rules.limits.instructions`, 1 s at the default ("CPU time limit of
+  1000 ms exceeded"): enough for a small board, where a million
+  instructions take a few hundred ms.
+- **`alert()` in a loop wrote 670 MB to the log in one tick** (5.6 s),
+  each call one instruction; it is charged by the bytes it sends out,
+  as `print()` is.
+- **`escalate("Burst")` for a custom level `burst` returned true and
+  escalated nothing**: the rules took the name in any case, the
+  scheduler only as written. Both take it in any case, and an
+  escalation the scheduler refuses is logged.
+- **The escalation thresholds above 8 / 95 % / 80 % did nothing**: the
+  hidden critical values were checked first and on their own, so a
+  `load_1m: 32` on a 32-core host still went to L2 at a load of 10 and
+  to L3 after `escalate_after`. A reading over its configured threshold
+  is an anomaly, over the critical one as well a critical one.
+- **SMTP over `smtp://` sent the password in clear**: curl does not
+  upgrade an `smtp://` connection unless told to, and authenticated
+  before any TLS on a submission port that offered STARTTLS. With a
+  `token`, `smtp://` requires STARTTLS (`--ssl-reqd`); a relay without
+  it fails the send. `smtps://` and a relay with no password are as
+  they were.
+- **The rule state was written and fsynced every L1 tick** whether it
+  changed or not (the idle disk figure counted the records alone); an
+  unchanged state is not written again.
 
 ## [0.8.7] — 2026-11-05
 

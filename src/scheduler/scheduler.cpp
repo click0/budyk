@@ -234,8 +234,14 @@ bool Scheduler::level_by_name(const std::string& name, Level* out) const {
     if (::strcasecmp(name.c_str(), "L1") == 0) { *out = Level::L1; return true; }
     if (::strcasecmp(name.c_str(), "L2") == 0) { *out = Level::L2; return true; }
     if (::strcasecmp(name.c_str(), "L3") == 0) { *out = Level::L3; return true; }
+    // Any case, as L1..L3 and as the rules' escalate() checks a name
+    // (LuaEngine::is_level_name): escalate("Burst") for a level `burst`
+    // returned true and escalated nothing.
     for (const auto& c : cfg_.custom_levels) {
-        if (c.name == name) { *out = static_cast<Level>(c.id); return true; }
+        if (::strcasecmp(c.name.c_str(), name.c_str()) == 0) {
+            *out = static_cast<Level>(c.id);
+            return true;
+        }
     }
     return false;
 }
@@ -265,12 +271,22 @@ AnomalyState Scheduler::check_anomaly(const Sample& s) const {
     const bool load = (s.groups & kGroupLoad) != 0;
     const bool cpu  = (s.groups & kGroupCpu)  != 0;
     const bool swap = (s.groups & kGroupSwap) != 0;
-    if (load && s.load.avg_1m       > cfg_.critical_load_1m       ) return AnomalyState::CRITICAL;
-    if (cpu  && s.cpu.total_percent > cfg_.critical_cpu_percent   ) return AnomalyState::CRITICAL;
-    if (swap && s.swap.used_percent > cfg_.critical_swap_percent  ) return AnomalyState::CRITICAL;
-    if (load && s.load.avg_1m       > cfg_.escalation_load_1m     ) return AnomalyState::ELEVATED;
-    if (cpu  && s.cpu.total_percent > cfg_.escalation_cpu_percent ) return AnomalyState::ELEVATED;
-    if (swap && s.swap.used_percent > cfg_.escalation_swap_percent) return AnomalyState::ELEVATED;
+    // An anomaly is a reading over its escalation threshold (the config's
+    // collection.l2.escalation_thresholds); over the critical one as well,
+    // a critical one. The critical values (8 / 95 % / 80 %) were checked
+    // first and on their own: a load_1m threshold of 32 on a 32-core host
+    // went to L2 at a load of 10, and to L3 after escalate_after.
+    const bool over_load = load && s.load.avg_1m       > cfg_.escalation_load_1m;
+    const bool over_cpu  = cpu  && s.cpu.total_percent > cfg_.escalation_cpu_percent;
+    const bool over_swap = swap && s.swap.used_percent > cfg_.escalation_swap_percent;
+    if (over_load || over_cpu || over_swap) {
+        if ((over_load && s.load.avg_1m       > cfg_.critical_load_1m) ||
+            (over_cpu  && s.cpu.total_percent > cfg_.critical_cpu_percent) ||
+            (over_swap && s.swap.used_percent > cfg_.critical_swap_percent)) {
+            return AnomalyState::CRITICAL;
+        }
+        return AnomalyState::ELEVATED;
+    }
     if (!load || !cpu || !swap) return anomaly_;
     return AnomalyState::NORMAL;
 }

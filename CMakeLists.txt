@@ -121,6 +121,9 @@ if(ENABLE_SANITIZERS)
     add_compile_options(-fsanitize=address,undefined -fno-sanitize=vptr
                         -fno-sanitize-recover=all -fno-omit-frame-pointer -g)
     add_link_options(-fsanitize=address,undefined)
+    # Instrumented allocations and hooks: the rules' CPU time limit is
+    # scaled for it (src/rules/lua_engine.cpp).
+    add_compile_definitions(BUDYK_SANITIZED=1)
     message(STATUS "Sanitizers: address, undefined")
 endif()
 
@@ -138,6 +141,7 @@ if(ENABLE_TSAN)
     endif()
     add_compile_options(-fsanitize=thread -fno-sanitize-recover=all -fno-omit-frame-pointer -g)
     add_link_options(-fsanitize=thread)
+    add_compile_definitions(BUDYK_SANITIZED=1)   # see ENABLE_SANITIZERS
     # GCC 12/13 report -Warray-bounds inside libstdc++'s std::string when
     # TSan instrumentation meets optimisation (a vector<string> growing
     # in alert.cpp, for one); the code is fine and other builds keep the

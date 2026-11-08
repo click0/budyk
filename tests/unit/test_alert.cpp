@@ -431,9 +431,19 @@ int main() {
         add("twilio",   "https://api.twilio.example/Accounts/AC1/Messages.json",
                         "+1", "+2", "AC1:TWILIO_SECRET");
         add("smtp",     "smtps://mail.example:465", "a@x", "b@x", "mailuser:MAIL_SECRET");
-        assert(d.dispatch(AlertSeverity::Info, "r", "m") == 4);
+        // smtp:// with a password requires STARTTLS (curl sent AUTH in
+        // clear); without one, and smtps://, as they were.
+        AlertChannel sub;
+        sub.name = "submission"; sub.type = "smtp"; sub.url = "SMTP://mail.example:587";
+        sub.from = "a@x"; sub.topic = "b@x"; sub.token = "u:p";
+        d.add_channel(std::move(sub));
+        AlertChannel relay;
+        relay.name = "relay"; relay.type = "smtp"; relay.url = "smtp://localhost:25";
+        relay.from = "a@x"; relay.topic = "b@x";
+        d.add_channel(std::move(relay));
+        assert(d.dispatch(AlertSeverity::Info, "r", "m") == 6);
         assert(d.flush(30000));
-        assert(d.delivered() == 4);                   // the stand-in exits 0
+        assert(d.delivered() == 6);                   // the stand-in exits 0
 
         std::string record;
         {
@@ -469,6 +479,14 @@ int main() {
         // The body as it is: -d @file drops its line breaks.
         assert(argv_lines.find(" [-d] ") == std::string::npos);
         assert(argv_lines.find(" [--data-binary] [@") != std::string::npos);
+        {
+            size_t ssl = 0;
+            for (size_t at = argv_lines.find("[--ssl-reqd]"); at != std::string::npos;
+                 at = argv_lines.find("[--ssl-reqd]", at + 1)) {
+                ++ssl;
+            }
+            assert(ssl == 1);                         // the submission channel's alone
+        }
         assert(file_lines.find("mode=600") != std::string::npos);
         assert(file_lines.find("mode=644") == std::string::npos);
 
