@@ -238,6 +238,11 @@ bool WebSocketHub::flush_out(Client* c) {
 
 bool WebSocketHub::queue_out(Client* c, const std::string& frame) {
     if (!flush_out(c)) return false;
+    // Behind by more than kMaxBacklog before this frame: the peer is not
+    // reading. Counted after it, one frame over kMaxBacklog alone (256
+    // alerts of long messages escaped, 6 MiB) dropped every remote
+    // dashboard, though each read all it was sent.
+    if (c->outbuf.size() > kMaxBacklog) return false;
     size_t sent = 0;
     if (c->outbuf.empty()) {                         // in order: nothing owed first
         const ssize_t n = send_some(c->fd, frame.data(), frame.size());
@@ -245,7 +250,7 @@ bool WebSocketHub::queue_out(Client* c, const std::string& frame) {
         sent = static_cast<size_t>(n);
     }
     if (sent < frame.size()) c->outbuf.append(frame, sent, std::string::npos);
-    return c->outbuf.size() <= kMaxBacklog;
+    return true;
 }
 
 void WebSocketHub::broadcast(const std::string& payload) {

@@ -38,8 +38,9 @@ bool is_websocket_upgrade(const HttpRequest& req);
 /// than a fresh socket's buffer was a partial write and a drop: a
 /// dashboard's first frame on a host with hundreds of interfaces, on
 /// every reconnect). A client is evicted, and its fd closed, when:
-///   - it is more than kMaxBacklog behind (the peer has not read for a
-///     long time, or the connection is half-open);
+///   - it is more than kMaxBacklog behind when a frame is to be queued
+///     (the peer has not read for a long time, or the connection is
+///     half-open): the frame itself may take it past that;
 ///   - it sends a close frame, or closes the connection;
 ///   - it sends bytes that are not a WebSocket frame.
 class WebSocketHub {
@@ -93,8 +94,8 @@ public:
     size_t drop_sessions(const std::function<bool(const std::string&)>& valid);
 
     /// Send a text frame to every registered client, after what it still
-    /// owes them. A client whose socket failed, or that is more than
-    /// kMaxBacklog behind, is removed and its fd closed.
+    /// owes them. A client whose socket failed, or that was more than
+    /// kMaxBacklog behind before this frame, is removed and its fd closed.
     void  broadcast(const std::string& payload);
 
     /// Send what the clients are owed, read what they have sent (at
@@ -127,7 +128,8 @@ private:
     /// when the socket failed.
     bool flush_out(Client* c);
     /// flush_out(), then `frame`, the rest kept in c->outbuf. False when
-    /// the socket failed or the client is more than kMaxBacklog behind.
+    /// the socket failed or the client was more than kMaxBacklog behind
+    /// before `frame`.
     bool queue_out(Client* c, const std::string& frame);
 
     mutable std::mutex  mtx_;

@@ -325,6 +325,35 @@ int main() {
         ::close(fast_peer);
     }
 
+    // 10c. A frame larger than kMaxBacklog alone is not a dropped client:
+    //      what was owed before it decides. 256 alerts of long messages
+    //      (6 MiB escaped) dropped every remote dashboard each such tick,
+    //      though each read all it was sent; the next frame, while that
+    //      one is still owed, drops it as before.
+    {
+        WebSocketHub hub;
+        int a, a_peer;
+        pair(&a, &a_peer);
+        const int sndbuf = 16 * 1024;
+        assert(::setsockopt(a, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf)) == 0);
+        hub.add(a);
+        const std::string huge(WebSocketHub::kMaxBacklog + 512 * 1024, 'h');
+        hub.broadcast(huge);
+        assert(hub.size() == 1);                    // kept, the tail owed
+        const std::string want = ws_text_frame(huge);
+        std::string got;
+        for (int i = 0; i < 100000 && got.size() < want.size(); ++i) {
+            got += drain(a_peer);
+            assert(hub.service() == 0);
+        }
+        assert(got == want);
+        hub.broadcast(huge);                        // owed again, the peer stops reading
+        assert(hub.size() == 1);
+        hub.broadcast("next");                      // over kMaxBacklog behind: dropped
+        assert(hub.size() == 0);
+        ::close(a_peer);
+    }
+
     // 10b. A frame larger than what the socket takes at once is not a
     //      dropped client: the rest is kept and goes out as the peer
     //      reads, before the next frame, whole and in order. A

@@ -231,6 +231,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   blind after the first save by rename on the host**, without a word:
   the path keeps the old file. It is logged once ("mount its directory
   instead"), and the README's Docker section says so.
+- **A tick of many long alerts dropped every remote dashboard**: 256
+  alerts with 4 KiB messages of control bytes, each escaped to six,
+  came to a 6 MiB WebSocket frame, and a client was dropped once more
+  than its 1 MiB backlog was owed after the frame, however it read.
+  The alerts frame holds the newest that fit in 256 KiB and says how
+  many it left out (`"omitted"`; all are logged, the last 100 in
+  `/api/alerts`), and a client is dropped when it was over the backlog
+  before a frame.
 
 ## [0.8.7] — 2026-11-05
 
