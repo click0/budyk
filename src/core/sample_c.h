@@ -172,6 +172,15 @@ typedef struct {
     /// irq (+ softirq), steal, idle.
     uint64_t part[6];
     int      has_prev;
+    /// The numbers of the cores online at the previous read, hashed
+    /// (Linux).
+    uint64_t online;
+    /// This read is a baseline, not a reading: the cores online changed
+    /// since the previous one, or idle went back (Linux). The kernel's
+    /// aggregate counts an offline core's idle and iowait by another
+    /// counter than the one it keeps while the core is up, and the tick
+    /// a core came back read iowait 330 %, the parts 387 %.
+    int      baseline;
 } budyk_cpu_ctx_c;
 
 /// TCP / UDP counters are cumulative; the rates come from the delta
@@ -343,6 +352,17 @@ double budyk_rate(uint64_t now, const uint64_t* prev, uint64_t dns);
  * delta x 1e9 overflows 64 bits above 18.4 GB per interval (61 MB/s over
  * an L1 interval of 5 minutes); UINT64_MAX at most. */
 uint64_t budyk_rate_u64(uint64_t now, const uint64_t* prev, uint64_t dns);
+/** Whether a sensor's reading can be a temperature: an input of a
+ * Super I/O chip with nothing wired to it reads +127 or -128 °C, an ACPI
+ * thermal zone whose _TMP never read sane keeps -1 deci-Kelvin
+ * (-273.2 °C, FreeBSD). Neither is a reading. */
+int budyk_celsius_plausible(double celsius);
+/** The clock synchronised by the kernel's NTP discipline: not
+ * TIME_ERROR, STA_UNSYNC not set, and the maximum error under 16 s.
+ * FreeBSD's kernel lets the maximum error grow (0.5 ms a second) but
+ * never sets STA_UNSYNC itself, so a clock whose ntpd or chronyd died
+ * read synchronised for ever; Linux's sets it at the same 16 s. */
+int budyk_ntp_synced(int time_error, int sta_unsync, double max_error_ms);
 /** Add what device `name`'s two counters (a, b) moved since the previous
  * call to *moved_a and *moved_b: its own counters against its own last
  * values in `prev` (nprev entries). A device not there last time, or

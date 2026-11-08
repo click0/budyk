@@ -54,6 +54,7 @@ int budyk_collect_cpu_linux(budyk_cpu_ctx_c* ctx, budyk_sample_c* s) {
 int budyk_collect_cpu_linux_ex(budyk_cpu_ctx_c* ctx, budyk_sample_c* s, budyk_detail_c* d) {
     if (ctx == NULL || s == NULL) return -EINVAL;
     if (d != NULL) d->ncores = 0;
+    ctx->baseline = 0;
 
     char path[512];
     snprintf(path, sizeof(path), "%s/stat", budyk_linux_proc_root());
@@ -66,6 +67,9 @@ int budyk_collect_cpu_linux_ex(budyk_cpu_ctx_c* ctx, budyk_sample_c* s, budyk_de
     char line[512];
     int  got_agg = 0;
     uint32_t ncpu = 0;
+    uint64_t online = 1469598103934665603ULL;   /* FNV-1a of the cores' numbers */
+    unsigned char seen[BUDYK_MAX_CORES];
+    memset(seen, 0, sizeof(seen));
 
     while (fgets(line, sizeof(line), f) != NULL) {
         if (!got_agg && strncmp(line, "cpu ", 4) == 0) {
@@ -80,9 +84,13 @@ int budyk_collect_cpu_linux_ex(budyk_cpu_ctx_c* ctx, budyk_sample_c* s, budyk_de
                    line[3] >= '0' && line[3] <= '9') {
             ++ncpu;
             /* cpuN, in order; an offline core has no line. Its prev
-             * slot is its number, so a core coming back gets a baseline
-             * only if it was gone for a whole tick. */
+             * slot is its number, and is forgotten while it has none, so
+             * a core coming back gets a baseline. */
             unsigned id = 0;
+            if (sscanf(line + 3, "%u", &id) == 1) {
+                online = (online ^ (uint64_t)id) * 1099511628211ULL;
+                if (id < BUDYK_MAX_CORES) seen[id] = 1;
+            }
             unsigned long long u = 0, n = 0, sy = 0, id_ = 0, io = 0, iq = 0, sq = 0, st = 0;
             if (d != NULL &&
                 sscanf(line + 3, "%u %llu %llu %llu %llu %llu %llu %llu %llu",
@@ -102,6 +110,11 @@ int budyk_collect_cpu_linux_ex(budyk_cpu_ctx_c* ctx, budyk_sample_c* s, budyk_de
     }
     fclose(f);
     if (!got_agg) return -ENODATA;
+    if (d != NULL) {
+        for (unsigned id = 0; id < BUDYK_MAX_CORES; ++id) {
+            if (!seen[id]) d->core_has_prev[id] = 0;
+        }
+    }
 
     const uint64_t busy  = user + nice + system_ + irq + softirq + steal;
     const uint64_t total = busy + idle + iowait;
@@ -109,6 +122,10 @@ int budyk_collect_cpu_linux_ex(budyk_cpu_ctx_c* ctx, budyk_sample_c* s, budyk_de
     const uint64_t part[6] = { user + nice, system_, iowait, irq + softirq, steal, idle };
 
     s->cpu.count = ncpu;
+    /* The cores online changed, or idle went back (only a core going
+     * offline or coming back moves it so): the deltas mix two counters. */
+    if (ctx->has_prev && (online != ctx->online || part[5] < ctx->part[5])) ctx->baseline = 1;
+    ctx->online = online;
 
     double pct[6] = { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
     if (!ctx->has_prev) {

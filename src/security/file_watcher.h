@@ -119,6 +119,12 @@ public:
     /// Number of paths waiting to exist (added while not there, or gone
     /// since): each is watched, and reported as Created, once it is.
     std::size_t pending() const;
+    /// Paths whose file was replaced where budyk cannot see the new one:
+    /// the path still names the old file, unlinked (a file bind-mounted
+    /// on its own, `docker -v FILE:FILE`, keeps the inode it was given).
+    /// Each is logged once, saying to mount the directory instead
+    /// (Linux).
+    std::size_t replaced_outside() const;
 
     /// Block up to `timeout_ms` for at least one event, drain pending
     /// events, and append them to `out`. Returns the number appended,
@@ -180,6 +186,7 @@ private:
     std::map<std::string, DirWatch>                    dirs_;
     std::unordered_map<int, std::string>               dir_of_id_;
     bool                                               overflowed_ = false;
+    std::set<std::string>                              outside_;   ///< replaced_outside()
 };
 
 } // namespace budyk

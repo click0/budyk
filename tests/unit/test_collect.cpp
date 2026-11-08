@@ -145,10 +145,48 @@ int main() {
         collect_one(&x, &c3, set);
         budyk_linux_set_proc_root(nullptr);
         assert((c3.failed & kGroupCpu) == 0 && (x.baseline & kGroupCpu) != 0);
+        // A core coming online since: a baseline again, not a reading (the
+        // aggregate's idle and iowait change counters with it).
+        auto stat = [&](const char* text) {
+            FILE* f = std::fopen((std::string(dir) + "/stat").c_str(), "w");
+            assert(f != nullptr);
+            std::fputs(text, f);
+            std::fclose(f);
+        };
+        stat("cpu  20 0 20 160 0 0 0 0 0 0\ncpu0 20 0 20 160 0 0 0 0 0 0\n");
+        budyk_linux_set_proc_root(dir);
+        x = Sample{};
+        x.timestamp_nanos = 5000000000ULL;
+        collect_one(&x, &c3, set);
+        assert((x.groups & kGroupCpu) != 0 && (x.baseline & kGroupCpu) == 0);
+        stat("cpu  30 0 30 170 0 0 0 0 0 0\ncpu0 25 0 25 165 0 0 0 0 0 0\n"
+             "cpu1 5 0 5 5 0 0 0 0 0 0\n");
+        x = Sample{};
+        x.timestamp_nanos = 6000000000ULL;
+        collect_one(&x, &c3, set);
+        budyk_linux_set_proc_root(nullptr);
+        assert((x.groups & kGroupCpu) == 0 && (x.baseline & kGroupCpu) != 0);
         ::unlink((std::string(dir) + "/stat").c_str());
         ::unlink((net + "/snmp").c_str());
         ::rmdir(net.c_str());
         ::rmdir(dir);
+    }
+
+    // 7a. The readings both platforms hold to: a sensor's -273.2 °C (an
+    //     ACPI zone never set, FreeBSD), +127 or -128 (an unwired Super
+    //     I/O input) are none; a clock is synchronised while the NTP
+    //     discipline says so and its maximum error is under 16 s
+    //     (FreeBSD's kernel never says otherwise on its own: a clock
+    //     whose ntpd died read synchronised for ever).
+    {
+        assert(budyk_celsius_plausible(45.0) && budyk_celsius_plausible(-40.0));
+        assert(budyk_celsius_plausible(126.9));
+        assert(!budyk_celsius_plausible(-1.0 / 10.0 - 273.15));
+        assert(!budyk_celsius_plausible(127.0) && !budyk_celsius_plausible(-128.0));
+        assert(!budyk_celsius_plausible(-60.0));
+        assert(budyk_ntp_synced(0, 0, 15999.0));
+        assert(!budyk_ntp_synced(0, 0, 16000.0));
+        assert(!budyk_ntp_synced(1, 0, 1.0) && !budyk_ntp_synced(0, 1, 1.0));
     }
 
     // 7b. More devices than a list holds or the totals follow: 300 disks

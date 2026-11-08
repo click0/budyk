@@ -25,6 +25,14 @@ uint64_t budyk_rate_u64(uint64_t now, const uint64_t* prev, uint64_t dns) {
     return r >= 18446744073709551615.0 ? UINT64_MAX : (uint64_t)r;
 }
 
+int budyk_celsius_plausible(double celsius) {
+    return celsius < 127.0 && celsius > -60.0;
+}
+
+int budyk_ntp_synced(int time_error, int sta_unsync, double max_error_ms) {
+    return !time_error && !sta_unsync && max_error_ms < 16000.0;
+}
+
 void budyk_counted_add(const budyk_counted_c* prev, uint32_t nprev, uint32_t* pos,
                        budyk_counted_c* next, uint32_t* nnext, const char* name,
                        uint64_t a, uint64_t b, uint64_t* moved_a, uint64_t* moved_b) {
