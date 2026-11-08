@@ -23,6 +23,7 @@ extern "C" {
 #include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 #include <vector>
 
@@ -2165,10 +2166,18 @@ int main() {
             "  return false\n"
             "end })\n") == 0);
         // The clock is read once a hook interval (1000 instructions, some
-        // 330 of these comparisons) until one goes slowly, so the limit
-        // may be overrun by the first: 50 ms here, seconds on an emulated
-        // CPU (FreeBSD arm64 under QEMU). What 100 comparisons take on
-        // this machine gives the allowance.
+        // 330 of these comparisons) and the interval shrinks once one
+        // went slowly, so the limit may be overrun by the first: 50 ms
+        // here, seconds on an emulated CPU (FreeBSD arm64 under QEMU).
+        // What 100 comparisons take on this machine gives the allowance.
+        // Both are the thread's CPU time, as the limit is, not the wall
+        // clock's, which a loaded or emulated host stretches (measured on
+        // the wall clock, the allowance still fell short there).
+        const auto cpu_now = [] {
+            struct timespec ts{};
+            assert(::clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts) == 0);
+            return static_cast<double>(ts.tv_sec) + static_cast<double>(ts.tv_nsec) / 1e9;
+        };
         LuaEngine probe;
         assert(probe.init(false) == 0);
         assert(probe.load_string(
@@ -2178,20 +2187,25 @@ int main() {
             "  for i = 1, 100 do if a == b then end end\n"
             "  return false\n"
             "end })\n") == 0);
-        const auto p0 = std::chrono::steady_clock::now();
+        const double p0 = cpu_now();
         assert(probe.eval_tick(mk(0, 0, 0, 0)) == 0);
-        const double per = std::chrono::duration<double>(std::chrono::steady_clock::now() - p0).count() / 100;
+        const double per = (cpu_now() - p0) / 100;
         assert(probe.rules()[0].last_error.empty());
         probe.shutdown();
-        const auto t0 = std::chrono::steady_clock::now();
+        const auto w0 = std::chrono::steady_clock::now();
+        const double t0 = cpu_now();
         assert(e.eval_tick(mk(0, 0, 0, 0)) == 0);
-        const double took = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        const double took = cpu_now() - t0;
+        std::fprintf(stderr, "test_lua_engine: 45c took %.3f s of CPU (%.3f s wall), "
+                     "%.3f ms of CPU a comparison, limit %.3f s\n", took,
+                     std::chrono::duration<double>(std::chrono::steady_clock::now() - w0).count(),
+                     per * 1e3, static_cast<double>(limit) / 1e9);
         char want[64];
         std::snprintf(want, sizeof(want), "CPU time limit of %llu ms exceeded",
                       static_cast<unsigned long long>(limit / 1000000));
         assert(e.rules()[0].last_error.find(want) != std::string::npos);
         // Some 30 s unbounded (200 000 comparisons).
-        assert(took < static_cast<double>(limit) / 1e9 + 400 * per + 1.5);
+        assert(took < static_cast<double>(limit) / 1e9 + 400 * per + 0.5);
         // The CPU time is each call's, not the engine's: rules that each
         // take a few ms, tick after tick, past the limit in all, run on.
         LuaEngine busy;
