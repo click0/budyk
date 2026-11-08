@@ -32,10 +32,16 @@ struct Config {
     int   auth_max_login_failures = 5;
     int   auth_login_window_sec   = 60;
     /// web.allowed_hosts: names, besides an IP address, localhost and
-    /// this host's name, that a request's Host may carry while budyk
-    /// listens on loopback without a password (DNS rebinding,
-    /// src/daemon/router.cpp). Case does not matter; no port.
+    /// this host's name, that a request's Host (and each entry of its
+    /// X-Forwarded-Host) may carry while budyk listens on loopback
+    /// without a password, or on any address once the list is set (DNS
+    /// rebinding, src/daemon/router.cpp). Case does not matter; no port.
     std::vector<std::string> web_allowed_hosts;
+    /// web.trusted_proxies: the addresses of reverse proxies whose
+    /// X-Forwarded-For names the client (its last entry): the login
+    /// throttle counts that address, not the proxy's, which every client
+    /// behind it shared. IP addresses only, as the peer is written.
+    std::vector<std::string> web_trusted_proxies;
     /// web.min_send_rate: KiB/s a client must take a response at, past
     /// the I/O timeout, or it is cut off (the one HTTP thread serves one
     /// connection at a time). The 7-day history (1000 points, about a

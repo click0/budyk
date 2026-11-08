@@ -606,7 +606,10 @@ int main() {
     //     speculative connection, or a few silent ones opened on purpose,
     //     held the thread for io_timeout_ms each (6 of them: 30 s), and
     //     the dashboard, the login and the TUI waited behind them. One
-    //     that has sent a byte gets the budget (its request may be slow).
+    //     that sent a byte and stalls has kHeadMs for its head (it had the
+    //     whole budget: one byte each from 64 connections kept everyone
+    //     out for minutes); one whose head is in gets the budget for its
+    //     body.
     {
         HttpServer s;
         s.set_io_timeout_ms(4000);
@@ -633,8 +636,13 @@ int main() {
         const double silent = closed_after(connect_to());
         assert(silent >= 0.9 && silent < 2.5);
         const int partial = connect_to();
-        assert(::send(partial, "GET ", 4, 0) == 4);   // a byte sent: the full budget
-        const double slow = closed_after(partial);
+        assert(::send(partial, "GET ", 4, 0) == 4);   // a head begun and stalled
+        const double stalled = closed_after(partial);
+        assert(stalled >= 0.9 && stalled < 2.5);
+        const int body = connect_to();
+        const char head[] = "POST /x HTTP/1.1\r\nHost: x\r\nContent-Length: 4\r\n\r\nab";
+        assert(::send(body, head, sizeof(head) - 1, 0) == static_cast<ssize_t>(sizeof(head) - 1));
+        const double slow = closed_after(body);         // the body: the full budget
         assert(slow >= 3.5 && slow < 6.0);
         s.stop();
     }

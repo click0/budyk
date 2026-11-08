@@ -111,6 +111,12 @@ public:
     void set_io_timeout_ms(int ms);
     int  io_timeout_ms() const;
     static constexpr int kFirstByteMs = 1000;
+    /// The request head (its line and headers) must be in within this
+    /// long of its first byte; the body may take the rest of
+    /// io_timeout_ms(). A browser sends the head in one segment: one byte
+    /// and then nothing held the thread for the whole budget, and 64 such
+    /// connections queued kept every client out for minutes.
+    static constexpr int kHeadMs = 1000;
     /// A response may take io_timeout_ms() plus its body's size at this
     /// many bytes per second (default 256 KiB/s, so a few MB of
     /// /api/range gets a few more seconds); a client reading slower is

@@ -16,7 +16,7 @@ constexpr size_t kMaxTracked = 4096;
 LoginLimiter::LoginLimiter(int max_failures, int window_sec, int global_max)
     : max_failures_(max_failures > 0 ? max_failures : 1),
       window_sec_(window_sec > 0 ? window_sec : 1),
-      global_max_(global_max > 0 ? global_max : 1) {}
+      global_max_(global_max > max_failures_ ? global_max : max_failures_) {}
 
 bool LoginLimiter::expired(const Entry& e, uint64_t now) const {
     return e.failures == 0 ||
@@ -52,7 +52,8 @@ int LoginLimiter::retry_after(const std::string& peer, uint64_t now_sec) {
     return until > now_sec ? static_cast<int>(until - now_sec) : 1;
 }
 
-bool LoginLimiter::record_failure(const std::string& peer, uint64_t now_sec) {
+bool LoginLimiter::record_failure(const std::string& peer, uint64_t now_sec,
+                                  bool* filled_global) {
     auto bump = [&](Entry* e) {
         if (expired(*e, now_sec)) {
             e->failures     = 0;
@@ -61,6 +62,7 @@ bool LoginLimiter::record_failure(const std::string& peer, uint64_t now_sec) {
         ++e->failures;
     };
     bump(&global_);
+    if (filled_global != nullptr) *filled_global = global_.failures == global_max_;
     Entry& e = peers_[peer];
     bump(&e);
     return e.failures == max_failures_;
@@ -73,5 +75,6 @@ void LoginLimiter::record_success(const std::string& peer) {
 size_t LoginLimiter::tracked() const { return peers_.size(); }
 int    LoginLimiter::max_failures() const { return max_failures_; }
 int    LoginLimiter::window_sec()   const { return window_sec_; }
+int    LoginLimiter::global_max()   const { return global_max_; }
 
 } // namespace budyk

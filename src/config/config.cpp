@@ -17,8 +17,11 @@ extern "C" {
 #include <cerrno>
 #include <cstring>
 
+#include <arpa/inet.h>
 #include <fcntl.h>
+#include <netinet/in.h>
 #include <strings.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -341,7 +344,8 @@ const KeySpec kFileWatchKeys[]  = {{"enabled"}, {"paths"}, {nullptr}};
 const KeySpec kSecurityKeys[]   = {{"file_watch", kFileWatchKeys}, {nullptr}};
 const KeySpec kAuthKeys[]       = {{"enabled"}, {"password_hash"}, {"persist_sessions"},
                                    {"max_login_failures"}, {"login_window"}, {nullptr}};
-const KeySpec kWebKeys[]        = {{"allowed_hosts"}, {"min_send_rate"}, {"auth", kAuthKeys},
+const KeySpec kWebKeys[]        = {{"allowed_hosts"}, {"trusted_proxies"}, {"min_send_rate"},
+                                   {"auth", kAuthKeys},
                                    {nullptr}};
 const KeySpec kRootKeys[]       = {{"listen"}, {"port"}, {"data_dir"},
                                    {"collection", kCollectionKeys},
@@ -778,6 +782,24 @@ int parse_document(yaml_parser_t* parser, Config* out, std::string* error) {
                           "web.auth.login_window");
         }
         apply_str_list(&doc, web, "allowed_hosts", &out->web_allowed_hosts, "web.allowed_hosts");
+        apply_str_list(&doc, web, "trusted_proxies", &out->web_trusted_proxies,
+                       "web.trusted_proxies");
+        // An address as the peer is written (inet_ntop's form), so that a
+        // comparison of strings is one of addresses.
+        std::vector<std::string> proxies;
+        for (const std::string& p : out->web_trusted_proxies) {
+            unsigned char a[16];
+            char text[INET6_ADDRSTRLEN];
+            const int fam = ::inet_pton(AF_INET, p.c_str(), a) == 1 ? AF_INET
+                          : ::inet_pton(AF_INET6, p.c_str(), a) == 1 ? AF_INET6 : 0;
+            if (fam == 0 || ::inet_ntop(fam, a, text, sizeof(text)) == nullptr) {
+                std::fprintf(stderr, "budyk config: web.trusted_proxies: '%s' is not an IP "
+                                     "address; left out\n", p.c_str());
+                continue;
+            }
+            proxies.emplace_back(text);
+        }
+        out->web_trusted_proxies.swap(proxies);
         apply_int     (&doc, web, "min_send_rate", &out->web_min_send_rate_kib, "web.min_send_rate");
     }
 

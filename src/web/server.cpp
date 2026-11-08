@@ -9,6 +9,7 @@
 #include <sys/time.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cctype>
 #include <cerrno>
 #include <chrono>
@@ -479,7 +480,8 @@ bool HttpServer::handle_client(int client_fd, const char* peer) {
     // Nothing sent at all within kFirstByteMs: not a request (a
     // browser's speculative connection, a probe, a silent client), and
     // the thread is wanted elsewhere; a request's first bytes come with
-    // the connection. Once something is here, the whole budget applies.
+    // the connection. Once something is here, the head has kHeadMs and
+    // the body the rest of the budget.
     {
         const Deadline first = Clock::now() + std::chrono::milliseconds(kFirstByteMs);
         for (;;) {
@@ -495,7 +497,8 @@ bool HttpServer::handle_client(int client_fd, const char* peer) {
     }
 
     std::vector<char> buf;
-    ssize_t hdr_end = read_until_headers(client_fd, &buf, deadline, io_timeout_ms_);
+    const Deadline head_by = std::min(deadline, Clock::now() + std::chrono::milliseconds(kHeadMs));
+    ssize_t hdr_end = read_until_headers(client_fd, &buf, head_by, io_timeout_ms_);
     if (hdr_end == kHeadersTooLarge) {
         reply(HttpResponse{431, "text/plain", "request headers too large\n"});
         return false;

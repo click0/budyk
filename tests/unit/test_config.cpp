@@ -210,6 +210,16 @@ int main(int argc, char** argv) {
         assert(c.web_allowed_hosts[0] == "budyk.example.com" && c.web_allowed_hosts[1] == "dash.lan");
     }
 
+    // 7a-ter-b. web.trusted_proxies: addresses, written as the peer is
+    //           (inet_ntop's form); a name is left out with a word.
+    {
+        Config c;
+        assert(c.web_trusted_proxies.empty());
+        assert(config_load_string("web:\n  trusted_proxies: [127.0.0.1, '::0001', proxy.lan]\n", &c) == 0);
+        assert(c.web_trusted_proxies.size() == 2);
+        assert(c.web_trusted_proxies[0] == "127.0.0.1" && c.web_trusted_proxies[1] == "::1");
+    }
+
     // 7a-quater. web.min_send_rate: KiB/s, default 256, held to 1..1 MiB.
     {
         Config c;

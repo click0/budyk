@@ -471,7 +471,12 @@ int main() {
         assert(static_cast<bool>(w.handler(upgrade(nullptr, "127.0.0.1:8080")).hijack));   // not a browser
         HttpRequest proxied = upgrade("https://budyk.example.com", "127.0.0.1:8080");
         proxied.headers.push_back({"X-Forwarded-Host", "budyk.example.com"});
-        assert(static_cast<bool>(w.handler(proxied).hijack));
+        // The proxy's public name, as in Host, must be in web.allowed_hosts.
+        assert(w.handler(proxied).status == 403 && !w.handler(proxied).hijack);
+        World named; named.cfg.web_allowed_hosts = {"budyk.example.com"};
+        named.init();
+        assert(static_cast<bool>(named.handler(proxied).hijack));
+        named.ws.close_all();
 
         std::vector<int> peers;
         for (size_t i = 0; i < WebSocketHub::kMaxClients; ++i) {
@@ -486,13 +491,47 @@ int main() {
         for (const int p : peers) ::close(p);
     }
 
+    // 3b. Behind a proxy in web.trusted_proxies the throttle counts the
+    //     client of X-Forwarded-For (its last entry): every client was the
+    //     proxy's 127.0.0.1, and two wrong logins here (five by default)
+    //     kept everyone out. A peer not listed is counted as itself,
+    //     whatever X-Forwarded-For it sends.
+    {
+        World w;
+        w.cfg.auth_enabled = true;
+        w.cfg.web_trusted_proxies = {"127.0.0.1"};
+        std::string hash;
+        assert(argon2_hash("hunter2", Argon2Params{}, &hash) == 0);
+        std::snprintf(w.cfg.password_hash, sizeof(w.cfg.password_hash), "%s", hash.c_str());
+        w.init();
+        auto via = [](const char* body, const char* peer, const char* xff) {
+            HttpRequest r = post("/api/auth/login", body, peer);
+            if (xff != nullptr) r.headers.push_back({"X-Forwarded-For", xff});
+            return r;
+        };
+        const char* bad  = "{\"password\":\"wrong\"}";
+        const char* good = "{\"password\":\"hunter2\"}";
+        assert(w.handler(via(bad, "127.0.0.1", "6.6.6.6")).status == 401);
+        assert(w.handler(via(bad, "127.0.0.1", "9.9.9.9, 10.9.9.9, 6.6.6.6")).status == 401);
+        assert(w.handler(via(good, "127.0.0.1", "6.6.6.6")).status == 429);      // that client
+        assert(w.handler(via(good, "127.0.0.1", "1.2.3.4")).status == 200);      // not another
+        assert(w.handler(via(good, "127.0.0.1", nullptr)).status == 200);        // the proxy's own
+        assert(w.handler(via(good, "127.0.0.1", "not-an-address")).status == 200);
+        assert(w.handler(via(bad, "10.0.0.9", "1.1.1.1")).status == 401);       // not a proxy:
+        assert(w.handler(via(bad, "10.0.0.9", "2.2.2.2")).status == 401);       // counted as itself
+        assert(w.handler(via(good, "10.0.0.9", "3.3.3.3")).status == 429);
+    }
+
     // 7c. DNS rebinding: on loopback without a password, a page whose own
     //     name now points at 127.0.0.1 reads the API (and the WebSocket,
     //     Origin and Host agreeing) as its own origin. Its name is in
     //     Host: only an address, localhost, this host's name or
     //     web.allowed_hosts are let in. X-Forwarded-Host, which the page
-    //     sets itself, does not count. With a password on, or on a
-    //     network address, any name is.
+    //     sets itself, does not let a name in; behind a proxy that
+    //     rewrote Host to 127.0.0.1 (nginx's and Apache's defaults) each
+    //     of its entries is held to the same names (every name got in
+    //     there). With a password on any name is, and on a network
+    //     address too unless web.allowed_hosts lists some.
     {
         World w;
         w.cfg.web_allowed_hosts = {"budyk.example.com"};
@@ -517,6 +556,15 @@ int main() {
         HttpRequest forged = at("/api/samples", "evil.example:8080");
         forged.headers.push_back({"X-Forwarded-Host", "127.0.0.1:8080"});
         assert(w.handler(forged).status == 403);
+        auto proxied = [&at](const char* fwd) {
+            HttpRequest r = at("/api/samples", "127.0.0.1:8080");   // Host as the proxy rewrote it
+            r.headers.push_back({"X-Forwarded-Host", fwd});
+            return r;
+        };
+        assert(w.handler(proxied("evil.example")).status == 403);
+        assert(w.handler(proxied("budyk.example.com, evil.example")).status == 403);
+        assert(w.handler(proxied("budyk.example.com")).status == 200);
+        assert(w.handler(proxied("localhost:8080, budyk.example.com ")).status == 200);
         HttpRequest ws = at("/api/ws", "evil.example:8080");
         ws.headers.push_back({"Upgrade", "websocket"});
         ws.headers.push_back({"Connection", "Upgrade"});
@@ -530,6 +578,14 @@ int main() {
         World open; std::snprintf(open.cfg.listen_addr, sizeof(open.cfg.listen_addr), "0.0.0.0");
         open.init();
         assert(open.handler(at("/api/samples", "evil.example:8080")).status == 200);
+        // A network address with web.allowed_hosts: the names are checked
+        // there too (the list did nothing off loopback).
+        World lan; std::snprintf(lan.cfg.listen_addr, sizeof(lan.cfg.listen_addr), "0.0.0.0");
+        lan.cfg.web_allowed_hosts = {"budyk.lan"};
+        lan.init();
+        assert(lan.handler(at("/api/samples", "evil.example:8080")).status == 403);
+        assert(lan.handler(at("/api/samples", "budyk.lan:8080")).status == 200);
+        assert(lan.handler(at("/api/samples", "192.168.1.5:8080")).status == 200);
         World authed; authed.cfg.auth_enabled = true;
         authed.init();
         assert(authed.handler(at("/api/samples", "evil.example:8080")).status == 401);

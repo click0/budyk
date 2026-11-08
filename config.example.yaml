@@ -267,8 +267,20 @@ web:
   # must be one of budyk's names: an IP address, localhost, this host's
   # name, or one listed here (a reverse proxy's public name). Anything
   # else gets 403: a page that points its own name at 127.0.0.1 (DNS
-  # rebinding) could read the API otherwise.
+  # rebinding) could read the API otherwise. Each entry of an
+  # X-Forwarded-Host is held to the same names. A proxy must pass the
+  # browser's name, in Host (nginx: `proxy_set_header Host $host;`) or in
+  # X-Forwarded-Host (`proxy_set_header X-Forwarded-Host $host;`, Apache
+  # adds it): one that rewrites Host to 127.0.0.1 and passes no name lets
+  # every name in. With this list set, the names are checked on any
+  # listen address, not only on loopback.
   # allowed_hosts: [budyk.example.com]
+  # Reverse proxies whose X-Forwarded-For names the client (its last
+  # entry): the login throttle then counts the client, not the proxy,
+  # which every client behind it shares (five wrong logins a minute from
+  # anyone kept everyone out). nginx: `proxy_set_header X-Forwarded-For
+  # $proxy_add_x_forwarded_for;`. IP addresses, as the proxy connects.
+  # trusted_proxies: [127.0.0.1]
   # KiB/s a client must take a response at, past the 5 s a connection
   # has for its request, or it is cut off: the one HTTP thread serves
   # one connection at a time, and a slow reader would hold it. The
@@ -288,9 +300,10 @@ web:
     # max_login_failures failures within login_window seconds, further
     # attempts from that address get HTTP 429 (no password hash is
     # computed) until the window ends. A successful login clears it.
-    # Fifty failures from all addresses together in one window throttle
-    # every login the same way (many addresses taking turns, or a proxy
-    # that makes every client one address).
+    # Fifty failures from all addresses together in one window (or
+    # max_login_failures, if higher) throttle every login the same way
+    # (many addresses taking turns, or a proxy that makes every client one
+    # address: see trusted_proxies), and the log says so.
     max_login_failures: 5
     login_window: 60       # seconds
     #

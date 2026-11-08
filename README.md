@@ -295,9 +295,12 @@ Failed logins are throttled: after 5 failures from one address within a
 minute (`web.auth.max_login_failures`, `web.auth.login_window`), further
 attempts from that address get HTTP 429 until the minute is up, and no
 password hash is computed for them. A successful login clears the count.
-Fifty failures from all addresses together within the window throttle
-every login the same way (many addresses taking turns, or a proxy that
-makes every client one address). With `enabled: true` and no
+Fifty failures from all addresses together within the window (or
+`max_login_failures`, if higher) throttle every login the same way
+(many addresses taking turns, or a proxy that makes every client one
+address), and the log says so. Behind a reverse proxy, list it in
+`web.trusted_proxies` and have it send `X-Forwarded-For`: the throttle
+then counts each client's address, not the proxy's. With `enabled: true` and no
 `password_hash`, or one that is not Argon2id, the daemon refuses to start:
 nobody could have logged in.
 A session lasts 24 hours from its last request: the dashboard's reloads
@@ -311,15 +314,21 @@ throttle the admin's own address; on `listen: 127.0.0.1` it must also
 be sent to one of budyk's names (below). The session cookie is
 `budyk_session_<tag>`, the tag from the host's name and the port: two
 budyks reached through SSH tunnels or one reverse proxy keep their
-sessions apart.
+sessions apart (two hosts of the same name on the same port, such as
+clones of one image, share it).
 
 budyk speaks plain HTTP. To reach the dashboard from another machine,
 keep `listen: 127.0.0.1` and put a TLS reverse proxy in front that sets
 `X-Forwarded-Proto: https`; the session cookie is then marked `Secure`.
 With auth on and a non-loopback `listen`, the daemon warns at start-up.
-The proxy must pass the `Host` header on (or set `X-Forwarded-Host`):
-the dashboard's WebSocket is accepted only from a page of the same
-origin, so another site open in the browser cannot read the stream. A
+The proxy must pass the browser's name on, in `Host` (nginx:
+`proxy_set_header Host $host;`) or in `X-Forwarded-Host` (nginx:
+`proxy_set_header X-Forwarded-Host $host;`; Apache adds it): the
+dashboard's WebSocket is accepted only from a page of the same origin,
+so another site open in the browser cannot read the stream, and the
+name is what the check below reads. A proxy that rewrites `Host` to
+`127.0.0.1` (nginx's and Apache's default) and passes no name lets
+every name in. A
 logout (the dashboard's "sign out"), or a session that expires, also
 ends the WebSocket it opened. The dashboard's URLs are relative, so the
 proxy may serve it under a path: `location /budyk/ { proxy_pass
@@ -328,10 +337,13 @@ WebSocket's `Upgrade` headers passed on. Have it send that path as
 `X-Forwarded-Prefix /budyk` too: the session cookie is then set for
 `/budyk` alone, not for every application on the host.
 
-On `listen: 127.0.0.1`, budyk answers only to its own names in `Host`:
-an IP address, `localhost` (and `*.localhost`), the host's name, and
-those in `web.allowed_hosts`; without a password every request, with
-one the login. Anything else gets 403. Otherwise a site open in the
+On `listen: 127.0.0.1`, budyk answers only to its own names in `Host`
+and in each entry of `X-Forwarded-Host`: an IP address, `localhost`
+(and `*.localhost`), the host's name, and those in
+`web.allowed_hosts`; without a password every request, with one the
+login. Anything else gets 403. On another listen address the names are
+checked once `web.allowed_hosts` lists some (and without a password
+the daemon warns at start-up). Otherwise a site open in the
 browser could point a name of its own at 127.0.0.1 (DNS rebinding) and
 read the API as if budyk were that site, or post guesses at the
 password; an SSH tunnel to the dashboard is open to it the same way. A
