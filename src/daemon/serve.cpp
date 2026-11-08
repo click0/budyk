@@ -149,9 +149,12 @@ constexpr int kMinWakeGapMs = 250;
 // either (a tick right after the last one stored rates over a few ms).
 // g_stop is looked at again after every wake and every reload: a SIGTERM
 // taken during a reload was left to wait out the sleep. Safe to call with
-// ms <= 0 (no-op).
-void interruptible_sleep(int ms, const std::function<void()>& reload, int watch_fd = -1) {
-    if (ms <= 0 || g_stop) return;
+// ms <= 0 (no-op). Returns what ended it: a watched file's change is not
+// a client's (the caller runs the rules on the files and sleeps on: it
+// collected and stored a sample, and a busy watched file put L1 at 4 Hz).
+enum class Wake { Time, Client, Files };
+Wake interruptible_sleep(int ms, const std::function<void()>& reload, int watch_fd = -1) {
+    if (ms <= 0 || g_stop) return Wake::Time;
     struct timespec ts{};
     ::clock_gettime(CLOCK_MONOTONIC, &ts);
     const int64_t start_ms = static_cast<int64_t>(ts.tv_sec) * 1000 + ts.tv_nsec / 1000000;
@@ -160,16 +163,17 @@ void interruptible_sleep(int ms, const std::function<void()>& reload, int watch_
     // out once it has fired: its event stays readable until the tick
     // reads it, and the sleep goes on to its floor.
     struct pollfd pfds[2] = {{g_wake_pipe[0], POLLIN, 0}, {watch_fd, POLLIN, 0}};
+    Wake why = Wake::Time;   // what cut the sleep short, at its floor
     for (;;) {
         if (g_reload) {
             g_reload = 0;
             reload();
         }
-        if (g_stop) return;
+        if (g_stop) return Wake::Time;
         ::clock_gettime(CLOCK_MONOTONIC, &ts);
         const int64_t now_ms = static_cast<int64_t>(ts.tv_sec) * 1000 +
                                ts.tv_nsec / 1000000;
-        if (now_ms >= deadline_ms) return;
+        if (now_ms >= deadline_ms) return why;
 
         pfds[0].revents = pfds[1].revents = 0;
         const int rc = ::poll(pfds, 2, static_cast<int>(deadline_ms - now_ms));
@@ -177,28 +181,30 @@ void interruptible_sleep(int ms, const std::function<void()>& reload, int watch_
             // A client's wake writes 1, the signal handler's 0: a signal
             // is handled at the top of the loop, with no floor; a client
             // wake keeps its floor (and a SIGHUP that came with it is the
-            // caller's to apply). A watched file's change is a client's
-            // wake.
+            // caller's to apply). A watched file's change keeps it too.
             char buf[64];
             bool client = false;
+            bool files  = false;
             if (pfds[0].revents != 0) {
                 for (ssize_t n; (n = ::read(g_wake_pipe[0], buf, sizeof(buf))) > 0; ) {
                     for (ssize_t i = 0; i < n; ++i) client = client || buf[i] != 0;
                 }
             }
             if (pfds[1].revents != 0) {
-                client     = true;
+                files      = true;
                 pfds[1].fd = -1;
             }
-            if (g_stop) return;
-            if (client) {
-                if (now_ms - start_ms >= kMinWakeGapMs) return;
+            if (g_stop) return Wake::Time;
+            if (client) why = Wake::Client;
+            else if (files && why == Wake::Time) why = Wake::Files;
+            if (client || files) {
+                if (now_ms - start_ms >= kMinWakeGapMs) return why;
                 if (start_ms + kMinWakeGapMs < deadline_ms) deadline_ms = start_ms + kMinWakeGapMs;
             }
             continue;
         }
-        if (rc < 0 && errno != EINTR) return;
-        if (g_stop) return;
+        if (rc < 0 && errno != EINTR) return Wake::Time;
+        if (g_stop) return Wake::Time;
     }
 }
 
@@ -725,11 +731,16 @@ int cmd_serve(int argc, char* argv[], const char* version) {
                     std::fprintf(stderr,
                         "budyk serve: cannot watch '%s': %s\n",
                         p.c_str(), std::strerror(-rc));
+                } else {
+                    file_state.watched.push_back(p);
                 }
             }
+            // The paths not there yet are watched too, as they appear: the
+            // count left them out.
             std::fprintf(stderr,
-                "budyk serve: file_watch active on %zu path(s)\n",
-                file_watcher.count());
+                "budyk serve: file_watch active on %zu path(s), %zu not there yet\n",
+                file_watcher.count(), file_watcher.pending());
+            engine.set_file_state(file_state);
         }
     }
 
@@ -818,6 +829,33 @@ int cmd_serve(int argc, char* argv[], const char* version) {
         }
     };
 
+    // A watched file changed between two ticks: the watcher drained, and
+    // the rules on the files run on a sample of the file_watch group
+    // alone (eval_files(): no cooldown counts down, the other rules are
+    // left as they were), with the uptime of the last collected sample
+    // carried on. Nothing is collected or stored: the change ended the
+    // sleep as a client's wake does, and the loop collected and stored a
+    // sample (a busy watched file put L1 at 4 Hz: a year of history gone
+    // in hours, a 5 h cooldown in 15 s). True when a rule's escalate()
+    // raised the level above `at` to one that collects: collect now.
+    double   uptime_s         = 0;   // the last collected sample's, at:
+    uint64_t uptime_at_ns     = 0;
+    uint32_t files_since_tick = 0;   // paths changed in the passes since the last tick
+    auto files_pass = [&](budyk::Level at) -> bool {
+        budyk::Sample fs{};
+        fs.timestamp_nanos = now_realtime_ns();
+        if (uptime_at_ns != 0 && fs.timestamp_nanos > uptime_at_ns) {
+            fs.uptime_seconds = uptime_s + static_cast<double>(fs.timestamp_nanos - uptime_at_ns) / 1e9;
+        }
+        drain_file_watch(&fs);
+        if (fs.file_watch.events_this_tick == 0) return false;   // another entry of a directory
+        files_since_tick += fs.file_watch.events_this_tick;
+        engine.eval_files(fs);
+        publish_rule_results();
+        const budyk::Level raised = sched.higher(at, sched.select(now_realtime_ns()));
+        return raised != at && sched.collects(raised);
+    };
+
     uint64_t prev_wall_ns = 0, prev_mono_ns = 0;   // the last collecting tick's clocks
     // The sleep wakes on the watcher's descriptor too: a watched file's
     // change was seen at the next tick, in on-demand mode up to the L1
@@ -888,36 +926,23 @@ int cmd_serve(int argc, char* argv[], const char* version) {
             // minutes before a client came back).
             collect_ctx.last_groups = 0;
             collect_ctx.last_detail = 0;
-            int idle_ms = warm.cap_sleep_ms(sched.interval_ms(collect_at), now_realtime_ns(),
-                                            kMinWakeGapMs);
-            // The watched files are read on this tick too, and when one
-            // changed the rules run on a sample of the file_watch group
-            // alone (the rules reading metrics are skipped, as on any
-            // sample lacking them).
-            if (fw_active) {
-                budyk::Sample fs{};
-                fs.timestamp_nanos = s.timestamp_nanos;
-                drain_file_watch(&fs);
-                if (fs.file_watch.events_this_tick > 0) {
-                    engine.eval_tick(fs, nullptr);
-                    publish_rule_results();
-                    // A rule's escalate() filed a request the sleep chosen
-                    // above knew nothing of: the loop slept the L1 interval
-                    // and found the request expired (the only rules that
-                    // run here are the file-watch ones, so a `{ alert,
-                    // escalate }` on a tampered file collected nothing).
-                    const budyk::Level raised =
-                        sched.higher(collect_at, sched.select(now_realtime_ns()));
-                    if (sched.collects(raised)) {
-                        slept_at = raised;
-                        interruptible_sleep(kMinWakeGapMs, reload_rules, watch_fd);
-                        continue;
-                    }
-                    if (sched.interval_ms(raised) < idle_ms) idle_ms = sched.interval_ms(raised);
-                }
+            // The tick counts for the cooldowns as a collecting one does
+            // (the passes on the files between ticks do not).
+            engine.count_down_cooldowns();
+            const int idle_ms = warm.cap_sleep_ms(sched.interval_ms(collect_at), now_realtime_ns(),
+                                                  kMinWakeGapMs);
+            // The watched files are read on this tick too, and on each
+            // change before the next. A rule's escalate() there filed a
+            // request the sleep knew nothing of: the loop slept the L1
+            // interval and found it expired (a `{ alert, escalate }` on a
+            // tampered file collected nothing); it collects at once.
+            if (fw_active && files_pass(collect_at)) continue;
+            while (!g_stop) {
+                const Wake w = interruptible_sleep(
+                    budyk::sleep_left_ms(idle_ms, now_monotonic_ns() - tick_mono_ns),
+                    reload_rules, watch_fd);
+                if (w != Wake::Files || files_pass(collect_at)) break;
             }
-            interruptible_sleep(budyk::sleep_left_ms(idle_ms, now_monotonic_ns() - tick_mono_ns),
-                                reload_rules, watch_fd);
             continue;
         }
         collect_ctx.mono_now_ns = now_monotonic_ns();
@@ -942,8 +967,17 @@ int cmd_serve(int argc, char* argv[], const char* version) {
 
         // File-watch drain — non-blocking poll so the tick cadence is
         // unchanged. Done before tm.store/hot.push so the persisted +
-        // broadcast sample carries this tick's counts.
-        if (fw_active) drain_file_watch(&s);
+        // broadcast sample carries this tick's counts, the changes the
+        // rules saw between the ticks with them.
+        if (fw_active) {
+            drain_file_watch(&s);
+            s.file_watch.events_this_tick += files_since_tick;
+            files_since_tick = 0;
+        }
+        if ((s.groups & budyk::kGroupUptime) != 0) {
+            uptime_s     = s.uptime_seconds;
+            uptime_at_ns = s.timestamp_nanos;
+        }
 
         // Custom levels whose `when` holds on this sample stay requested
         // for their hold time (0 = this tick only).
@@ -1031,7 +1065,16 @@ int cmd_serve(int argc, char* argv[], const char* version) {
                 }
             }
         }
-        interruptible_sleep(sleep_ms, reload_rules, watch_fd);
+        // A watched file's change on the way is not the next tick: the
+        // rules on the files run, and the sleep goes on to the interval.
+        for (int left = sleep_ms; !g_stop; ) {
+            const Wake w = interruptible_sleep(left, reload_rules, watch_fd);
+            if (w != Wake::Files || files_pass(slept_at)) break;
+            left = warm.cap_sleep_ms(
+                budyk::sleep_left_ms(sched.interval_ms(slept_at), now_monotonic_ns() - tick_mono_ns),
+                now_realtime_ns(), kMinWakeGapMs);
+            if (left <= 0) break;
+        }
     }
 
     std::fprintf(stderr, "budyk serve: shutting down\n");

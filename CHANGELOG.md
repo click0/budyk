@@ -119,6 +119,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   raises it (one address was refused below its own limit).
 - **README:** two hosts of the same name on the same port share a
   session cookie.
+- **A watched file's change made a full tick, stored in the rings**
+  (adaptive and always modes): since 0.8.6 the change ends the sleep,
+  and the loop collected and stored a sample for it. A log file written
+  a few times a second put L1 at 4 Hz, the year of L1 history gone in
+  hours, and every rule's cooldown (counted in ticks) passed in seconds:
+  a 5 h one in 15 s, an alert again and again. A change now runs the
+  rules that read `files`, on a sample of the watched files alone, and
+  the sleep goes on to the interval; nothing is collected or stored for
+  it, the other rules wait for the tick, and no cooldown counts it. The
+  next stored sample counts the changes. In on-demand mode an idle tick
+  counts for the cooldowns.
+- **A watched path that did not exist yet was seen at the next tick**:
+  up to the L1 interval late, and a file made and removed in between
+  (an `authorized_keys` written, used and deleted) never. The nearest
+  directory above it is watched for it, and its creation wakes the
+  daemon. `budyk watch-files --timeout -1` never reported it.
+- **A watched path replaced by a file budyk cannot watch was silent**:
+  `visudo` writes a new `/etc/sudoers` without the ACL that let budyk
+  read the old one, and every later change went unseen with nothing in
+  the log. It is logged once ("there but cannot be watched"), and the
+  docs advise a group or a default ACL on the directory.
+- **`files["/path"]` was nil until the path's first event**, so a rule
+  written as the README shows it failed until then (and after every
+  restart); every configured path has an entry from the start.
+- **A watched directory reported a write to a file inside it on Linux**,
+  not on FreeBSD: it reports itself and its entries on both.
+- **FreeBSD: a FIFO at a watched path held the daemon** in `open()`
+  (anyone who could write the directory could stop every collection and
+  alert); only regular files and directories are watched. At most 32
+  events were read a poll (a `pkg upgrade` reported over four ticks);
+  every one is. Removing another hard link of a watched file reported
+  it deleted and created; it is a change. A watched file's filesystem
+  cannot be unmounted while budyk runs (kqueue holds it open): said.
+- **`budyk watch-files` exited at the first change**, though the man page
+  said it prints them for the timeout; it does, each as it comes (its
+  first line waited for the exit on a pipe), and a SIGTERM or Ctrl-C ends
+  `--timeout -1` with 0. The start-up line counts the paths not there yet.
 
 ## [0.8.7] — 2026-11-05
 

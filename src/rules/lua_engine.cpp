@@ -675,6 +675,24 @@ bool LuaEngine::bind(const Sample& s, const budyk_detail_c* detail) {
 }
 
 int LuaEngine::eval_tick(const Sample& s, const budyk_detail_c* detail) {
+    return eval_rules(s, detail, false);
+}
+
+int LuaEngine::eval_files(const Sample& s) {
+    return eval_rules(s, nullptr, true);
+}
+
+void LuaEngine::count_down_cooldowns() {
+    for (auto& r : rules_) {
+        if (r.cooldown_remaining > 0) --r.cooldown_remaining;
+    }
+}
+
+void LuaEngine::note_files_read(lua_State* L) {
+    if (auto* self = engine_of(L); self != nullptr) self->files_read_ = true;
+}
+
+int LuaEngine::eval_rules(const Sample& s, const budyk_detail_c* detail, bool files_only) {
     if (L_ == nullptr) return -1;
 
     last_fire_count_ = 0;
@@ -683,7 +701,7 @@ int LuaEngine::eval_tick(const Sample& s, const budyk_detail_c* detail) {
     for (auto& r : rules_) {
         if (stop_ != nullptr && stop_->load()) break;   // shutting down: the rest can wait
         if (r.cooldown_remaining > 0) {
-            --r.cooldown_remaining;
+            if (!files_only) --r.cooldown_remaining;
             continue;
         }
 
@@ -706,14 +724,20 @@ int LuaEngine::eval_tick(const Sample& s, const budyk_detail_c* detail) {
         const int base = lua_gettop(L_);
         lua_rawgeti(L_, LUA_REGISTRYINDEX, r.when_ref);
         begin_call();
+        files_read_ = false;
         if (lua_pcall(L_, 0, LUA_MULTRET, 0) != LUA_OK) {
             if (const int why = budyk_lua_uncollected(L_, -1); why != 0) {
                 // Skipped: the sustain count stays. A rate's first read
                 // passes in a tick; a level that does not collect it is
-                // worth a line.
-                if (why == 1) {
+                // worth a line (not between ticks: every metric is
+                // missing from a sample of the watched files alone).
+                if (why == 1 && !files_only) {
                     log_skip(&r.last_skip, ("rule '" + r.name + "'").c_str(), error_text(L_, -1));
                 }
+                lua_pop(L_, 1);
+                continue;
+            }
+            if (files_only && !files_read_) {   // not a rule on the files: as it was
                 lua_pop(L_, 1);
                 continue;
             }
@@ -730,6 +754,10 @@ int LuaEngine::eval_tick(const Sample& s, const budyk_detail_c* detail) {
         const bool skip = nret > 0 && lua_isnil(L_, base + 1);
         const bool hit  = nret > 0 && lua_toboolean(L_, base + 1) != 0;
         lua_settop(L_, base);
+        // Between ticks only a rule on the files counts: one on
+        // uptime_seconds, or `return true`, fired on every change of a
+        // watched file, and one on a threshold lost its sustain count.
+        if (files_only && !files_read_) continue;
         r.last_error.clear();
 
         if (skip) continue;

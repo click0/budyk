@@ -11,6 +11,10 @@
 #   3. on-demand: nothing collected until a client polls, then samples in
 #      the hot buffer but none in the rings; collection stops again once
 #      the client is gone (poller window + grace_period).
+#   3c. adaptive: a busy watched file runs the rules on the files as it
+#      changes, and collects and stores nothing for it (each change was a
+#      tick: L1 at 4 Hz, a year of history gone in hours); a path not
+#      there yet is seen as it is made (it waited for the next tick).
 #   4. SIGHUP between ticks reloads the rules and does not end the sleep.
 #
 # A rule that logs on every tick counts the ticks collected.
@@ -291,6 +295,72 @@ else
 fi
 stop odwake
 
+# 3c. adaptive: a watched file's change between ticks -------------------------
+# L1 every 300 s: the first tick, then a write every 0.3 s for 3.6 s. The
+# rules on the files see the writes (`seen`), `tick` (return true) and
+# the L1 ring do not: one tick, one record. A path under a directory not
+# there yet is made after: `made` within 2 s (its entry is in `files`
+# from the start, so the rule reads it before it exists).
+mkdir -p "$DIR/fw"
+cat > "$DIR/rules_fw.lua" <<EOF
+watch("tick", { when = function() return true end, action = "log", message = "tick", cooldown = 0 })
+watch("seen", { when = function() return files["$DIR/fw/busy"].tampered end,
+                action = "log", message = "seen", cooldown = 0 })
+watch("made", { when = function() return files["$DIR/fw/later/file"].tampered end,
+                action = "log", message = "made", cooldown = 0 })
+EOF
+cat > "$DIR/busy.yaml" <<EOF
+data_dir: $DIR/busy
+listen: 127.0.0.1
+port: $PORT
+rules: { path: $DIR/rules_fw.lua }
+security: { file_watch: { enabled: true, paths: [$DIR/fw/busy, $DIR/fw/later/file] } }
+collection:
+  l1: { interval: 300 }
+EOF
+: > "$DIR/fw/busy"
+start busy
+i=0
+until [ "$(ticks busy)" -ge 1 ]; do
+    i=$((i + 1))
+    [ "$i" -lt 50 ] || break
+    sleep 0.1
+done
+n=0
+while [ "$n" -lt 12 ]; do
+    echo "write $n" >> "$DIR/fw/busy"
+    sleep 0.3
+    n=$((n + 1))
+done
+sleep 0.5
+seen=$(grep -c '^\[budyk\] seen$' "$DIR/busy.log" || true)
+if [ "$(ticks busy)" = 1 ] && [ "$seen" -ge 5 ]; then
+    echo "ok   adaptive: 12 writes to a watched file: $seen rule pass(es) on the files, 1 tick"
+else
+    echo "FAIL: adaptive: 12 writes to a watched file: $(ticks busy) tick(s), $seen pass(es) of the files rule"; fail=1
+fi
+check "adaptive: the writes stored nothing (one L1 record)" "doc['count'] == 1" "/api/range?level=L1"
+grep -q "file_watch active on 1 path(s), 1 not there yet" "$DIR/busy.log" ||
+    { echo "FAIL: the start-up line does not count the path not there yet"; fail=1; }
+mkdir "$DIR/fw/later"
+sleep 0.3
+: > "$DIR/fw/later/file"
+i=0
+until grep -q '^\[budyk\] made$' "$DIR/busy.log"; do
+    i=$((i + 1))
+    [ "$i" -lt 20 ] || break
+    sleep 0.1
+done
+if grep -q '^\[budyk\] made$' "$DIR/busy.log"; then
+    echo "ok   adaptive: a path not there yet is seen as it is made ($((i / 10)).$((i % 10)) s; the tick is every 300 s)"
+else
+    echo "FAIL: adaptive: a path made under a new directory not seen in 2 s"; fail=1
+fi
+if grep -q "when failed" "$DIR/busy.log"; then
+    echo "FAIL: a rule on files failed: $(grep -m1 'when failed' "$DIR/busy.log")"; fail=1
+fi
+stop busy
+
 # 4. SIGHUP between ticks ---------------------------------------------------
 # The rules are reloaded at once, and the sleep goes on: SIGHUP used to end
 # it, and the tick right after the last one stored rates over a few ms.
@@ -355,7 +425,9 @@ fi
 stop slow
 
 if [ "$fail" -ne 0 ]; then
-    for f in sets always ondemand hup slow; do echo "--- $f.log ---"; cat "$DIR/$f.log"; done
+    for f in sets always ondemand odwake busy hup slow; do
+        [ -f "$DIR/$f.log" ] && { echo "--- $f.log ---"; cat "$DIR/$f.log"; }
+    done
     exit 1
 fi
 echo "modes smoke test: PASS"

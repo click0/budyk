@@ -74,9 +74,10 @@ which must be on the PATH.
 \fBwatch\-files\fR [\fB\-\-timeout\fR \fIms\fR] \fIpath\fR ...
 Print the changes to the files named, as
 .I security.file_watch
-sees them (inotify, kqueue), for
+sees them (inotify, kqueue), each as it comes, for
 .I ms
-milliseconds (30000; \-1 waits for the first change): a diagnostic.
+milliseconds (30000; \-1 until Ctrl-C or a SIGTERM, exit status 0): a
+diagnostic. A path not there yet is printed as created when it is made.
 .TP
 \fBfsck\fR [\fB\-\-repair\fR] [\fB\-\-config\fR \fIfile\fR] [\fIdata_dir\fR]
 Check every ring file in the data directory (the one in the config if

@@ -3,6 +3,7 @@
 
 #include "core/metric_set.h"
 #include "core/sample.h"
+#include "rules/lua_engine.h"
 #include "security/file_watcher.h"
 
 extern "C" {
@@ -93,6 +94,29 @@ int sample_ro_pairs(lua_State* L) {
 
 // __len of a proxy: #cpu.cores is the length of the data behind it.
 int sample_ro_len(lua_State* L) {
+    lua_pushinteger(L, static_cast<lua_Integer>(lua_rawlen(L, lua_upvalueindex(1))));
+    return 1;
+}
+
+// `files`'s __index, __pairs and __len: the proxy's, and the engine told
+// that the rule read the files (LuaEngine::eval_files() runs only such
+// rules). Upvalue 1: the data table.
+int files_index(lua_State* L) {
+    budyk::LuaEngine::note_files_read(L);
+    lua_settop(L, 2);
+    lua_rawget(L, lua_upvalueindex(1));
+    return 1;
+}
+int files_pairs(lua_State* L) {
+    budyk::LuaEngine::note_files_read(L);
+    lua_pushvalue(L, lua_upvalueindex(1));
+    lua_pushcclosure(L, sample_ro_next, 1);
+    lua_pushvalue(L, 1);
+    lua_pushnil(L);
+    return 3;
+}
+int files_len(lua_State* L) {
+    budyk::LuaEngine::note_files_read(L);
     lua_pushinteger(L, static_cast<lua_Integer>(lua_rawlen(L, lua_upvalueindex(1))));
     return 1;
 }
@@ -740,14 +764,19 @@ void budyk_lua_bind_files(lua_State* L, const budyk::FileWatchState& s) {
     //   tampered  — true iff the path fired any event in the most
     //               recent poll cycle (tick-scoped)
     //
-    // Path coverage is the union of every path the watcher has ever
-    // seen an event for. A watched-but-never-modified path is absent
-    // until its first event — rules should guard with `if files[p]`.
+    // Path coverage is every configured path (`watched`: zero counts
+    // until its first event) and every path the watcher has seen an event
+    // for. A path not watched is absent: rules that share a file across
+    // hosts guard with `if files[p]`.
     //
     // No C++ object is made in here: the engine runs the bind in a
     // protected call, and an allocation that fails raises past this frame.
     lua_newtable(L);
     const int files = lua_gettop(L);
+    for (const auto& p : s.watched) {
+        push_file_entry(L, files, p);
+        lua_pop(L, 1);
+    }
     for (const auto& kv : s.modifies) {
         push_file_entry(L, files, kv.first);
         set_integer(L, "modifies", static_cast<lua_Integer>(kv.second));
@@ -775,6 +804,16 @@ void budyk_lua_bind_files(lua_State* L, const budyk::FileWatchState& s) {
         lua_pop(L, 1);                                    // files, key
     }
     push_ro_proxy(L, files, "files");                     // files, proxy
+    lua_getmetatable(L, -1);                              // files, proxy, mt
+    const struct { const char* name; lua_CFunction fn; } noted[] = {
+        { "__index", files_index }, { "__pairs", files_pairs }, { "__len", files_len },
+    };
+    for (const auto& h : noted) {
+        lua_pushvalue(L, files);
+        lua_pushcclosure(L, h.fn, 1);
+        lua_setfield(L, -2, h.name);
+    }
+    lua_pop(L, 1);                                        // files, proxy
     lua_remove(L, files);                                 // proxy
     set_global(L, "files");
 }

@@ -503,7 +503,14 @@ int cmd_suggest_rules(int argc, char* argv[]) {
 //   budyk watch-files [--timeout MS] <path> [<path>...]
 //
 // Default timeout is 30s; pass --timeout -1 to block indefinitely.
-// Exits 0 on EOF (timeout reached) or when SIGTERM/SIGINT arrives.
+// Every change in that time is printed as it comes (it was the first
+// batch alone), and a path not there yet as it is made. Exits 0 when the
+// timeout is up or SIGTERM / SIGINT arrives.
+namespace {
+volatile sig_atomic_t g_watch_stop = 0;
+void watch_files_stop(int) { g_watch_stop = 1; }
+} // namespace
+
 int cmd_watch_files(int argc, char* argv[]) {
     int                       timeout_ms = 30000;
     std::vector<std::string>  paths;
@@ -567,25 +574,47 @@ int cmd_watch_files(int argc, char* argv[]) {
         std::printf(", %zu not there yet", static_cast<std::size_t>(fw.pending()));
     }
     std::printf("; timeout=%dms\n", timeout_ms);
+    std::fflush(stdout);   // piped (`| tee log`), it waited for the exit
 
-    std::vector<budyk::FileChangeEvent> events;
-    const int n = fw.poll(timeout_ms, &events);
-    if (n < 0) {
-        std::fprintf(stderr,
-            "budyk watch-files: poll failed: %s\n", std::strerror(-n));
-        return 1;
+    // SIGINT / SIGTERM end the wait (poll() returns EINTR), exit 0.
+    struct sigaction sa{};
+    sa.sa_handler = watch_files_stop;
+    sigemptyset(&sa.sa_mask);
+    ::sigaction(SIGINT, &sa, nullptr);
+    ::sigaction(SIGTERM, &sa, nullptr);
+
+    struct timespec ts{};
+    ::clock_gettime(CLOCK_MONOTONIC, &ts);
+    const long long start_ms = static_cast<long long>(ts.tv_sec) * 1000 + ts.tv_nsec / 1000000;
+    size_t seen = 0;
+    while (g_watch_stop == 0) {
+        int wait_ms = -1;
+        if (timeout_ms >= 0) {
+            ::clock_gettime(CLOCK_MONOTONIC, &ts);
+            const long long now_ms = static_cast<long long>(ts.tv_sec) * 1000 + ts.tv_nsec / 1000000;
+            const long long left   = start_ms + timeout_ms - now_ms;
+            if (left <= 0) break;
+            wait_ms = static_cast<int>(left);
+        }
+        std::vector<budyk::FileChangeEvent> events;
+        const int n = fw.poll(wait_ms, &events);
+        if (n == -EINTR) continue;   // a signal: g_watch_stop says which
+        if (n < 0) {
+            std::fprintf(stderr,
+                "budyk watch-files: poll failed: %s\n", std::strerror(-n));
+            return 1;
+        }
+        for (const auto& ev : events) {
+            const char* kind =
+                ev.kind == budyk::FileChangeKind::Deleted  ? "deleted"  :
+                ev.kind == budyk::FileChangeKind::Created  ? "created"  :
+                                                             "modified";
+            std::printf("%-8s  %s\n", kind, ev.path.c_str());
+        }
+        std::fflush(stdout);
+        seen += events.size();
     }
-    if (n == 0) {
-        std::printf("(no events within timeout)\n");
-        return 0;
-    }
-    for (const auto& ev : events) {
-        const char* kind =
-            ev.kind == budyk::FileChangeKind::Deleted  ? "deleted"  :
-            ev.kind == budyk::FileChangeKind::Created  ? "created"  :
-                                                         "modified";
-        std::printf("%-8s  %s\n", kind, ev.path.c_str());
-    }
+    if (seen == 0) std::printf("(no events within timeout)\n");
     return 0;
 }
 
