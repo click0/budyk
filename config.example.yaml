@@ -43,7 +43,8 @@ collection:
   # warm_grace, a level's hold, web.auth.login_window) are seconds, with
   # a unit or without: 300, 300s, 5m, 1h, 1d (a custom level's interval
   # also 500ms). A value that does not read is reported and the default
-  # kept, and so is a key budyk does not know (a typo) or one given twice.
+  # kept, and so is a key budyk does not know (a typo); a key given twice
+  # is reported, and the first one read.
   l1:
     interval: 300          # heartbeat — seconds
     metrics: standard
@@ -194,6 +195,9 @@ rules:
 #
 #     # Telegram Bot API — sendMessage on the bot's token; `topic` is the
 #     # chat id: a numeric id, a "-100…" channel id, or a "@channelname".
+#     # A `url` replaces the whole endpoint, token included (a Bot API
+#     # server of your own: "https://tg.example/bot<token>/sendMessage");
+#     # `token` is then not read.
 #     - name:  ops-telegram
 #       type:  telegram
 #       token: "1234567890:AA..."

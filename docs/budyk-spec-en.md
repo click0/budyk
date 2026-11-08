@@ -234,7 +234,7 @@ Our project implements a **3-level adaptive model + a separate hot buffer**.
                   └─────────────────────────────────────────────┘
 ```
 
-**L1 — Heartbeat (always active).** One tick every 5 minutes. Minimum set: load average, total CPU%, total memory, swap, uptime. One `sysctl` call, ~200 bytes written to disk. Per day — 288 records × 200 B ≈ 56 KB (vs ~165 MB/day for always-on monitoring at Tier 1). Purpose: know the machine is alive; coarse picture over weeks.
+**L1 — Heartbeat (always active).** One tick every 5 minutes. Minimum set: load average, total CPU%, total memory, swap, uptime. One `sysctl` call, ~200 bytes written to disk. Per day — 288 records × 200 B ≈ 56 KB (vs ~165 MB/day for always-on monitoring at Tier 1). Purpose: know the machine is alive; coarse picture over weeks. (As implemented: L1 reads what `collection.l1.metrics` names, `standard` by default: every group, the per-entity lists left out, in one 542-byte record, about 152 KB a day; `minimal` is the five groups above. On FreeBSD a group is a few `sysctl` calls, not one.)
 
 **L2 — Watchful (conditional).** Tick every 15–60 seconds (configurable). Extended set: per-core CPU, per-interface net, per-device disk I/O, TCP counters, process counts. Activated by: (a) L1 detecting an anomaly (load/CPU/swap above threshold), (b) config `l2_always_on: true`. De-escalation — with 5-minute hysteresis after normalization.
 
@@ -331,7 +331,7 @@ All fields little-endian.
 
 Record (14-byte header + payload):
   timestamp_nanos: u64                  absolute (not a delta)
-  level:           u8                   1=L1, 2=L2, 3=L3
+  level:           u8                   1=L1, 2=L2, 3=L3, 4..19 custom levels in config order
   flags:           u8                   bit 0: folded (§3.4.1); padding, always 0, before 0.7.0
   crc32c:          u32                  covers everything but these four bytes
   payload:         u8[record_size - 14] the Sample, own codec (§3.2)
@@ -396,6 +396,21 @@ for name, iface in pairs(net.interfaces) do
 end
 ```
 
+(As implemented: the loop above does not load. A rules file runs before the first sample, when every group reads as not collected, so `pairs(net.interfaces)` at file scope stops the load: "net is not collected at this level". The interfaces are iterated inside `when`, each tick, over that tick's list:)
+
+```lua
+watch("interface_errors", {
+  when = function()
+    for name, iface in pairs(net.interfaces) do
+      if iface.rx_errors_per_sec > 100 then return true end
+    end
+    return false
+  end,
+  for_ticks = 5,
+  action = alert
+})
+```
+
 Optionally, a thin YAML compatibility layer transpiles simple YAML rules into Lua `watch()` calls at load time — for users who prefer YAML for basic cases. Internally, the engine is always Lua.
 
 #### 3.6.3. Sandboxing (as implemented)
@@ -422,7 +437,7 @@ Performance budget: 100 rules evaluated per tick within ≤ 1ms. Lua function ca
 
 #### 3.6.5. Rules vs Collection Level
 
-Not all metrics are available at all levels. L1 collects only `load`, `cpu_total`, `mem_total`, `swap`, `uptime`. If a rule's `when()` accesses `disk.sda.util_percent`, that field is `nil` at L1.
+Not all metrics are available at all levels. L1 collects only `load`, `cpu_total`, `mem_total`, `swap`, `uptime`. If a rule's `when()` accesses `disk.sda.util_percent`, that field is `nil` at L1. (As implemented: each level collects what its `collection.<level>.metrics` names, L1 `standard` by default, so there only the per-entity lists such as `disk.devices` are missing. A group or list the sample lacks raises when a rule reads it, and the engine skips the rule for that tick, as for `nil`.)
 
 The engine handles this: if `when()` returns `nil` (because it accessed a nil field and Lua's comparison with nil yields nil/false), the rule is skipped for that tick, and the sustain counter is not reset. Counter survives level transitions: L3 (4/5 hits) → L1 (skipped, stays at 4) → L3 (resumes from 4).
 
@@ -503,7 +518,7 @@ Milestones (each = a separate PR series, a separate `0.x` release):
 ## 5. Acceptance Criteria
 
 1. **Full metric set** (table in §2.1) — all `struct Sample` fields populated on FreeBSD 13/14/15.
-2. **Idle performance (adaptive, 0 clients)**: CPU ≈ 0% (1 sysctl every 5 min), disk I/O < 1 KB/min. RSS ≤ 10 MB.
+2. **Idle performance (adaptive, 0 clients)**: CPU ≈ 0% (1 sysctl every 5 min; as implemented, one L1 tick of the `standard` set every 5 min), disk I/O < 1 KB/min (the records written: 542 bytes every 5 min). RSS ≤ 10 MB.
 3. **Active client performance**: RSS ≤ 25 MB, CPU ≤ 1% on a 4-core host at L3 (1 Hz) with one WS client.
 4. **L1→L3 escalation**: ≤ 2 seconds from WS client connect to first sample at 1 Hz.
 5. **Hot buffer catch-up**: WS client receives ≤ 300 history records within ≤ 100ms on connect.

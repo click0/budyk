@@ -118,9 +118,9 @@ single dashboard that combines servers isn't part of budyk yet.
 - **Custom levels:** your own cadences next to L1–L3, such as 2 Hz
   under pressure or 30 min on an idle box, switched on by a condition or
   by a rule.
-- **Per-level metric sets:** a heartbeat that reads five groups, a
-  watchful level that reads everything; or `collection.mode: always` /
-  `on-demand`.
+- **Per-level metric sets:** what each level reads, such as a
+  heartbeat of five groups (`minimal`) and a watchful level that reads
+  everything; or `collection.mode: always` / `on-demand`.
 - **Rules:** Lua `watch()` rules or a simple YAML form, reloaded on
   `SIGHUP` without a restart. Cooldowns survive restarts.
 - **Alert channels:** ntfy, Discord, Telegram, SMTP e-mail, Twilio SMS.
@@ -643,7 +643,8 @@ a whole number, a key that is not one of the seven above (a typo), one
 given twice, or a list where a value belongs is an error naming the
 rule, and the file is not loaded; a `when` that does not parse names
 the rule and its line. A key with no value (`message:`) is one left
-out. The file holds one YAML document (nothing after a `---`).
+out. The file holds one YAML document (nothing after a `---`): the
+list, or a mapping whose one key `rules:` holds it.
 
 ### Suggested rules
 

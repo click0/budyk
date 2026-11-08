@@ -311,8 +311,21 @@ int yaml_rules_to_lua(const char* yaml_text, std::string* out, std::string* erro
         rc = walk_sequence(&doc, root, L, out, error);
     } else if (root->type == YAML_MAPPING_NODE) {
         const yaml_node_t* rules = yaml_find_key(&doc, root, "rules");
+        // Nothing else is read of the mapping: another key (a typo of
+        // `rules`, a second list) was ignored without a word.
+        std::string other;
+        for (auto* p = root->data.mapping.pairs.start; p < root->data.mapping.pairs.top; ++p) {
+            const char* k = yaml_scalar(yaml_document_get_node(&doc, p->key));
+            if (k == nullptr || std::strcmp(k, "rules") != 0) {
+                other = k != nullptr ? k : "(not a string)";
+                break;
+            }
+        }
         if (rules == nullptr) {
             *error = "no 'rules:' list in the document";
+            rc = -EINVAL;
+        } else if (!other.empty()) {
+            *error = "unknown key '" + other + "' next to 'rules:' (it holds the list alone)";
             rc = -EINVAL;
         } else {
             rc = walk_sequence(&doc, rules, L, out, error);

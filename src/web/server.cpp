@@ -200,13 +200,20 @@ const char* status_phrase(int status) {
         case 404: return "Not Found";
         case 405: return "Method Not Allowed";
         case 413: return "Payload Too Large";
+        case 415: return "Unsupported Media Type";
         case 431: return "Request Header Fields Too Large";
         case 429: return "Too Many Requests";
         case 500: return "Internal Server Error";
         case 501: return "Not Implemented";
         case 503: return "Service Unavailable";
-        default:  return "OK";
+        default:  break;
     }
+    // A status without its phrase above: its class's, never "OK" (the
+    // login's 415 went out as "415 OK").
+    if (status >= 500) return "Server Error";
+    if (status >= 400) return "Client Error";
+    if (status >= 300) return "Redirection";
+    return "OK";
 }
 
 // send(2) until everything is written, the peer is gone, or it stalls:

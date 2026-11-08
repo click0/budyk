@@ -104,6 +104,13 @@ jobs:
           addons/linux/mkpkg.sh build/src/budyk "$VER" packages
           sudo addons/linux/test-packages.sh packages "$VER"
 
+      # `cmake --install`: the config under /usr/local/etc/budyk by
+      # default, /etc/budyk for a prefix of /usr (it went to /usr/etc).
+      # Last: the reconfigure changes the prefix of the build directory.
+      - name: cmake --install paths
+        if: matrix.link == 'static'
+        run: tests/check_install.sh build
+
       - name: Upload test logs on failure
         if: failure()
         uses: actions/upload-artifact@v4

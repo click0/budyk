@@ -100,8 +100,9 @@ const char* alert_channel_missing(const Config::AlertChannelConfig& ch);
 /// `error`, when given, gets the reason for a non-zero return: the
 /// strerror of a failed open, or the parser's reason with its line and
 /// column. A setting that does not read (a value of the wrong kind, an
-/// unknown key, a key given twice) is not an error: it is reported on
-/// stderr under its full name and the default kept.
+/// unknown key) is not an error: it is reported on stderr under its full
+/// name and the default kept. A key given twice is reported, and the
+/// first one read.
 int config_load        (const char* path, Config* out, std::string* error = nullptr);
 /// config_load() on YAML text instead of a file.
 int config_load_string (const char* yaml, Config* out, std::string* error = nullptr);

@@ -77,9 +77,10 @@ the code still differ, the code wins and this file says how.
   disk); a ring of the right size with an all-zero header is made anew; a
   store that fails is logged once with its reason
   (`TierManager::store_error()`). The folds of spec §3.4.1 are
-  `TierAggregator`, called from `TierManager::store()` while L3 or a custom
-  level collects: one L2 record per L2 interval, one L1 record per L1
-  interval, flagged `folded`; `query_all()` (`/api/range?level=all`) shows
+  `TierAggregator`, called from `TierManager::store()` while a level
+  faster than the ring's collects (L3 or a custom level into the L2 and
+  L1 rings, L2 into the L1 ring): one L2 record per L2 interval, one L1
+  record per L1 interval, flagged `folded`; `query_all()` (`/api/range?level=all`) shows
   each stretch once, at the finest level still on disk. A ring is in
   write order, which a clock step back or a power loss (a previous lap's
   records under the write index) can leave out of time order: a `query()`
@@ -423,6 +424,7 @@ The gates a local build does not show:
   Per-level metric sets did not need it: `collect_one()` calls the C
   collectors directly and leaves out those the level's `MetricSet` does
   not ask for.
-- `ENABLE_EXEC` in `CMakeLists.txt`: a build-time gate for a binary with
-  `exec()` compiled out (air-gapped or hardened hosts), on top of the runtime
-  `--enable-exec` / `rules.exec.enabled`.
+- `ENABLE_EXEC` in `CMakeLists.txt`: meant as a build-time gate for a
+  binary with `exec()` compiled out (air-gapped or hardened hosts), on top
+  of the runtime `--enable-exec` / `rules.exec.enabled`. Not wired yet:
+  nothing reads it, every build has `exec()`.

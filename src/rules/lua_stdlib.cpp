@@ -602,7 +602,7 @@ int freeze_action(lua_State* L, const char* fn_name, bool stop) {
     auto* eng = engine_from(L);
     if (eng == nullptr || !eng->freeze_enabled()) {
         return luaL_error(L,
-            "%s is disabled (enable with --enable-freeze)", fn_name);
+            "%s is disabled (enable with --enable-freeze or rules.freeze.enabled: true)", fn_name);
     }
 
     const lua_Integer pid_arg = luaL_checkinteger(L, 1);

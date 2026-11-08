@@ -123,6 +123,23 @@ int main() {
         s.stop();
     }
 
+    // 2a'. Each status has its own phrase: the login's 415 went out as
+    //      "415 OK", and a status not listed takes its class's.
+    {
+        HttpServer s;
+        assert(s.start("127.0.0.1", 0,
+                       [](const HttpRequest& req) {
+                           const int code = req.path == "/415" ? 415 : 418;
+                           return HttpResponse{code, "application/json", "{}\n"};
+                       }) == 0);
+        std::string resp = http_round_trip(s.bound_port(),
+            "POST /415 HTTP/1.1\r\nHost: x\r\n\r\n");
+        assert(resp.find("HTTP/1.1 415 Unsupported Media Type\r\n") != std::string::npos);
+        resp = http_round_trip(s.bound_port(), "GET /418 HTTP/1.1\r\nHost: x\r\n\r\n");
+        assert(resp.find("HTTP/1.1 418 Client Error\r\n") != std::string::npos);
+        s.stop();
+    }
+
     // 2b. A multi-megabyte body arrives whole when send(2) is
     //     interrupted by signals. /api/range at its 5000-sample cap is
     //     a few MB; a blocking send on loopback writes all of it in one

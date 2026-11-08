@@ -1240,6 +1240,36 @@ int main() {
         e.shutdown();
     }
 
+    // N+1'. A metric read at file scope (spec §3.6.2's loop over
+    //       net.interfaces, as the spec wrote it) stops the load: there is
+    //       no sample yet. The error says so; the loop inside when loads.
+    {
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        assert(e.load_string(
+            "for name, iface in pairs(net.interfaces) do\n"
+            "  watch('errors_' .. name, { when = function() return true end })\n"
+            "end\n") != 0);
+        assert(e.last_error().find("net is not collected at this level") != std::string::npos);
+        assert(e.last_error().find("the rules file runs before the first sample") != std::string::npos);
+        LuaEngine f;
+        assert(f.init(false) == 0);
+        assert(f.load_string("local x = nil + 1\n") != 0);   // any other error: no such words
+        assert(f.last_error().find("before the first sample") == std::string::npos);
+        LuaEngine g;
+        assert(g.init(false) == 0);
+        assert(g.load_string(
+            "watch('interface_errors', { when = function()\n"
+            "  for name, iface in pairs(net.interfaces) do\n"
+            "    if iface.rx_errors_per_sec > 100 then return true end\n"
+            "  end\n"
+            "  return false\n"
+            "end, for_ticks = 5, action = alert })\n") == 0);
+        e.shutdown();
+        f.shutdown();
+        g.shutdown();
+    }
+
     // N+2. A group or list the sample's level did not collect (spec
     //      §3.6.5): reading it, its length or pairs() over it raises "<name>
     //      is not collected at this level"; a when() that does is skipped,

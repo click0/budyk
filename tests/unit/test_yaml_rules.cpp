@@ -169,6 +169,10 @@ int main() {
         assert(err == "no 'rules:' list in the document");
         assert(yaml_rules_to_lua("rules: 3\n", &lua, &err) != 0);
         assert(err == "'rules:' is not a list");
+        // Another key next to rules: was ignored without a word.
+        assert(yaml_rules_to_lua("rules:\n  - {name: a, when: 'true'}\nrule:\n  - {name: b, when: 'true'}\n",
+                                 &lua, &err) != 0);
+        assert(err == "unknown key 'rule' next to 'rules:' (it holds the list alone)");
         assert(yaml_rules_to_lua("just a string\n", &lua, &err) != 0);
         assert(contains(err, "neither a list"));
         assert(yaml_rules_to_lua_file("/tmp/budyk_yaml_does_not_exist_zz", &lua, &err) < 0);
