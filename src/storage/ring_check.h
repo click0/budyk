@@ -20,12 +20,20 @@ uint64_t count_unindexed(const RingFile& ring, uint64_t now_ns = 0);
 /// Rewrites the ring at `path`, written by an older budyk with smaller
 /// records (an older codec version), at `record_size` x `capacity`: the
 /// newest records that fit, in order, each decoded with the version it
-/// was written in and encoded with this one. Writes `<path>.convert` and
-/// renames it over `path`, so a crash half-way leaves the old ring.
-/// 0 or -errno; *kept / *dropped (oldest beyond the new capacity, or
-/// damaged) say what happened to the records.
+/// was written in and encoded with this one. Writes `<path>.convert`,
+/// syncs it and renames it over `path`, so a crash half-way leaves the
+/// old ring. 0 or -errno; *kept / *dropped (oldest beyond the new
+/// capacity, or damaged) say what happened to the records. The directory
+/// is synced after the rename; that failing is not the conversion's
+/// failure (the ring is converted, the rename may not survive a power
+/// loss): its errno goes in `*dir_sync_err` (0 when it went through).
 int convert_ring(const char* path, uint8_t tier, uint32_t record_size,
-                 uint64_t capacity, uint64_t* kept, uint64_t* dropped);
+                 uint64_t capacity, uint64_t* kept, uint64_t* dropped,
+                 int* dir_sync_err = nullptr);
+
+/// The fsync(2) convert_ring() syncs the directory with; a test sets one
+/// that fails.
+extern int (*g_convert_dir_fsync)(int fd);
 
 /// True if a record of level `level` belongs in a ring with header tier
 /// byte `tier`: 1 holds L3, 2 L2, 3 L1, kCustomRingTier a custom level.

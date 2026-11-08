@@ -299,6 +299,11 @@ int RingFile::append(const void* record, size_t len) {
     return 0;
 }
 
+int RingFile::sync() {
+    if (fd_ < 0) return -EBADF;
+    return ::fsync(fd_) != 0 ? -errno : 0;
+}
+
 int RingFile::read_at(uint64_t index, void* out, size_t len) const {
     if (fd_ < 0 || out == nullptr)             return -1;
     if (len != record_size_)                   return -2;

@@ -288,7 +288,8 @@ bool TierManager::convert_if_older(const char* path, const char* leaf, uint8_t t
         return false;
     }
     uint64_t kept = 0, dropped = 0;
-    const int rc = convert_ring(path, tier, record_size, capacity, &kept, &dropped);
+    int dir_err = 0;
+    const int rc = convert_ring(path, tier, record_size, capacity, &kept, &dropped, &dir_err);
     if (rc != 0) {
         last_error_  = leaf;
         last_error_ += ": converting it from ";
@@ -297,7 +298,7 @@ bool TierManager::convert_if_older(const char* path, const char* leaf, uint8_t t
         last_error_ += std::strerror(-rc);
         return false;
     }
-    converted_.push_back(Converted{leaf, h.record_size, kept, dropped});
+    converted_.push_back(Converted{leaf, h.record_size, kept, dropped, dir_err});
     return true;
 }
 

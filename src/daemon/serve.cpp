@@ -363,6 +363,12 @@ int cmd_serve(int argc, char* argv[], const char* version) {
             "%llu record(s) kept, %llu dropped\n",
             c.ring.c_str(), c.from_record_size, budyk::record_size_for_sample(),
             static_cast<unsigned long long>(c.kept), static_cast<unsigned long long>(c.dropped));
+        if (c.dir_sync_errno != 0) {
+            std::fprintf(stderr,
+                "budyk serve: WARNING: %s: syncing data_dir after the conversion failed: %s "
+                "(a power loss could bring back the old ring)\n",
+                c.ring.c_str(), std::strerror(c.dir_sync_errno));
+        }
     }
     for (const auto& r : tm.recovered()) {
         std::fprintf(stderr,

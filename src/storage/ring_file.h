@@ -22,6 +22,8 @@ public:
                         uint64_t capacity);
     void close();
     int  append(const void* record, size_t len);
+    /// fsync(2) of the ring through its own descriptor: 0 or -errno.
+    int  sync();
     int  read_at(uint64_t index, void* out, size_t len) const;
     /// Counts `n` more records as written: records already in their slots
     /// that write_idx never reached (a crash between the pwrite and the

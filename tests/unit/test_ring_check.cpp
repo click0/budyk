@@ -12,6 +12,7 @@
 #include "storage/tier_manager.h"
 
 #include <cassert>
+#include <cerrno>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -426,6 +427,38 @@ int main() {
         assert(!s.icmp.present && s.icmp.in_msgs_per_sec == 0.0);
         r.close();
         rmrf(d);
+    }
+
+    // 8c. A sync of the directory that fails after the rename: the ring
+    //     is converted, which the start had reported as a failed
+    //     conversion (and stopped); the next start found a ring of this
+    //     version and never synced the directory. Now it is converted,
+    //     and the errno comes back for the log; TierManager::init()
+    //     goes on and says so in converted().
+    {
+        const std::string d = tmp_dir(), p = d + "/tier2.ring";
+        make_v7_ring(p, 2, 16, Level::L2, 2000, 5, 8, kV8Payload);
+        g_convert_dir_fsync = [](int) { errno = EIO; return -1; };
+        uint64_t kept = 0, dropped = 0;
+        int dir_err = 0;
+        assert(convert_ring(p.c_str(), 2, static_cast<uint32_t>(kRec), 16, &kept, &dropped, &dir_err) == 0);
+        assert(kept == 5 && dir_err == EIO);
+        RingFile r;
+        assert(r.open_read_only(p.c_str(), 2, static_cast<uint32_t>(kRec), 16) == 0);
+        r.close();
+        assert(::access((p + ".convert").c_str(), F_OK) != 0);
+        rmrf(d);
+
+        const std::string d2 = tmp_dir();
+        make_v7_ring(d2 + "/tier2.ring", 2, 16, Level::L2, 2000, 5, 8, kV8Payload);
+        TierManager tm;
+        assert(tm.init(d2.c_str(), 1, 1, 1) == 0);
+        assert(tm.converted().size() == 1 && tm.converted()[0].dir_sync_errno == EIO);
+        tm.close();
+        g_convert_dir_fsync = ::fsync;
+        assert(tm.init(d2.c_str(), 1, 1, 1) == 0 && tm.converted().empty());
+        tm.close();
+        rmrf(d2);
     }
 
     // 9. TierManager::init() converts the rings an older budyk left and

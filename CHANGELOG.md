@@ -198,6 +198,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   window, though the ring had wrapped inside the window and kept only
   its end. A folded record is dropped only where the finer ring reaches
   back to its window's start.
+- **A ring converted from an older budyk's failed the start when the
+  directory's sync failed after the rename**, though the ring was
+  converted; the next start found a ring of this version and never
+  synced the directory. That failure is now a warning ("a power loss
+  could bring back the old ring") and the start goes on.
+- **The conversion synced its new ring by opening it again by name**:
+  root running `serve` on the service user's data_dir held its start
+  on a FIFO put there. The ring is synced through its own descriptor,
+  and the directory opened as one (`O_DIRECTORY`, non-blocking).
 
 ## [0.8.7] — 2026-11-05
 
