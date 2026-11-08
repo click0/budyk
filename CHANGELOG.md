@@ -185,6 +185,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The rule state was written and fsynced every L1 tick** whether it
   changed or not (the idle disk figure counted the records alone); an
   unchanged state is not written again.
+- **`table.sort` with no comparator held the collector tick for
+  seconds**: it compares strings in C, an O(length) `memcmp` the
+  instruction count saw as one unit, so 2000 references to one 4 MiB
+  string sorted for 5 s under the default limits. The elements' bytes
+  are charged now, each about `log2 n` times (the comparisons it takes).
+  A sort with a comparator runs it between comparisons, where the
+  count hook fires and the CPU-time limit already applies.
 - **A window in the past (`/api/range` with `until`) after a clock step
   back left out the run written since**: the binary search for `until`
   took the ring to be in time order, landed among the records from

@@ -1874,6 +1874,16 @@ int main() {
             "local s = string.rep('a', 2^22) for i = 1, 20000 do s:find('b', 1, true) end",
             "local t = {} for i = 1, 100000 do table.insert(t, 1, i) end",
             "local t = {} for i = 1, 100000 do t[i] = -i end table.sort(t)",
+            // table.sort with no comparator compares strings in C, an
+            // O(length) memcmp the n log n count did not see: 2000 refs
+            // to one 4 MiB string held the tick for 5 s.
+            "local s = string.rep('x', 2^22) local t = {} "
+            "for i = 1, 2000 do t[i] = s end table.sort(t)",
+            // 1500 refs to a 4 KB string: the bytes alone are under the
+            // limit, so it is the log2 n factor (a comparison per level)
+            // that carries it over.
+            "local s = string.rep('x', 4000) local t = {} "
+            "for i = 1, 1500 do t[i] = s end table.sort(t)",
         };
         std::string src;
         int i = 0;
@@ -1902,10 +1912,17 @@ int main() {
             "  local parts = {}\n"
             "  for i = 1, 2000 do parts[#parts + 1] = string.format('%d:%s', i, ('x'):rep(40)) end\n"
             "  local t = {} for i = 1, 500 do table.insert(t, 1, i) end table.sort(t)\n"
+            "  local names = { 'mango', 'apple', 'pear', 'kiwi', 'fig' }\n"
+            "  table.sort(names)\n"                   // short strings, the default comparator
             "  return #table.concat(parts, ',') > 0 and string.find(table.concat(parts), '1999:', 1, true) ~= nil\n"
+            "    and names[1] == 'apple' and names[5] == 'pear'\n"
             "end })\n") == 0);
         assert(ok.eval_tick(mk(0, 0, 0, 0)) == 1);
         assert(ok.rules()[0].last_error.empty());
+        // The up-front charge above is for the default comparator, in C.
+        // A sort with a Lua comparator runs it between comparisons, so the
+        // count hook fires: its `a < b` over long strings is the same
+        // uncharged instruction 45c's CPU-time limit covers.
     }
 
     // N+14. What the limit does not need to stop still works as Lua's:
