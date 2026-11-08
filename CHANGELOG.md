@@ -185,6 +185,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The rule state was written and fsynced every L1 tick** whether it
   changed or not (the idle disk figure counted the records alone); an
   unchanged state is not written again.
+- **A window in the past (`/api/range` with `until`) after a clock step
+  back left out the run written since**: the binary search for `until`
+  took the ring to be in time order, landed among the records from
+  before the step and walked down from there. Each ring's header keeps
+  where the newest step back is (the reserved bytes at +36; an open
+  also looks over the newest 1024 records for one an older budyk or a
+  power loss left), and while it is in the ring the walk starts at the
+  newest record.
+- **`level=all` had a gap where a finer ring's history begins**: a
+  folded record was dropped when the finer ring held samples from its
+  window, though the ring had wrapped inside the window and kept only
+  its end. A folded record is dropped only where the finer ring reaches
+  back to its window's start.
 
 ## [0.8.7] — 2026-11-05
 

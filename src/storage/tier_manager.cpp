@@ -90,31 +90,56 @@ private:
     std::vector<uint8_t> buf_;
 };
 
+// A ring finer than the one whose folded records are checked, and what
+// this query already read of it.
+struct Finer {
+    const RingFile*            ring;
+    const std::vector<Sample>* seen;
+};
+
 // Drops from `recs` the folded records whose fold window (the `window_ns`
-// up to the record's timestamp) still has samples in one of the finer
-// `rings`. `seen` holds what was already read from those rings, so most
-// checks need no I/O; the rest are a binary search per ring.
+// up to the record's timestamp) one of the `finer` rings still covers:
+// it has samples there, and reaches back to the window's start. What was
+// already read of a ring (`seen`) answers most checks without I/O; the
+// rest are a binary search per ring.
 void drop_covered(std::vector<Sample>* recs, uint64_t window_ns,
-                  const std::vector<const std::vector<Sample>*>& seen,
-                  const std::vector<const RingFile*>& rings) {
+                  const std::vector<Finer>& finer) {
     if (window_ns == 0) return;   // folding off: nothing to compare with
-    std::vector<uint64_t> seen_ts;
-    for (const auto* v : seen) {
-        for (const auto& s : *v) seen_ts.push_back(s.timestamp_nanos);
+    struct Cover {
+        RingReader            reader;
+        // From where its records stand for the time: its oldest record's
+        // time less the spacing to the next one (a record, folded or
+        // not, stands for the interval before it). A ring that has
+        // wrapped inside a window covers only the end of it, and the
+        // folded record was dropped for the rest too: a gap of up to a
+        // window in level=all where that ring's history begins.
+        uint64_t              from = UINT64_MAX;
+        std::vector<uint64_t> seen_ts;
+        explicit Cover(const RingFile* r) : reader(r) {}
+    };
+    std::vector<Cover> covers;
+    covers.reserve(finer.size());
+    for (const auto& f : finer) {
+        covers.emplace_back(f.ring);
+        Cover& c = covers.back();
+        uint64_t t0 = 0, t1 = 0;
+        if (!c.reader.empty() && c.reader.ts_from(c.reader.oldest(), &t0)) {
+            const uint64_t gap = c.reader.ts_from(c.reader.oldest() + 1, &t1) && t1 > t0 ? t1 - t0 : 0;
+            c.from = t0 > gap ? t0 - gap : 0;
+        }
+        for (const auto& s : *f.seen) c.seen_ts.push_back(s.timestamp_nanos);
+        std::sort(c.seen_ts.begin(), c.seen_ts.end());
     }
-    std::sort(seen_ts.begin(), seen_ts.end());
-    std::vector<RingReader> readers;
-    readers.reserve(rings.size());
-    for (const auto* r : rings) readers.emplace_back(r);
 
     recs->erase(std::remove_if(recs->begin(), recs->end(), [&](const Sample& s) {
         if (!s.folded) return false;
         const uint64_t hi = s.timestamp_nanos;
         const uint64_t lo = hi > window_ns ? hi - window_ns : 0;
-        const auto it = std::upper_bound(seen_ts.begin(), seen_ts.end(), lo);
-        if (it != seen_ts.end() && *it <= hi) return true;
-        for (auto& r : readers) {
-            if (r.any_in(lo, hi)) return true;
+        for (auto& c : covers) {
+            if (c.from > lo) continue;   // begins inside the window: the record stands for the rest
+            const auto it = std::upper_bound(c.seen_ts.begin(), c.seen_ts.end(), lo);
+            if (it != c.seen_ts.end() && *it <= hi) return true;
+            if (c.reader.any_in(lo, hi)) return true;
         }
         return false;
     }), recs->end());
@@ -429,13 +454,14 @@ int TierManager::query_all(uint64_t since_ns, uint64_t until_ns,
     if (!ready_ || out == nullptr || max_records == 0) return -1;
 
     // Each ring's share, kept apart until the folded records are checked.
-    std::vector<Sample> fine, l2, l1;   // fine: L3 and the custom levels
-    std::vector<const RingFile*> finer_than_l2 = {&tier1_};
-    query_ring_spread(&tier1_, -1, since_ns, until_ns, max_records, &fine);
-    for (const auto& c : custom_) {
-        query_ring_spread(c.ring.get(), c.level_id, since_ns, until_ns,
-                          max_records, &fine);
-        finer_than_l2.push_back(c.ring.get());
+    std::vector<Sample> l3, l2, l1;
+    std::vector<std::vector<Sample>> customs(custom_.size());
+    query_ring_spread(&tier1_, -1, since_ns, until_ns, max_records, &l3);
+    std::vector<Finer> finer_than_l2 = {{&tier1_, &l3}};
+    for (size_t i = 0; i < custom_.size(); ++i) {
+        query_ring_spread(custom_[i].ring.get(), custom_[i].level_id, since_ns, until_ns,
+                          max_records, &customs[i]);
+        finer_than_l2.push_back({custom_[i].ring.get(), &customs[i]});
     }
     query_ring_spread(&tier2_, -1, since_ns, until_ns, max_records, &l2);
     query_ring_spread(&tier3_, -1, since_ns, until_ns, max_records, &l1);
@@ -444,14 +470,17 @@ int TierManager::query_all(uint64_t since_ns, uint64_t until_ns,
     // that ring no longer does. L1 first, while l2 still has its folded
     // records: they show finer data was collected there too, and seen in
     // memory they save a search of tier2.
-    std::vector<const RingFile*> finer_than_l1 = finer_than_l2;
-    finer_than_l1.push_back(&tier2_);
-    drop_covered(&l1, fold_l1_ns_, {&fine, &l2}, finer_than_l1);
-    drop_covered(&l2, fold_l2_ns_, {&fine}, finer_than_l2);
+    std::vector<Finer> finer_than_l1 = finer_than_l2;
+    finer_than_l1.push_back({&tier2_, &l2});
+    drop_covered(&l1, fold_l1_ns_, finer_than_l1);
+    drop_covered(&l2, fold_l2_ns_, finer_than_l2);
 
     std::vector<Sample> merged;
-    merged.reserve(fine.size() + l2.size() + l1.size());
-    merged.insert(merged.end(), fine.begin(), fine.end());
+    size_t total = l3.size() + l2.size() + l1.size();
+    for (const auto& v : customs) total += v.size();
+    merged.reserve(total);
+    merged.insert(merged.end(), l3.begin(), l3.end());
+    for (const auto& v : customs) merged.insert(merged.end(), v.begin(), v.end());
     merged.insert(merged.end(), l2.begin(), l2.end());
     merged.insert(merged.end(), l1.begin(), l1.end());
     std::sort(merged.begin(), merged.end(), [](const Sample& a, const Sample& b) {
@@ -537,9 +566,13 @@ int TierManager::query_ring(const RingFile* ring, int override_level,
     // The walk starts at the newest record within `until`, found by a
     // binary search: a window in the past (`until` an hour ago, or
     // since > until) walked the whole ring down to it, a second of the
-    // HTTP thread on a full 250 MB tier1 for every such request.
+    // HTTP thread on a full 250 MB tier1 for every such request. The
+    // search holds while the live records are in time order: after a
+    // clock step back it could land below the run written since, which
+    // was then not read. While that step is in the ring, the walk starts
+    // at the newest record.
     uint64_t start = widx;
-    if (until_ns != 0 && until_ns != UINT64_MAX) {
+    if (until_ns != 0 && until_ns != UINT64_MAX && ring->step_back_index() <= widx - valid) {
         RingReader reader(ring);
         start = reader.lower_bound(until_ns + 1);          // the first one past until
         if (start > widx) start = widx;

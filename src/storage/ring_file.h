@@ -34,6 +34,18 @@ public:
     /// write_begun() > logical + capacity() may hold the newer record
     /// written over it.
     uint64_t write_begun() const;
+    /// The logical index of the newest record stamped earlier than the
+    /// record written before it, 0 if none: a clock step back, or a
+    /// previous lap's records left under the write index by a power loss.
+    /// The live records (from write_index() - count()) are in time order
+    /// while it is no more than the oldest of them. The header keeps it
+    /// (+36); append() and advance_write_index() keep it up, and an open
+    /// for writing also looks over the newest kStepBackScan records, for
+    /// a ring an older budyk wrote or a power loss.
+    uint64_t step_back_index() const;
+    /// How many of the newest records an open for writing looks over for
+    /// a step back the header does not have.
+    static constexpr uint64_t kStepBackScan = 1024;
     uint64_t count() const;
     uint64_t capacity() const;
     uint8_t  tier() const;
@@ -73,6 +85,14 @@ public:
 private:
     int  open_impl(const char* path, uint8_t tier, uint32_t record_size,
                    uint64_t capacity, bool read_only);
+    /// The timestamp at the head of the record at `logical`, read as it
+    /// lies (no CRC check; not counted in reads()).
+    bool raw_ts(uint64_t logical, uint64_t* ts) const;
+    /// Looks over the records [from, to) for a step back, and takes the
+    /// newest one's timestamp as the one the next append follows.
+    void scan_order(uint64_t from, uint64_t to);
+    /// Records a step back at `logical`, in the header too.
+    void note_step_back(uint64_t logical);
 
     int       fd_ = -1;
     bool      read_only_ = false;
@@ -88,6 +108,9 @@ private:
     /// header too (append(), advance_write_index()).
     std::atomic<uint64_t> widx_{0};
     std::atomic<uint64_t> begun_{0};   ///< write_begun()
+    std::atomic<uint64_t> back_{0};    ///< step_back_index(), for this process's threads
+    uint64_t  last_ts_   = 0;          ///< the newest record's timestamp (the writer's)
+    bool      have_last_ = false;      ///< whether last_ts_ is known
     mutable std::atomic<uint64_t> reads_{0};   ///< reads()
 };
 
