@@ -23,6 +23,7 @@ extern "C" {
 #include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 #include <vector>
 
@@ -1766,6 +1767,39 @@ int main() {
         ::rmdir(dir);
     }
 
+    // N+12b. A state that has not changed is not written again: the daemon
+    //        saves every 60 s, and wrote and fsynced the file on every idle
+    //        L1 tick (a new file each time: the rename's inode tells).
+    {
+        char tmpl[] = "/tmp/budyk_state_XXXXXX";
+        const char* dir = ::mkdtemp(tmpl);
+        assert(dir != nullptr);
+        const std::string path = std::string(dir) + "/state.tsv";
+        auto inode = [&path] {
+            struct stat st{};
+            assert(::stat(path.c_str(), &st) == 0);
+            return st.st_ino;
+        };
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        assert(e.load_string("watch('r', { cooldown = 2, when = function() return false end })") == 0);
+        assert(e.save_state(path.c_str()) == 0);
+        const auto first = inode();
+        e.eval_tick(mk(0, 0, 0, 0));                             // nothing changes
+        assert(e.save_state(path.c_str()) == 0);
+        assert(inode() == first);
+        assert(e.save_state((path + ".other").c_str()) == 0);   // another file is written
+        assert(::access((path + ".other").c_str(), F_OK) == 0);
+        assert(e.load_string("watch('s', { when = function() return true end })") == 0);
+        e.eval_tick(mk(0, 0, 0, 0));                             // s fires: its counts change
+        assert(e.save_state(path.c_str()) == 0);
+        assert(inode() != first);
+        e.shutdown();
+        ::unlink(path.c_str());
+        ::unlink((path + ".other").c_str());
+        ::rmdir(dir);
+    }
+
     // N+13. The instruction limit holds against what used to dodge it.
     //       Each case once never returned (the tick waited forever); the
     //       alarm turns a regression into a failure instead of a hang.
@@ -2093,6 +2127,166 @@ int main() {
         assert(e.eval_tick(mk(0, 0, 0, 0)) == 0);
         assert(e.rules()[0].last_error.find("instruction limit") != std::string::npos);
         e.shutdown();
+    }
+
+    // 45b. alert() is charged by the bytes it sends out, as print() is:
+    //      in a loop it wrote 670 MB to the log in one tick, 5.6 s of it,
+    //      under the limit (each call was one instruction).
+    {
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        e.set_limits(20000, LuaEngine::kDefaultMemoryLimit);
+        assert(e.load_string(
+            "msg = string.rep('m', 4000)\n"
+            "watch('a', { when = function()\n"
+            "  for i = 1, 1000 do alert('a', 'info', msg) end\n"
+            "  return false\n"
+            "end })\n") == 0);
+        assert(e.eval_tick(mk(0, 0, 0, 0)) == 0);
+        assert(e.rules()[0].last_error.find("instruction limit") != std::string::npos);
+        const size_t sent = e.take_alerts().size() + static_cast<size_t>(e.alerts_dropped());
+        assert(sent < 400);   // some 300 of 4 KiB in 20 000 instructions, not 1000
+        e.shutdown();
+    }
+
+    // 45c. Work the instruction count does not see is bounded by the
+    //      thread's CPU time: comparing two long strings is one VM
+    //      instruction and an O(n) memcmp, and 200 000 of two 5 MiB
+    //      strings held the tick 55 s under the default limits.
+    const auto cpu_now = [] {
+        struct timespec ts{};
+        assert(::clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts) == 0);
+        return static_cast<double>(ts.tv_sec) + static_cast<double>(ts.tv_nsec) / 1e9;
+    };
+    double cmp_cpu = 0;   // CPU time of one comparison of two 2 MiB strings, s (45d too)
+    {
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        const uint64_t limit = e.cpu_limit_ns();          // 1 s at the defaults (10 s sanitized)
+        assert(limit == 1000000000ULL || limit == 10000000000ULL);
+        assert(e.load_string(
+            "a = string.rep('x', 2 << 20)\n"
+            "b = string.rep('x', 2 << 20)\n"
+            "watch('cmp', { when = function()\n"
+            "  for i = 1, 200000 do if a == b then end end\n"
+            "  return false\n"
+            "end })\n") == 0);
+        // The clock is read once a hook interval (1000 instructions, some
+        // 260 of these comparisons), so the limit may be overrun by one:
+        // 40 ms here, where the interval then shrinks, but seconds on an
+        // emulated CPU, where the first interval crosses the limit by
+        // itself. The allowance is two intervals of nothing but
+        // comparisons, at what 100 of them take on this machine: on
+        // FreeBSD arm64 under QEMU, 100 comparisons of 4 MiB strings took
+        // 36 ms each, and the call that followed was stopped after 27 s,
+        // not the 10 s that speed gives one interval. Both
+        // are the thread's CPU time, as the limit is.
+        LuaEngine probe;
+        assert(probe.init(false) == 0);
+        assert(probe.load_string(
+            "a = string.rep('x', 2 << 20)\n"
+            "b = string.rep('x', 2 << 20)\n"
+            "watch('cmp', { when = function()\n"
+            "  for i = 1, 100 do if a == b then end end\n"
+            "  return false\n"
+            "end })\n") == 0);
+        const double p0 = cpu_now();
+        assert(probe.eval_tick(mk(0, 0, 0, 0)) == 0);
+        cmp_cpu = (cpu_now() - p0) / 100;
+        assert(probe.rules()[0].last_error.empty());
+        probe.shutdown();
+        const auto w0 = std::chrono::steady_clock::now();
+        const double t0 = cpu_now();
+        assert(e.eval_tick(mk(0, 0, 0, 0)) == 0);
+        const double took = cpu_now() - t0;
+        std::fprintf(stderr, "test_lua_engine: 45c took %.3f s of CPU (%.3f s wall), %llu clock "
+                     "reads, %.3f ms of CPU a comparison, limit %.3f s\n", took,
+                     std::chrono::duration<double>(std::chrono::steady_clock::now() - w0).count(),
+                     static_cast<unsigned long long>(e.clock_reads()), cmp_cpu * 1e3,
+                     static_cast<double>(limit) / 1e9);
+        char want[64];
+        std::snprintf(want, sizeof(want), "CPU time limit of %llu ms exceeded",
+                      static_cast<unsigned long long>(limit / 1000000));
+        assert(e.rules()[0].last_error.find(want) != std::string::npos);
+        // Some 30 s unbounded (200 000 comparisons).
+        assert(took < static_cast<double>(limit) / 1e9 + 2000 * cmp_cpu + 0.5);
+        // The CPU time is each call's, not the engine's: rules that each
+        // take a few ms, tick after tick, past the limit in all, run on.
+        LuaEngine busy;
+        assert(busy.init(false) == 0);
+        assert(busy.load_string(
+            "watch('work', { when = function()\n"
+            "  local x = 0 for k = 1, 300000 do x = x + k end\n"
+            "  return false\n"
+            "end })\n") == 0);
+        const auto b0 = std::chrono::steady_clock::now();
+        int calls = 0;
+        const auto past = std::chrono::milliseconds(static_cast<long long>(limit / 1000000) + 500);
+        while (std::chrono::steady_clock::now() - b0 < past) {
+            busy.eval_tick(mk(0, 0, 0, 0));
+            assert(busy.rules()[0].last_error.empty());
+            ++calls;
+        }
+        assert(calls >= 2);
+        busy.shutdown();
+        LuaEngine big;                                    // the limit scales with the count
+        assert(big.init(false) == 0);
+        big.set_limits(4'000'000, LuaEngine::kDefaultMemoryLimit);
+        assert(big.cpu_limit_ns() == 4 * limit);
+        big.shutdown();
+        e.shutdown();
+    }
+
+    // 45d. The hook's interval follows the work: while comparisons of
+    //      long strings run, the clock is read every millisecond or so
+    //      (once in 1000 instructions, some 260 comparisons, they could
+    //      overrun the limit by that much each time), and once cheap
+    //      instructions follow it is read once in 1000 again. Read on
+    //      every instruction after one slow interval, as it was, a rules
+    //      file of 80 million instructions took minutes to load in an
+    //      emulated VM, and 40 million took 10 s of CPU here, not 0.3 s.
+    {
+        // Some 0.1 s of comparisons, and more than one interval of them
+        // (an emulated CPU takes seconds for those 400).
+        const double want_n = 0.1 / cmp_cpu;
+        const int n = want_n < 400 ? 400 : want_n > 3000 ? 3000 : static_cast<int>(want_n);
+        char slow[256];
+        std::snprintf(slow, sizeof(slow),
+            "a = string.rep('x', 2 << 20)\n"
+            "b = string.rep('x', 2 << 20)\n"
+            "watch('slow', { when = function()\n"
+            "  for i = 1, %d do if a == b then end end\n"
+            "  return false\n"
+            "end })\n", n);
+        LuaEngine e;
+        assert(e.init(false) == 0);
+        e.set_limits(100'000'000, 64u << 20);
+        assert(e.load_string(slow) == 0);
+        assert(e.eval_tick(mk(0, 0, 0, 0)) == 0);
+        assert(e.rules()[0].last_error.empty());
+        std::fprintf(stderr, "test_lua_engine: 45d %d comparisons, %llu clock reads\n", n,
+                     static_cast<unsigned long long>(e.clock_reads()));
+        // One read in 1000 instructions at the full interval (at most 12);
+        // one every 0.5 to 1 ms of comparisons past the first: some 70.
+        assert(e.clock_reads() > 20);
+        e.shutdown();
+        LuaEngine c;
+        assert(c.init(false) == 0);
+        c.set_limits(100'000'000, 64u << 20);
+        assert(c.load_string(
+            "a = string.rep('x', 2 << 20)\n"
+            "b = string.rep('x', 2 << 20)\n"
+            "watch('then_cheap', { when = function()\n"
+            "  for i = 1, 400 do if a == b then end end\n"
+            "  local x = 0 for i = 1, 5000000 do x = x + i end\n"
+            "  return false\n"
+            "end })\n") == 0);
+        assert(c.eval_tick(mk(0, 0, 0, 0)) == 0);
+        assert(c.rules()[0].last_error.empty());
+        // 10 million cheap instructions: 10 000 reads at the full
+        // interval, millions at one.
+        assert(c.clock_reads() < 30000);
+        c.shutdown();
     }
 
     // 46. An alert's name and message are cut to kMaxAlertNameBytes /

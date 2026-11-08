@@ -32,6 +32,7 @@
 #include <ctime>
 #include <functional>
 #include <mutex>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -814,10 +815,16 @@ int cmd_serve(int argc, char* argv[], const char* version) {
     // What the rules asked for: a level from escalate(), and the alerts,
     // which go to the dashboards as they happen (spec §3.6.4) and stay
     // for /api/alerts.
+    std::set<std::string> escalations_refused;   // each logged once
     auto publish_rule_results = [&] {
         for (const auto& e : engine.take_escalations()) {
             const uint64_t from = now_realtime_ns();
-            sched.request_by_name(e.level, from + static_cast<uint64_t>(e.seconds) * kNsPerSec, from);
+            if (!sched.request_by_name(e.level, from + static_cast<uint64_t>(e.seconds) * kNsPerSec,
+                                       from) &&
+                escalations_refused.insert(e.level).second) {
+                std::fprintf(stderr, "budyk serve: escalate('%s'): the scheduler has no such "
+                                     "level; nothing escalated\n", e.level.c_str());
+            }
         }
         if (std::vector<budyk::AlertEvent> fired = engine.take_alerts(); !fired.empty()) {
             {

@@ -21,6 +21,7 @@ extern "C" {
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <string>
 
 namespace budyk {
@@ -291,6 +292,57 @@ constexpr int kHookInterval = 1000;
 // copy of that many bytes costs next to a VM instruction.
 constexpr size_t kAllocBytesPerInstruction = 64;
 
+// The CPU time a call may take for each instruction of its limit, and at
+// least: 1 s at the default 1 000 000, some 100 times what that many
+// instructions take on a server and several times what they take on a
+// small board (a Raspberry Pi Zero), so a rule within its instruction
+// limit does not meet this one there (a loaded host does not run out a
+// thread's CPU time). A sanitizer build's allocator is instrumented: a
+// rule filling 2 MiB of small tables took 1.5 s of CPU under TSan, 5 ms
+// without, and its limit is ten times as long.
+#if defined(BUDYK_SANITIZED)
+constexpr uint64_t kCpuLimitScale = 10;
+#else
+constexpr uint64_t kCpuLimitScale = 1;
+#endif
+constexpr uint64_t kCpuNsPerInstruction = 1000 * kCpuLimitScale;
+constexpr uint64_t kMinCpuLimitNs       = 1'000'000'000 * kCpuLimitScale;
+// The hook's interval follows the work its instructions do. One that
+// took more than this of CPU (kHookInterval instructions take some
+// 10 us) is cut so that the next takes about half of it, and one that
+// took less than half grows back, doubling, to kHookInterval. Past the
+// first slow interval (which may cross the limit by itself: one of 4 MiB
+// string comparisons, some 330, takes 50 ms on a server and seconds on
+// an emulated CPU) the limit is held to within a millisecond or one
+// instruction. A slow interval of cheap instructions (a page fault, a VM
+// exit, a step of the garbage collector) costs a few more clock reads:
+// read on every instruction for the rest of the call instead, a load of
+// 40 million took 10 s of CPU, not 0.3 s.
+constexpr uint64_t kSlowHookNs = 1'000'000;
+
+namespace {
+
+// The calling thread's CPU time, ns.
+uint64_t thread_cpu_ns() {
+    struct timespec ts{};
+    if (::clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts) != 0) return 0;
+    return static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL + static_cast<uint64_t>(ts.tv_nsec);
+}
+
+// The count hook's next interval, after one of `interval` instructions
+// that took `took_ns` of CPU (see kSlowHookNs).
+int next_hook_interval(int interval, uint64_t took_ns) {
+    if (took_ns > kSlowHookNs) {
+        const uint64_t want = static_cast<uint64_t>(interval) * (kSlowHookNs / 2) / took_ns;
+        return want < 1 ? 1 : static_cast<int>(want);
+    }
+    if (took_ns < kSlowHookNs / 2 && interval < kHookInterval)
+        return interval * 2 < kHookInterval ? interval * 2 : kHookInterval;
+    return interval;
+}
+
+} // namespace
+
 namespace {
 
 // collectgarbage([opt]): a collection walks the whole heap, charged as
@@ -377,6 +429,7 @@ void* LuaEngine::alloc(void* ud, void* ptr, size_t osize, size_t nsize) {
             self->instructions_used_ += self->alloc_bytes_ / kAllocBytesPerInstruction;
             self->alloc_bytes_ %= kAllocBytesPerInstruction;
             if (self->instructions_used_ > self->instruction_limit_ && self->L_ != nullptr) {
+                self->hook_interval_ = 1;
                 lua_sethook(self->L_, &LuaEngine::count_hook, LUA_MASKCOUNT, 1);
             }
         }
@@ -390,19 +443,39 @@ LuaEngine* LuaEngine::engine_of(lua_State* L) {
     return static_cast<LuaEngine*>(ud);
 }
 
-int LuaEngine::raise_limit(lua_State* L, const LuaEngine* self) {
+int LuaEngine::raise_limit(lua_State* L, LuaEngine* self) {
     // From here on the hook fires, and raises, on every instruction: a
     // pcall() or xpcall() in the rule catches the error only until its
     // next one, so the call ends however the rule nests them.
+    self->hook_interval_ = 1;
     lua_sethook(L, &LuaEngine::count_hook, LUA_MASKCOUNT, 1);
     return luaL_error(L, "instruction limit of %I exceeded (rules.limits.instructions)",
                       static_cast<lua_Integer>(self->instruction_limit_));
 }
 
+int LuaEngine::raise_cpu_limit(lua_State* L, LuaEngine* self) {
+    // Spent, as the instruction limit is: every later instruction raises.
+    self->instructions_used_ = self->instruction_limit_ + 1;
+    self->hook_interval_     = 1;
+    lua_sethook(L, &LuaEngine::count_hook, LUA_MASKCOUNT, 1);
+    return luaL_error(L, "CPU time limit of %I ms exceeded (rules.limits.instructions: "
+                         "work it does not count, such as comparing long strings)",
+                      static_cast<lua_Integer>(self->cpu_limit_ns() / 1000000));
+}
+
 void LuaEngine::count_hook(lua_State* L, lua_Debug*) {
     auto* self = engine_of(L);
-    self->instructions_used_ += kHookInterval;
+    self->instructions_used_ += static_cast<uint64_t>(self->hook_interval_);
     if (self->instructions_used_ > self->instruction_limit_) raise_limit(L, self);
+    const uint64_t now = thread_cpu_ns();
+    ++self->clock_reads_;
+    if (now - self->call_cpu_ns_ > self->cpu_limit_ns()) raise_cpu_limit(L, self);
+    const int next = next_hook_interval(self->hook_interval_, now - self->hook_cpu_ns_);
+    self->hook_cpu_ns_ = now;
+    if (next != self->hook_interval_) {
+        self->hook_interval_ = next;
+        lua_sethook(L, &LuaEngine::count_hook, LUA_MASKCOUNT, next);
+    }
 }
 
 void LuaEngine::charge(lua_State* L, uint64_t n) {
@@ -416,11 +489,27 @@ void LuaEngine::charge(lua_State* L, uint64_t n) {
     self->instructions_used_ += n;
 }
 
+void LuaEngine::charge_bytes(lua_State* L, size_t bytes) {
+    charge(L, bytes / kAllocBytesPerInstruction + 1);
+}
+
+uint64_t LuaEngine::cpu_limit_ns() const {
+    const uint64_t per = instruction_limit_ > UINT64_MAX / kCpuNsPerInstruction
+                       ? UINT64_MAX : instruction_limit_ * kCpuNsPerInstruction;
+    return per > kMinCpuLimitNs ? per : kMinCpuLimitNs;
+}
+
 void LuaEngine::begin_call() {
     instructions_used_ = 0;
     alloc_bytes_       = 0;
+    hook_interval_     = kHookInterval;
+    call_cpu_ns_       = thread_cpu_ns();
+    hook_cpu_ns_       = call_cpu_ns_;
+    clock_reads_       = 0;
     if (L_ != nullptr) lua_sethook(L_, &LuaEngine::count_hook, LUA_MASKCOUNT, kHookInterval);
 }
+
+uint64_t LuaEngine::clock_reads() const { return clock_reads_; }
 
 
 int LuaEngine::init(bool enable_exec) {
@@ -454,6 +543,10 @@ int LuaEngine::init(bool enable_exec) {
         }
     }
 
+    hook_interval_ = kHookInterval;
+    call_cpu_ns_   = thread_cpu_ns();
+    hook_cpu_ns_   = call_cpu_ns_;
+    clock_reads_   = 0;
     lua_sethook(L, &LuaEngine::count_hook, LUA_MASKCOUNT, kHookInterval);
 
     L_ = L;
@@ -476,6 +569,8 @@ void LuaEngine::shutdown() {
         luaL_unref(L_, LUA_REGISTRYINDEX, r.actions_ref);
     }
     rules_.clear();
+    saved_path_.clear();   // a new engine's state is written once at least
+    saved_text_.clear();
     for (const auto& c : level_conditions_) {
         luaL_unref(L_, LUA_REGISTRYINDEX, c.ref);
     }
@@ -561,6 +656,23 @@ int LuaEngine::load_file(const char* path) {
 int LuaEngine::save_state(const char* path) const {
     if (path == nullptr) return -EINVAL;
 
+    std::string text = "# budyk rule state v1\n"
+                       "# cooldown_remaining\tconsecutive_hits\tfire_count\tname\n";
+    for (const auto& r : rules_) {
+        // A newline in a rule name would corrupt the line-based format.
+        // Such names are pathological (the name comes from watch()'s
+        // first arg); skip persisting them rather than risk a mangled
+        // file that breaks every subsequent rule's restore.
+        if (r.name.find('\n') != std::string::npos) continue;
+        char nums[96];
+        std::snprintf(nums, sizeof(nums), "%d\t%d\t%llu\t", r.cooldown_remaining,
+                      r.consecutive_hits, static_cast<unsigned long long>(r.fire_count));
+        text += nums;
+        text += r.name;
+        text += '\n';
+    }
+    if (path == saved_path_ && text == saved_text_) return 0;   // as it is on disk
+
     // Write to a sibling temp file then rename(2) over the target so a
     // crash mid-write can never leave a half-written state file.
     std::string tmp = path;
@@ -584,19 +696,7 @@ int LuaEngine::save_state(const char* path) const {
         if (bad && e == 0) e = errno != 0 ? errno : EIO;
     };
     errno = 0;
-    failed(std::fputs("# budyk rule state v1\n", f) < 0);
-    failed(std::fputs("# cooldown_remaining\tconsecutive_hits\tfire_count\tname\n", f) < 0);
-    for (const auto& r : rules_) {
-        // A newline in a rule name would corrupt the line-based format.
-        // Such names are pathological (the name comes from watch()'s
-        // first arg); skip persisting them rather than risk a mangled
-        // file that breaks every subsequent rule's restore.
-        if (r.name.find('\n') != std::string::npos) continue;
-        failed(std::fprintf(f, "%d\t%d\t%llu\t%s\n",
-                            r.cooldown_remaining, r.consecutive_hits,
-                            static_cast<unsigned long long>(r.fire_count),
-                            r.name.c_str()) < 0);
-    }
+    failed(std::fwrite(text.data(), 1, text.size(), f) != text.size());
     failed(std::fflush(f) != 0);
     failed(::fsync(::fileno(f)) != 0);
     failed(std::fclose(f) != 0);
@@ -610,6 +710,8 @@ int LuaEngine::save_state(const char* path) const {
         std::remove(tmp.c_str());
         return -e;
     }
+    saved_path_ = path;
+    saved_text_ = std::move(text);
     return 0;
 }
 

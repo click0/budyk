@@ -199,8 +199,8 @@ daemon on the same directory, and
 refuse to start. The kernel releases it however the daemon exits.
 .TP
 .I /var/db/budyk/rule_state.tsv
-The rules' cooldowns and counters, written every 60 seconds and on
-shutdown, and read on start
+The rules' cooldowns and counters, written every 60 seconds when they
+changed and on shutdown, and read on start
 .RB ( rules.persist_state ;
 .B rules.state_path
 names another file).

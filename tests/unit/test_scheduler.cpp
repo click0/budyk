@@ -66,6 +66,35 @@ int main() {
         assert(sch.current_anomaly() == AnomalyState::CRITICAL);
     }
 
+    // 4b. The configured thresholds decide: above the critical values (8,
+    //     95 %, 80 %) but under thresholds set higher is no anomaly. They
+    //     were checked first and on their own: a load_1m threshold of 32
+    //     on a 32-core host went to L2 at a load of 10, and to L3 after
+    //     escalate_after.
+    {
+        SchedulerConfig c = cfg;
+        c.escalation_load_1m      = 32.0;
+        c.escalation_cpu_percent  = 99.0;
+        c.escalation_swap_percent = 95.0;
+        Scheduler sch(c);
+        Sample busy = at(0);
+        busy.load.avg_1m       = 10.0;
+        busy.cpu.total_percent = 96.0;
+        busy.swap.used_percent = 85.0;
+        assert(sch.tick(busy) == Level::L1);
+        assert(sch.current_anomaly() == AnomalyState::NORMAL);
+        Sample worse = at(10);
+        worse.load.avg_1m = 40.0;              // over 32, and over the critical 8
+        assert(sch.tick(worse) == Level::L2);
+        assert(sch.current_anomaly() == AnomalyState::CRITICAL);
+        SchedulerConfig low = cfg;             // a critical value above its threshold:
+        low.critical_cpu_percent = 99.0;       // over 85 and under 99 is elevated
+        Scheduler e(low);
+        Sample hot = at(0);
+        hot.cpu.total_percent = 97.0;
+        assert(e.tick(hot) == Level::L2 && e.current_anomaly() == AnomalyState::ELEVATED);
+    }
+
     // 5. l2_always_on keeps the baseline at L2.
     {
         SchedulerConfig c2 = cfg;
@@ -208,6 +237,9 @@ int main() {
 
         // Unknown names / ids are ignored.
         assert(!sch.request_by_name("nope", 99 * kSec));
+        // A custom level's name in any case, as the rules' escalate()
+        // accepts it: "Burst" returned true there and escalated nothing.
+        assert(sch.request_by_name("BURST", 99 * kSec));
         sch.request(static_cast<Level>(9), 99 * kSec);
         assert(sch.select(40 * kSec) != static_cast<Level>(9));
 

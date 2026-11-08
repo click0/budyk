@@ -337,12 +337,20 @@ The gates a local build does not show:
    (a failed bind skips the tick's rules; nothing after a failed call may
    allocate on the Lua heap outside one). Instead of a time limit, every
    call into Lua is limited to `rules.limits.instructions` (default
-   1 000 000) and the engine to `rules.limits.memory_mb` (default 16).
+   1 000 000) and the engine to `rules.limits.memory_mb` (default 16);
+   only work the count cannot see (a comparison of long strings, one VM
+   instruction) meets a time limit, the thread's CPU time, 1 us an
+   instruction of the limit and 1 s at least, ten times that in a
+   sanitizer build (`BUDYK_SANITIZED`: its allocator is instrumented)
+   (`LuaEngine::cpu_limit_ns()`; the hook's interval shrinks while
+   instructions are slow, to some 0.5 ms of CPU, and grows back to 1000
+   when they are not).
    Library work in C is charged to the instruction limit too
    (`LuaEngine::charge()`): `src/rules/lua_pattern.c` is Lua 5.4.7's
    own pattern matcher (MIT, kept as Lua writes it, the changes marked
-   "budyk") with a step count, `table.move` is charged, `print()` by
-   the bytes it writes and `collectgarbage()` by the heap it walks
+   "budyk") with a step count, `table.move` is charged, `print()` and
+   `alert()` by the bytes they write and `collectgarbage()` by the heap
+   it walks
    ("stop" and the tuning options are refused), past the limit the hook
    raises on every instruction (no `pcall` carries on), `xpcall` runs
    its handler after the call and `setmetatable` refuses `__gc` (Lua

@@ -240,7 +240,8 @@ int l_alert(lua_State* L) {
     auto* eng = engine_from(L);
     if (eng == nullptr) return 0;
 
-    const char* name    = luaL_checkstring(L, 1);
+    size_t name_len = 0;
+    const char* name    = luaL_checklstring(L, 1, &name_len);
     const char* sev_str = lua_tostring(L, 2);
     // A number reads as its text; a boolean or a table (a comparison, or
     // the sample table itself, where the string was meant) is an error,
@@ -250,6 +251,16 @@ int l_alert(lua_State* L) {
     }
     size_t msg_len = 0;
     const char* msg = lua_tolstring(L, 3, &msg_len);
+    // Charged as print() is, by the bytes that leave the Lua heap (the log
+    // line, the queue, the channels' jobs), before any C++ object is made
+    // (the charge may raise): alert() in a loop wrote 670 MB to the log in
+    // one tick, 5.6 s of it, under the limit.
+    budyk::LuaEngine::charge_bytes(L,
+        (name_len < budyk::LuaEngine::kMaxAlertNameBytes ? name_len
+                                                         : budyk::LuaEngine::kMaxAlertNameBytes) +
+        (msg_len < budyk::LuaEngine::kMaxAlertMessageBytes ? msg_len
+                                                           : budyk::LuaEngine::kMaxAlertMessageBytes) +
+        64);
 
     // Lenient on purpose: an unknown severity falls back to warning rather
     // than failing the action mid-incident.
