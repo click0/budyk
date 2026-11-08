@@ -47,6 +47,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   kernel's `uint64_t`); the group is left out there.
 - **Docs:** `net.interfaces[...].up` is the interface's set-up flag, not
   its link; the thermal sources; the 32-bit counter wrap a known gap.
+- **`cmake --install` with a prefix of `/usr` still put the example
+  config in `/usr/etc/budyk`**, though 0.8.7 said otherwise: the
+  relative `CMAKE_INSTALL_SYSCONFDIR` stays `etc` under the prefix. It is
+  `CMAKE_INSTALL_FULL_SYSCONFDIR` now, and CI installs with both
+  prefixes (`tests/check_install.sh`).
+- **The rules' log lines went to stdout**: `print()` and the `log`
+  action, though the docs call it the daemon's log, which is stderr; a
+  `budyk serve 2>>budyk.log` lost them. They go to stderr.
+- **A YAML rules file that is a mapping read `rules:` and ignored any
+  other key** (`rule:`, a second list) without a word; another key is an
+  error. The mapping form is documented.
+- **The login's 415 went out as `415 OK`**: a status without its own
+  phrase took "OK". 415 is "Unsupported Media Type", and a status not
+  listed takes its class's phrase.
+- **The spec's example of a rule per interface (§3.6.2) does not load**:
+  it reads `net.interfaces` at file scope, before there is a sample. The
+  spec marks it and gives the loop inside `when`, and the load's error
+  says why: "the rules file runs before the first sample".
+- **Docs:** `freeze()` disabled names `rules.freeze.enabled` as `exec()`
+  names its key; the configure summary said `exec(): OFF` for every build
+  (`ENABLE_EXEC` is not wired); a key given twice is read the first time,
+  not the default; a telegram channel's `url` replaces the whole endpoint;
+  the man page lists `help`, `--version` and the other spellings and how
+  often `rule_state.tsv` is written; the spec's L1 reads the `standard`
+  set by default, not five groups, and a record's level byte is 4..19
+  for a custom level; README.uk.md says what README.md says (the
+  session cookie's name, the login's checks, the global cap, a password
+  change, `service budyk reload`, the alert and `print()` limits).
 
 ## [0.8.7] — 2026-11-05
 

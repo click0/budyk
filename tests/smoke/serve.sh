@@ -44,7 +44,9 @@ EOF
 # must warn about it (whoever can write it runs Lua as the daemon).
 chmod 666 "$DIR/rules.lua"
 
-"$BIN" serve --config "$DIR/config.yaml" > "$DIR/log" 2>&1 &
+# stdout apart: the rules' log lines (print(), the "log" action) are the
+# daemon's log, stderr; on stdout, `serve 2>>budyk.log` lost them.
+"$BIN" serve --config "$DIR/config.yaml" > "$DIR/stdout" 2> "$DIR/log" &
 PID=$!
 
 # Wait for the HTTP server.
@@ -213,6 +215,11 @@ if curl -s "http://127.0.0.1:$PORT/api/alerts" | grep -q '"rule":"beat","message
     echo "ok   alerts are logged and kept for /api/alerts"
 else
     echo "FAIL: no beat alert in /api/alerts or in the log"; fail=1
+fi
+if grep -q '^\[budyk\] tick$' "$DIR/log" && [ ! -s "$DIR/stdout" ]; then
+    echo "ok   the rules' log lines go to the daemon's log (stderr)"
+else
+    echo "FAIL: the \"log\" action's line not on stderr alone: $(head -c 300 "$DIR/stdout")"; fail=1
 fi
 
 # The per-entity detail (cores, disks, interfaces, filesystems) rides

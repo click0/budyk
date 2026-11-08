@@ -285,6 +285,9 @@ private:
     /// assigned_bound() after a rules file ran at load: true, with the
     /// file's error set, when it assigned one.
     bool file_assigned_bound();
+    /// A load that failed: its error, on the stack, into last_error()
+    /// (with why, for a metric read at file scope), and popped.
+    void load_failed();
     /// load_string() and load_buffer(): `len` bytes of `code` as the
     /// chunk `chunkname`, run at file scope.
     int  load_chunk(const char* code, size_t len, const char* chunkname);

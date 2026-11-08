@@ -313,6 +313,8 @@ int sandbox_collectgarbage(lua_State* L) {
 // print(...): Lua's, with the bytes written charged as the allocator
 // charges bytes handed out. The values are made strings first (that
 // may run __tostring), the charge raises before anything is written.
+// To stderr, the daemon's log (spec §3.2): on stdout, a `budyk serve
+// 2>>budyk.log` lost every rule's line.
 int sandbox_print(lua_State* L) {
     const int n = lua_gettop(L);
     luaL_checkstack(L, n + 2, "print");
@@ -326,11 +328,11 @@ int sandbox_print(lua_State* L) {
     for (int i = 1; i <= n; ++i) {
         size_t len = 0;
         const char* s = lua_tolstring(L, n + i, &len);
-        if (i > 1) std::fputc('\t', stdout);
-        std::fwrite(s, 1, len, stdout);
+        if (i > 1) std::fputc('\t', stderr);
+        std::fwrite(s, 1, len, stderr);
     }
-    std::fputc('\n', stdout);
-    std::fflush(stdout);
+    std::fputc('\n', stderr);
+    std::fflush(stderr);
     return 0;
 }
 
@@ -503,12 +505,22 @@ int LuaEngine::load_chunk(const char* code, size_t len, const char* chunkname) {
     if (rc == LUA_OK) rc = lua_pcall(L_, 0, LUA_MULTRET, 0);
     loading_ = false;
     if (rc != LUA_OK) {
-        const char* msg = error_text(L_, -1);
-        last_error_ = msg != nullptr ? msg : "unknown Lua error";
-        lua_pop(L_, 1);
+        load_failed();
         return -2;
     }
     return file_assigned_bound() ? -2 : 0;
+}
+
+void LuaEngine::load_failed() {
+    const char* msg = error_text(L_, -1);
+    last_error_ = msg != nullptr ? msg : "unknown Lua error";
+    // A sample's group read at file scope (spec §3.6.2's loop over
+    // net.interfaces): there is no sample yet, whatever the level reads.
+    if (budyk_lua_uncollected(L_, -1) != 0) {
+        last_error_ += " (the rules file runs before the first sample: "
+                       "read the metrics inside a when function)";
+    }
+    lua_pop(L_, 1);
 }
 
 bool LuaEngine::file_assigned_bound() {
@@ -539,9 +551,7 @@ int LuaEngine::load_file(const char* path) {
     if (rc == LUA_OK) rc = lua_pcall(L_, 0, LUA_MULTRET, 0);
     loading_ = false;
     if (rc != LUA_OK) {
-        const char* msg = error_text(L_, -1);
-        last_error_ = msg != nullptr ? msg : "unknown Lua error";
-        lua_pop(L_, 1);
+        load_failed();
         return -2;
     }
     return file_assigned_bound() ? -2 : 0;
@@ -753,9 +763,9 @@ void LuaEngine::run_actions(LuaRule* r) {
         if (what == "alert") {
             raise_alert(r->severity, r->name, r->message);
         } else if (what == "log") {
-            // Same stream and format as Lua's print() / the YAML "log" action.
-            std::printf("[budyk] %s\n", cut_to(r->message, kMaxAlertMessageBytes).c_str());
-            std::fflush(stdout);
+            // Same stream (the daemon's log, stderr) and format as Lua's
+            // print() / the YAML "log" action.
+            std::fprintf(stderr, "[budyk] %s\n", cut_to(r->message, kMaxAlertMessageBytes).c_str());
         } else if (what == "escalate") {
             push_escalation("L3", 60);   // spec §3.6.2: { alert, escalate }
         }

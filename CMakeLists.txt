@@ -75,7 +75,10 @@ include(cmake/platform.cmake)
 
 # Options
 option(ENABLE_LLM "Build the LLM client of suggest-rules --ai (Tier B); OFF leaves it out of the binary" ON)
-option(ENABLE_EXEC "Enable exec() action in Lua rules (security-sensitive)" OFF)
+# Reserved for a binary with exec() compiled out (CLAUDE.md): nothing
+# reads it yet. Every build has exec(), off until --enable-exec or
+# rules.exec.enabled turns it on.
+option(ENABLE_EXEC "Reserved, not wired yet: exec() is gated at run time (--enable-exec, rules.exec.enabled)" OFF)
 option(BUILD_TESTS "Build test suite" ON)
 option(STATIC_LINK "Static linking for single-binary deployment" ON)
 
@@ -168,9 +171,12 @@ include(cmake/docs.cmake)
 # ports tree no longer takes ${PREFIX}/man, and man(1) finds both.
 include(GNUInstallDirs)
 install(TARGETS budyk DESTINATION bin)
-# CMAKE_INSTALL_SYSCONFDIR: `etc` under the prefix (/usr/local/etc/budyk),
-# but /etc/budyk for a prefix of /usr (it was /usr/etc/budyk there).
-install(FILES config.example.yaml DESTINATION ${CMAKE_INSTALL_SYSCONFDIR}/budyk)
+# CMAKE_INSTALL_FULL_SYSCONFDIR: `etc` under the prefix
+# (/usr/local/etc/budyk), but /etc/budyk for a prefix of /usr. The
+# relative CMAKE_INSTALL_SYSCONFDIR stays `etc` there, under the prefix:
+# /usr/etc/budyk. The prefix is the one configured: `cmake --install
+# --prefix` does not move this file (tests/check_install.sh).
+install(FILES config.example.yaml DESTINATION ${CMAKE_INSTALL_FULL_SYSCONFDIR}/budyk)
 install(DIRECTORY rules/ DESTINATION share/budyk/rules)
 install(FILES docs/budyk.8 DESTINATION ${CMAKE_INSTALL_MANDIR}/man8)
 
@@ -178,6 +184,6 @@ message(STATUS "")
 message(STATUS "  budyk ${PROJECT_VERSION}")
 message(STATUS "  Platform:    ${BUDYK_PLATFORM}")
 message(STATUS "  LLM:         ${ENABLE_LLM}")
-message(STATUS "  exec():      ${ENABLE_EXEC}")
+message(STATUS "  exec():      built in, off until --enable-exec or rules.exec.enabled")
 message(STATUS "  Static:      ${STATIC_LINK}")
 message(STATUS "")

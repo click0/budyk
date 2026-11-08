@@ -93,7 +93,16 @@ Exit status: 0 clean, 1 problems found and repaired, 4 problems left,
 out of reach, lock held).
 .TP
 .B version
-Print version and exit.
+Print version and exit; also
+.B \-\-version
+and
+.BR \-V .
+.TP
+.B help
+Print the list of commands and exit; also
+.B \-\-help
+and
+.BR \-h .
 .SH DESCRIPTION
 budyk is a self-contained server monitoring daemon. It collects system
 metrics using an adaptive 3-level model (heartbeat / watchful / active),
@@ -183,9 +192,11 @@ daemon on the same directory, and
 refuse to start. The kernel releases it however the daemon exits.
 .TP
 .I /var/db/budyk/rule_state.tsv
-The rules' cooldowns and counters, written on shutdown and read on
-start
-.RB ( rules.persist_state ).
+The rules' cooldowns and counters, written every 60 seconds and on
+shutdown, and read on start
+.RB ( rules.persist_state ;
+.B rules.state_path
+names another file).
 .TP
 .I /var/db/budyk/sessions.tsv
 The dashboard's live sessions (mode 0600: the file holds bearer
