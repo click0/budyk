@@ -3,6 +3,7 @@
 #include "core/clock.h"
 
 #include "web/auth.h"
+#include "util/tmpfile.h"
 #include "web/sha1_base64.h"
 
 #include <fcntl.h>
@@ -227,10 +228,11 @@ int SessionStore::save(const char* path) const {
 
     std::string tmp = path;
     tmp += ".tmp";
-    // O_CREAT|0600 so the bearer tokens are never group/other-readable;
-    // fchmod afterwards in case umask wasn't honoured on this fs.
-    int fd = ::open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
-    if (fd < 0) return -errno;
+    // 0600 so the bearer tokens are never group/other-readable; fchmod
+    // afterwards in case umask wasn't honoured on this fs. A fresh file,
+    // no link followed (open_fresh_private()).
+    int fd = open_fresh_private(tmp);
+    if (fd < 0) return fd;
     ::fchmod(fd, 0600);
     std::FILE* f = ::fdopen(fd, "w");
     if (f == nullptr) { ::close(fd); ::unlink(tmp.c_str()); return -errno; }

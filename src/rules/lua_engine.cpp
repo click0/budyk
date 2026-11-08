@@ -6,6 +6,7 @@
 #include "rules/lua_bindings.h"
 #include "rules/lua_pattern.h"
 #include "rules/lua_stdlib.h"
+#include "util/tmpfile.h"
 
 extern "C" {
 #include <lauxlib.h>
@@ -564,8 +565,16 @@ int LuaEngine::save_state(const char* path) const {
     // crash mid-write can never leave a half-written state file.
     std::string tmp = path;
     tmp += ".tmp";
-    std::FILE* f = std::fopen(tmp.c_str(), "we");
-    if (f == nullptr) return -errno;
+    // A fresh file, no link followed (open_fresh_private()).
+    const int fd = open_fresh_private(tmp);
+    if (fd < 0) return fd;
+    std::FILE* f = ::fdopen(fd, "w");
+    if (f == nullptr) {
+        const int e = errno;
+        ::close(fd);
+        ::unlink(tmp.c_str());
+        return -e;
+    }
 
     // Any failed write (a full disk) keeps the old file: a truncated one
     // renamed over it would reset every cooldown, the alert storm this

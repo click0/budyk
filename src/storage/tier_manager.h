@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace budyk {
@@ -83,9 +84,16 @@ public:
     /// encode/write failure (of the sample or a folded record) or if the
     /// manager is not initialised. Unknown levels are rejected.
     int  store(const Sample& s);
-    /// After a store() that failed to write: which ring and why, e.g.
-    /// "tier1.ring: writing a record failed: No space left on device".
+    /// The rings whose last write failed, and why, e.g. "tier2.ring:
+    /// writing a record failed: No space left on device"; empty when none
+    /// is failing. A ring is failing until a write to it succeeds: tier2,
+    /// written once an L2 interval, failed at each and read as storing
+    /// again on the ticks between (the log flapped, 5760 lines a day).
     const std::string& store_error() const;
+
+    /// The capacity (records) a ring of `mb` MiB is opened with, as
+    /// init() computes it: what fsck holds a ring's header to.
+    static uint64_t capacity_for_mb(int mb);
 
     /// Writes the open fold windows (a partial window is still a summary
     /// of what was collected) and closes the rings.
@@ -147,7 +155,8 @@ private:
     RingFile tier1_, tier2_, tier3_;
     std::vector<CustomRing> custom_;
     bool     ready_ = false;
-    std::string store_error_;
+    std::vector<std::pair<const RingFile*, std::string>> failing_;   ///< in first-failed order
+    std::string store_error_;                                       ///< failing_, joined
 
     uint64_t       fold_l2_ns_ = 0;
     uint64_t       fold_l1_ns_ = 0;

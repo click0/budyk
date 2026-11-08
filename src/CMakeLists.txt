@@ -147,7 +147,7 @@ add_library(budyk_web STATIC
     web/sha1_base64.cpp
     web/spa.cpp
 )
-target_link_libraries(budyk_web PRIVATE budyk_core)
+target_link_libraries(budyk_web PRIVATE budyk_core budyk_util)
 # pthreads — HttpServer runs its accept loop on a thread of its own
 # (pthread_create: std::thread's constructor throws when it fails).
 find_package(Threads REQUIRED)

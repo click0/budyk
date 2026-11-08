@@ -201,6 +201,32 @@ int main() {
         ::rmdir(dir);
     }
 
+    // 3. open_fresh_private: a link at the path is removed, not written
+    //    through; a file there is made anew, 0600.
+    {
+        char tmpl[] = "/tmp/budyk_fresh_XXXXXX";
+        const char* dir = ::mkdtemp(tmpl);
+        assert(dir != nullptr);
+        const std::string target = std::string(dir) + "/target";
+        const std::string tmp    = std::string(dir) + "/state.tsv.tmp";
+        FILE* f = std::fopen(target.c_str(), "w");
+        assert(f != nullptr);
+        std::fputs("keep", f);
+        std::fclose(f);
+        assert(::symlink(target.c_str(), tmp.c_str()) == 0);
+        const int fd = open_fresh_private(tmp);
+        assert(fd >= 0);
+        assert(::write(fd, "new", 3) == 3);
+        ::close(fd);
+        struct stat st{};
+        assert(::lstat(tmp.c_str(), &st) == 0 && S_ISREG(st.st_mode) && (st.st_mode & 0777) == 0600);
+        assert(::stat(target.c_str(), &st) == 0 && st.st_size == 4);   // not written through
+        assert(open_fresh_private(std::string(dir) + "/no/such/dir/x") == -ENOENT);
+        ::unlink(tmp.c_str());
+        ::unlink(target.c_str());
+        ::rmdir(dir);
+    }
+
     std::printf("test_util: PASS\n");
     return 0;
 }

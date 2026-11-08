@@ -20,6 +20,7 @@ extern "C" {
 #include <cstdlib>
 #include <cstring>
 #include <csignal>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -1663,9 +1664,12 @@ int main() {
     }
 
     // N+12. save_state() that cannot write keeps the old file: a write
-    //       that fails (a full disk: /dev/full) used to be renamed over
-    //       it, and every cooldown reset on the next start.
-    if (access("/dev/full", W_OK) == 0) {
+    //       that fails (a full disk; RLIMIT_FSIZE stands in, EFBIG with
+    //       SIGXFSZ ignored) used to be renamed over it, and every
+    //       cooldown reset on the next start. The temp file is made anew
+    //       (open_fresh_private()): a link there, /dev/full say, is
+    //       removed, not written through.
+    {
         char tmpl[] = "/tmp/budyk_state_XXXXXX";
         const char* dir = ::mkdtemp(tmpl);
         assert(dir != nullptr);
@@ -1679,9 +1683,21 @@ int main() {
         assert(e.eval_tick(mk(0, 0, 0, 0)) == 1);                // cooldown 5
         assert(e.save_state(path.c_str()) == 0);
 
-        assert(::symlink("/dev/full", tmp.c_str()) == 0);        // the next write fails
+        assert(::symlink("/dev/null", tmp.c_str()) == 0);        // removed, not followed
         e.eval_tick(mk(0, 0, 0, 0));                             // cooldown 4
-        assert(e.save_state(path.c_str()) == -ENOSPC);
+        struct sigaction ign{}, old_act{};
+        ign.sa_handler = SIG_IGN;
+        sigemptyset(&ign.sa_mask);
+        assert(::sigaction(SIGXFSZ, &ign, &old_act) == 0);
+        struct rlimit lim{}, old_lim{};
+        assert(::getrlimit(RLIMIT_FSIZE, &old_lim) == 0);
+        lim = old_lim;
+        lim.rlim_cur = 16;                                       // the next write fails
+        assert(::setrlimit(RLIMIT_FSIZE, &lim) == 0);
+        const int rc = e.save_state(path.c_str());
+        assert(::setrlimit(RLIMIT_FSIZE, &old_lim) == 0);
+        ::sigaction(SIGXFSZ, &old_act, nullptr);
+        assert(rc == -EFBIG);
         assert(access(tmp.c_str(), F_OK) != 0);                  // the temp file is gone
 
         LuaEngine back;                                          // the old file is intact

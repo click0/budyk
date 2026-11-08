@@ -371,6 +371,48 @@ int main() {
         ::unlink(path);
     }
 
+    // 13. A ring is a regular file of one name: a symbolic link (root
+    //     running serve or fsck --repair on the service's data_dir sized
+    //     and wrote whatever budyk's user had linked there), a hard link,
+    //     a FIFO (it held fsck and suggest-rules in open()) and a directory
+    //     are refused, by open() and by read_header() alike.
+    {
+        char tmpl[] = "/tmp/budyk_rlink_XXXXXX";
+        const char* dir = ::mkdtemp(tmpl);
+        assert(dir != nullptr);
+        const std::string target = std::string(dir) + "/target";
+        const std::string link   = std::string(dir) + "/tier1.ring";
+        FILE* f = std::fopen(target.c_str(), "w");
+        assert(f != nullptr);
+        std::fclose(f);                                    // empty: open() would size it
+        assert(::symlink(target.c_str(), link.c_str()) == 0);
+        RingFile r;
+        assert(r.open(link.c_str(), 1, static_cast<uint32_t>(rsize), 4) == -17);
+        struct stat st{};
+        assert(::stat(target.c_str(), &st) == 0 && st.st_size == 0);   // untouched
+        RingFile::Header h{};
+        int err = 0;
+        assert(RingFile::read_header(link.c_str(), &h, &err) == -17);
+        ::unlink(link.c_str());
+
+        assert(::link(target.c_str(), link.c_str()) == 0);
+        assert(r.open(link.c_str(), 1, static_cast<uint32_t>(rsize), 4) == -19);
+        assert(RingFile::read_header(link.c_str(), &h, &err) == -19);
+        ::unlink(link.c_str());
+
+        assert(::mkfifo(link.c_str(), 0600) == 0);
+        assert(r.open_read_only(link.c_str(), 1, static_cast<uint32_t>(rsize), 4) == -18);
+        assert(RingFile::read_header(link.c_str(), &h, &err) == -18);
+        ::unlink(link.c_str());
+
+        assert(::mkdir(link.c_str(), 0700) == 0);
+        assert(RingFile::read_header(link.c_str(), &h, &err) == -18);
+        ::rmdir(link.c_str());
+        assert(std::string(RingFile::describe(-17)).find("symbolic link") != std::string::npos);
+        ::unlink(target.c_str());
+        ::rmdir(dir);
+    }
+
     std::printf("test_ring_file: PASS (record=%zu bytes)\n", rsize);
     return 0;
 }
