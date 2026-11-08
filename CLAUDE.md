@@ -360,7 +360,10 @@ The gates a local build does not show:
    Library work in C is charged to the instruction limit too
    (`LuaEngine::charge()`): `src/rules/lua_pattern.c` is Lua 5.4.7's
    own pattern matcher (MIT, kept as Lua writes it, the changes marked
-   "budyk") with a step count, `table.move` is charged, `print()` and
+   "budyk") with a step count, `table.move` and `table.concat`,
+   `insert`, `remove`, `sort` by what they visit (`sort` with no
+   comparator compares strings in C, so its elements' bytes are charged
+   too), `print()` and
    `alert()` by the bytes they write and `collectgarbage()` by the heap
    it walks
    ("stop" and the tuning options are refused), past the limit the hook

@@ -26,6 +26,14 @@ extern "C" {
 
 namespace budyk {
 
+// The bytes the Lua state is handed count as instructions too, this many
+// to one: a single instruction copies a string whatever its length
+// (`s .. "x"` with s of 2 MiB, s:upper(), table.concat), and a rule well
+// under the instruction limit took 25 s a tick that way. About what a
+// copy of that many bytes costs next to a VM instruction.
+constexpr size_t kAllocBytesPerInstruction = 64;
+
+
 namespace {
 
 constexpr const char* kEngineRegKey = "budyk.engine";
@@ -148,6 +156,8 @@ int plain_table_only(lua_State* L) {
         const bool has_pos = lua_isinteger(L, 2) != 0;
         const lua_Integer pos = has_pos ? lua_tointeger(L, 2) : 0;
         uint64_t work = 0;
+        uint64_t bits = 0;
+        for (uint64_t m = n; m != 0; m >>= 1) ++bits;
         if (std::strcmp(name, "insert") == 0) {
             if (lua_gettop(L) >= 3 && has_pos && pos >= 1 && static_cast<uint64_t>(pos) <= n) {
                 work = n - static_cast<uint64_t>(pos) + 1;
@@ -157,13 +167,32 @@ int plain_table_only(lua_State* L) {
                 work = n - static_cast<uint64_t>(pos);
             }
         } else if (std::strcmp(name, "sort") == 0) {
-            uint64_t bits = 0;
-            for (uint64_t m = n; m != 0; m >>= 1) ++bits;
             work = n * bits;
         } else {
             work = n;                                       // concat
         }
         budyk_lua_charge(L, work);
+        // sort with no comparator compares strings in C — an O(length)
+        // memcmp the count above saw as one unit, so a sort of n refs to
+        // one long string held the tick for seconds (2000 of a 4 MiB
+        // string: 5 s, no limit). Each element is compared about log2 n
+        // times, so its bytes are charged that many times. A comparator
+        // is Lua, and the count hook already charges and bounds it; so is
+        // concat's output, charged by the allocator as it is built.
+        if (std::strcmp(name, "sort") == 0 && n > 0 &&
+            (lua_gettop(L) < 2 || lua_isnil(L, 2))) {
+            uint64_t sbytes = 0;
+            for (uint64_t i = 1; i <= n; ++i) {
+                if (lua_rawgeti(L, 1, static_cast<lua_Integer>(i)) == LUA_TSTRING) {
+                    size_t len = 0;
+                    lua_tolstring(L, -1, &len);
+                    sbytes = sbytes > UINT64_MAX - len ? UINT64_MAX : sbytes + len;
+                }
+                lua_pop(L, 1);
+            }
+            const uint64_t units = sbytes / kAllocBytesPerInstruction;
+            budyk_lua_charge(L, bits == 0 || units > UINT64_MAX / bits ? UINT64_MAX : units * bits);
+        }
     }
     return call_upvalue(L);
 }
@@ -284,13 +313,6 @@ void open_sandbox_libs(lua_State* L) {
 // that an overrun is caught within a fraction of the limit, large
 // enough that the hook costs nothing measurable (test_rule_perf).
 constexpr int kHookInterval = 1000;
-
-// The bytes the Lua state is handed count as instructions too, this many
-// to one: a single instruction copies a string whatever its length
-// (`s .. "x"` with s of 2 MiB, s:upper(), table.concat), and a rule well
-// under the instruction limit took 25 s a tick that way. About what a
-// copy of that many bytes costs next to a VM instruction.
-constexpr size_t kAllocBytesPerInstruction = 64;
 
 // The CPU time a call may take for each instruction of its limit, and at
 // least: 1 s at the default 1 000 000, some 100 times what that many
