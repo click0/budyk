@@ -218,9 +218,10 @@ elif phase == "catchup":
         entry = "%.1f:%d" % (time.time() - started, count)
         # The newest sample's level, the gap between the two newest (the
         # ticks' spacing), and the daemon's own CPU since the poll
-        # before: a level not selected, a tick that takes long, and
-        # whether it computes or waits (a CI run saw one sample per
-        # poll, 2 Hz, for 60 s, with nothing to tell which).
+        # before: the fill level now reads the minimal set, so its rate
+        # is the host's load no longer (a full-set tick over 100 ms once
+        # made it ~2 Hz for 60 s), and a shortfall here is something
+        # else — a level not selected, or the daemon starved of CPU.
         if doc["samples"]:
             last = doc["samples"][-1]
             ts = int(last["ts"])
@@ -276,7 +277,17 @@ python3 "$DIR/measure.py" "$PORT" "$PID" active || fail=1
 stop
 
 # --- item 5: the catch-up of a full hot buffer ---------------------------
-# A level at 10 Hz fills the 300 records in 30 s.
+# A level at 10 Hz fills the 300 records in 30 s. It reads the minimal
+# set (load, memory, uptime): a tick's own cadence is the interval from
+# its start, so a tick that takes longer than 100 ms makes the rate
+# 1 / its duration, not 10 Hz. A custom level defaults to the full set
+# (every collector, the per-entity detail and the process scan over
+# /proc), whose cost grows with the host's process count and load: on a
+# contended CI runner that tick crossed 100 ms, the buffer filled at
+# ~2 Hz, and the catch-up frame came up short of 300. The catch-up this
+# tests — a full buffer served within 100 ms of a connect — does not
+# care what the samples hold, so the fill is made cheap and its rate is
+# the host's load no longer.
 cat > "$DIR/catchup.yaml" <<EOF
 data_dir: $DIR/catchup
 listen: 127.0.0.1
@@ -284,7 +295,7 @@ port: $PORT
 collection:
   hot_buffer: { capacity: 300 }
   levels:
-    - { name: fill, interval: 0.1, priority: 40, when: "true", storage_mb: 1 }
+    - { name: fill, interval: 0.1, priority: 40, when: "true", storage_mb: 1, metrics: minimal }
 EOF
 start "$DIR/catchup.yaml"
 python3 "$DIR/measure.py" "$PORT" "$PID" catchup || fail=1
