@@ -7,6 +7,10 @@
 #include "security/file_watcher.h"
 
 #include <fcntl.h>
+#if defined(BUDYK_LINUX)
+#include <sched.h>
+#include <sys/mount.h>
+#endif
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -507,6 +511,49 @@ int main() {
         ::unlink((dir + "/moved-in").c_str());
         ::rmdir(dir.c_str());
     }
+
+#if defined(BUDYK_LINUX)
+    // 17. A file bind-mounted on its own (docker -v FILE:FILE) and saved
+    //     by a rename where the mount does not reach: the path keeps the
+    //     old file, now with no name, and nothing that comes later is
+    //     seen. It went blind without a word; it is reported once
+    //     (replaced_outside()). In a mount namespace of its own: skipped
+    //     without the right to make one.
+    {
+        const std::string src = make_tmp(), dst = make_tmp();
+        const pid_t pid = ::fork();
+        assert(pid >= 0);
+        if (pid == 0) {
+            if (::unshare(CLONE_NEWNS) != 0 ||
+                ::mount(nullptr, "/", nullptr, MS_REC | MS_PRIVATE, nullptr) != 0 ||
+                ::mount(src.c_str(), dst.c_str(), nullptr, MS_BIND, nullptr) != 0) {
+                ::_exit(77);
+            }
+            FileWatcher fw;
+            if (fw.init() != 0 || fw.add(dst) <= 0) ::_exit(1);
+            touch(src + ".new", "saved");
+            if (::rename((src + ".new").c_str(), src.c_str()) != 0) ::_exit(2);
+            std::vector<FileChangeEvent> events;
+            if (!wait_for(fw, dst, FileChangeKind::Modified, &events)) ::_exit(3);
+            if (fw.replaced_outside() != 1) ::_exit(4);
+            touch(src, " and edited");                 // not seen, and not logged again
+            events.clear();
+            fw.poll(200, &events);
+            if (fw.replaced_outside() != 1) ::_exit(5);
+            fw.shutdown();
+            ::_exit(0);
+        }
+        int st = 0;
+        assert(::waitpid(pid, &st, 0) == pid && WIFEXITED(st));
+        if (WEXITSTATUS(st) == 77) {
+            std::printf("test_file_watcher: 17 skipped (no mount namespace here)\n");
+        } else {
+            assert(WEXITSTATUS(st) == 0);
+        }
+        ::unlink(src.c_str());
+        ::unlink(dst.c_str());
+    }
+#endif
 
     std::printf("test_file_watcher: PASS\n");
     return 0;

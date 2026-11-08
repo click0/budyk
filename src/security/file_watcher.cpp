@@ -44,6 +44,8 @@ FileWatcher::FileWatcher() = default;
 FileWatcher::~FileWatcher() { shutdown(); }
 
 std::size_t FileWatcher::count() const { return path_to_id_.size(); }
+std::size_t FileWatcher::replaced_outside() const { return outside_.size(); }
+
 std::size_t FileWatcher::pending() const { return pending_.size(); }
 
 // ---------------------------------------------------------------------------
@@ -365,6 +367,19 @@ int FileWatcher::poll(int timeout_ms, std::vector<FileChangeEvent>* out) {
                     const int wd = sys_watch(path);
                     off = wd != ev.wd;
                     if (off && wd >= 0 && id_to_paths_.count(wd) == 0) sys_unwatch(wd);
+                    // Still the old file at the path, and it has no name
+                    // left: replaced where this mount namespace does not
+                    // see, under a file bind-mounted on its own (docker
+                    // -v FILE:FILE). Nothing that comes later reaches it:
+                    // the watch went blind without a word.
+                    struct stat pst{};
+                    if (!off && ::stat(path.c_str(), &pst) == 0 && pst.st_nlink == 0 &&
+                        outside_.insert(path).second) {
+                        std::fprintf(stderr, "budyk: file watch: %s was replaced outside this "
+                                     "mount namespace and still names the old file (a file "
+                                     "bind-mounted on its own keeps it): later changes are not "
+                                     "seen; mount its directory instead\n", path.c_str());
+                    }
                 }
                 batch.emit(path, off ? FileChangeKind::Deleted : FileChangeKind::Modified);
                 if (off) lost(path);

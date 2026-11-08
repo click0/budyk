@@ -190,8 +190,10 @@ int budyk_collect_proc_freebsd_ex(budyk_sample_c* s, budyk_detail_c* d) {
 
 /* Clock sync: the kernel's NTP discipline from ntp_adjtime(2) with no
  * mode bits (read only, no privilege needed). Synchronised unless the
- * kernel says TIME_ERROR or STA_UNSYNC; offset in microseconds, or
- * nanoseconds under STA_NANO; maxerror in microseconds.
+ * kernel says TIME_ERROR or STA_UNSYNC, or the maximum error is 16 s or
+ * more: this kernel never sets STA_UNSYNC itself, and a clock whose ntpd
+ * died read synchronised for ever (budyk_ntp_synced()). Offset in
+ * microseconds, or nanoseconds under STA_NANO; maxerror in microseconds.
  */
 int budyk_collect_clock_freebsd(budyk_sample_c* s) {
     if (s == NULL) return -EINVAL;
@@ -201,10 +203,12 @@ int budyk_collect_clock_freebsd(budyk_sample_c* s) {
     const int state = ntp_adjtime(&tx);
     if (state < 0) return 0;          /* soft-fail: present stays 0 */
     s->clock.present      = 1;
-    s->clock.synced       = (uint8_t)(state != TIME_ERROR && (tx.status & STA_UNSYNC) == 0);
     s->clock.offset_ms    = (tx.status & STA_NANO) != 0 ? (double)tx.offset / 1.0e6
                                                         : (double)tx.offset / 1.0e3;
     s->clock.max_error_ms = (double)tx.maxerror / 1.0e3;
+    s->clock.synced       = (uint8_t)budyk_ntp_synced(state == TIME_ERROR,
+                                                      (tx.status & STA_UNSYNC) != 0,
+                                                      s->clock.max_error_ms);
     return 0;
 }
 
@@ -281,12 +285,15 @@ int budyk_collect_self_freebsd(budyk_sample_c* s) {
 #include <string.h>
 
 /* One deci-Kelvin sysctl into the hottest / count tally; 0 when it is
- * there. */
+ * there. An ACPI zone whose _TMP never read sane keeps -1 (-273.2 °C):
+ * it is there, and no reading (thermal.max_celsius read -273 where it
+ * was the only sensor). */
 static int note_temperature(const char* mib, double* hottest, uint32_t* count) {
     int    raw = 0;
     size_t sz  = sizeof(raw);
     if (sysctlbyname(mib, &raw, &sz, NULL, 0) != 0) return -1;
     const double celsius = (double)raw / 10.0 - 273.15;
+    if (!budyk_celsius_plausible(celsius)) return 0;
     if (celsius > *hottest) *hottest = celsius;
     ++*count;
     return 0;

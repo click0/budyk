@@ -207,6 +207,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   root running `serve` on the service user's data_dir held its start
   on a FIFO put there. The ring is synced through its own descriptor,
   and the directory opened as one (`O_DIRECTORY`, non-blocking).
+- **A filesystem left out, or one covered counted, for a tick**:
+  mountinfo is read twice, and the second read took line k's "hidden"
+  verdict from the first read's line k; a mount removed in between gave
+  every later line its neighbour's (a run with 2000 mounts going away:
+  the real one missing in 258 of 400 reads). And after `mount --move` an
+  older mount listed before the newer one it was moved onto was taken
+  for the hidden one: the point's numbers under the lower one's type and
+  device. Hidden is now by the mount tree (a mount another is mounted on
+  at its point, and every mount under it), looked up by mount id.
+- **A CPU taken offline or back made one sample of garbage**: the
+  kernel's aggregate counts an offline core's idle and iowait by another
+  counter, and the tick read iowait 330 %, the parts 387 %. That tick is
+  a baseline; a core that comes back starts anew in `cpu.cores`.
+- **FreeBSD: an ACPI thermal zone never set read -273 °C**
+  (`thermal.max_celsius` where it was the only sensor): like Linux,
+  127 °C or more and -60 °C or less are no reading.
+- **FreeBSD: the clock read synchronised for ever after ntpd or chronyd
+  died**: the kernel lets the maximum error grow but never marks the
+  clock unsynchronised itself. A maximum error of 16 s or more is
+  unsynchronised, as Linux's kernel has it.
+- **A watched file bind-mounted on its own (`docker -v FILE:FILE`) went
+  blind after the first save by rename on the host**, without a word:
+  the path keeps the old file. It is logged once ("mount its directory
+  instead"), and the README's Docker section says so.
 
 ## [0.8.7] — 2026-11-05
 

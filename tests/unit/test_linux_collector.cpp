@@ -684,6 +684,42 @@ int main() {
                         "cpu0 100 0 10 80 0 0 0 0 0 0\ncpu2 10 0 20 140 30 0 0 0 0 0\n");
         assert(budyk_collect_cpu_linux_ex(&cctx, &s, d.get()) == 0);
         assert(d->ncores == 2 && d->cores[1].id == 2);
+        assert(cctx.baseline == 1);                               // cpu1 went, cpu2 came
+
+        // CPU hotplug: an offline core's idle and iowait are counted by
+        // another counter in the aggregate, which moves when it goes or
+        // comes back (here idle +825, iowait -654 as cpu3 went). That
+        // tick is a baseline; the next one, the same cores, is a reading.
+        budyk_cpu_ctx_c hp;
+        std::memset(&hp, 0, sizeof(hp));
+        auto stat4 = [&](const char* agg, bool cpu3, const char* cpu3_line = "1 0 1 1 0 0 0 0 0 0") {
+            std::string t = std::string("cpu  ") + agg + "\n"
+                          "cpu0 1 0 1 1 0 0 0 0 0 0\ncpu1 1 0 1 1 0 0 0 0 0 0\n"
+                          "cpu2 1 0 1 1 0 0 0 0 0 0\n";
+            if (cpu3) t = t + "cpu3 " + cpu3_line + "\n";
+            fx.file("stat", t);
+        };
+        stat4("1000 0 1000 10000 1000 0 0 0 0 0", true);
+        assert(budyk_collect_cpu_linux_ex(&hp, &s, d.get()) == 0 && hp.baseline == 0);
+        stat4("1100 0 1100 10200 1050 0 0 0 0 0", true);
+        assert(budyk_collect_cpu_linux_ex(&hp, &s, d.get()) == 0 && hp.baseline == 0);
+        assert(near(s.cpu.iowait_percent, 50.0 * 100.0 / 450.0));
+        stat4("1200 0 1200 11225 396 0 0 0 0 0", false);         // cpu3 offline
+        assert(budyk_collect_cpu_linux_ex(&hp, &s, d.get()) == 0 && hp.baseline == 1);
+        stat4("1300 0 1300 11425 446 0 0 0 0 0", false);
+        assert(budyk_collect_cpu_linux_ex(&hp, &s, d.get()) == 0 && hp.baseline == 0);
+        assert(near(s.cpu.iowait_percent, 50.0 * 100.0 / 450.0));
+        // Back, its counters moved while it was away: anew, not a delta
+        // against what it read before it went.
+        stat4("1400 0 1400 10600 1100 0 0 0 0 0", true, "5 0 5 5 0 0 0 0 0 0");
+        assert(budyk_collect_cpu_linux_ex(&hp, &s, d.get()) == 0 && hp.baseline == 1);
+        assert(d->cores[3].id == 3 && d->cores[3].total_percent == 0.0);
+        stat4("1500 0 1500 10800 1150 0 0 0 0 0", true, "6 0 6 6 0 0 0 0 0 0");
+        assert(budyk_collect_cpu_linux_ex(&hp, &s, d.get()) == 0 && hp.baseline == 0);
+        assert(near(d->cores[3].total_percent, 100.0 * 2.0 / 3.0));
+        // Gone and back between two reads: the same cores, idle went back.
+        stat4("1600 0 1600 10700 1200 0 0 0 0 0", true, "7 0 7 7 0 0 0 0 0 0");
+        assert(budyk_collect_cpu_linux_ex(&hp, &s, d.get()) == 0 && hp.baseline == 1);
 
         auto diskstats = [&](unsigned rs, unsigned ws, unsigned r, unsigned w, unsigned ticks,
                              bool with_sdb) {
@@ -1063,12 +1099,12 @@ int main() {
         assert(near(s.thermal.max_celsius, 61.25));
     }
 
-    // 12. Filesystems against a fixture mountinfo: a mount point that
-    //     comes again later is a filesystem hidden under another mount on
-    //     the same point, and only the top one is listed (the hidden line
-    //     took the top's numbers under its own name and type); a device
-    //     name's \040 is a space; a mount point budyk cannot reach is
-    //     counted as unreadable, not listed, and does not fail the group.
+    // 12. Filesystems against a fixture mountinfo: a filesystem another is
+    //     mounted on at the same point (that one's parent is it) is
+    //     hidden, and only the top one is listed (the hidden line took the
+    //     top's numbers under its own name and type); a device name's
+    //     \040 is a space; a mount point budyk cannot reach is counted as
+    //     unreadable, not listed, and does not fail the group.
     {
         Fixture fx;
         const std::string over = fx.root + "/over";
@@ -1080,7 +1116,7 @@ int main() {
         if (can_lock) assert(::chmod(locked.c_str(), 0000) == 0);
         const std::string info =
             "30 25 0:30 / " + over + " rw - hidden_fs /dev/under rw\n"
-            "31 25 0:31 / " + over + " rw - topfs /dev/my\\040disk rw\n"
+            "31 30 0:31 / " + over + " rw - topfs /dev/my\\040disk rw\n"
             "32 25 0:32 / " + locked + "/mnt rw - ext4 /dev/sdz1 rw\n";
         fx.file("self/mountinfo", info);
         budyk_linux_set_proc_root(fx.root.c_str());
@@ -1094,6 +1130,39 @@ int main() {
         assert(std::string(d->mounts[0].mount) == over);
         assert(s.fs.unreadable == (can_lock ? 1u : 0u));
         if (can_lock) ::chmod(locked.c_str(), 0700);
+    }
+
+    // 12b. Hidden by the mount tree, not by the order of the lines: after
+    //      `mount --move` an older mount (77) moved onto a newer one (78)
+    //      is listed first, and the order said the moved one, on top, was
+    //      hidden: the point's numbers went out under the lower one's
+    //      type and device. A mount under a hidden one (81 under 80) is
+    //      reached through the top one too, and left out.
+    {
+        // The fixture's points are all one filesystem, and a later one
+        // counts as a bind mount of the first: one case a read, the type
+        // of the first listed tells which line was taken.
+        auto first_type = [](const std::string& lines) {
+            Fixture fx;
+            const std::string p = fx.root + "/p";
+            assert(::mkdir(p.c_str(), 0700) == 0);
+            assert(::mkdir((p + "/sub").c_str(), 0700) == 0);
+            std::string info = lines;
+            for (size_t at; (at = info.find("@")) != std::string::npos;) info.replace(at, 1, p);
+            fx.file("self/mountinfo", info);
+            budyk_linux_set_proc_root(fx.root.c_str());
+            std::unique_ptr<budyk_detail_c> d(new budyk_detail_c());
+            budyk_sample_c s;
+            std::memset(&s, 0, sizeof(s));
+            assert(budyk_collect_fs_linux_ex(&s, d.get()) == 0);
+            budyk_linux_set_proc_root(nullptr);
+            return d->nmounts > 0 ? std::string(d->mounts[0].type) : std::string();
+        };
+        assert(first_type("77 78 0:77 / @ rw - movedfs /dev/olderA rw\n"
+                          "78 25 0:78 / @ rw - lowerfs /dev/newerB rw\n") == "movedfs");
+        assert(first_type("80 25 0:80 / @ rw - coveredfs /dev/c rw\n"
+                          "81 80 0:81 / @/sub rw - underfs /dev/u rw\n"
+                          "82 80 0:82 / @ rw - coverfs /dev/t rw\n") == "coverfs");
     }
 
     // 13. NVMe native multipath: each path of a namespace (nvme0c0n1) is a

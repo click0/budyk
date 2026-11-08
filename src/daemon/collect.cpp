@@ -237,6 +237,13 @@ void collect_one(Sample* s, CollectContext* ctx, const MetricSet& set) {
             have_lists &= ~kRateLists;
         }
     }
+    // A core taken offline or back since the previous read: the kernel's
+    // aggregate idle and iowait of a core change counters with it, and
+    // the tick read iowait 330 % (budyk_cpu_ctx_c::baseline).
+    if (ctx->cpu.baseline != 0) {
+        have       &= ~kGroupCpu;
+        have_lists &= ~kDetailCores;
+    }
     ctx->last_wall_ns = s->timestamp_nanos;
     ctx->last_mono_ns = mono;
     ctx->last_groups = read;

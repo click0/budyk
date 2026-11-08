@@ -9,6 +9,7 @@
 
 #include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* Not worth watching: kernel pseudo filesystems, images that are always
@@ -61,15 +62,80 @@ static uint64_t hash_str(const char* s) {
     return h;
 }
 
-/* The mount points of every mountinfo line, in order: a line whose mount
- * point comes again later is a filesystem hidden under another mount on
- * the same point, and what the point names now is the top one (stat()
- * and statvfs() of the hidden line gave the top's numbers under the
- * hidden one's name and type: /dev/shm mounted twice, an image mounted
- * over a directory). Hashes, not names: a node with thousands of
- * mounts is a few KB here. Past the array a line is taken as it is. */
+/* The mounts of the first pass: each line's mount id, its parent's, and
+ * its mount point, for the "hidden" check below. A filesystem another is
+ * mounted on at the same point is hidden, and what the point names now
+ * is the top one (stat() and statvfs() of the hidden line gave the top's
+ * numbers under the hidden one's name and type: /dev/shm mounted twice,
+ * an image mounted over a directory). Hashes, not names: a node with
+ * thousands of mounts is a few hundred KB here. Past the array a line is
+ * taken as it is. */
 #define BUDYK_FS_MAX_LINES 8192
-static uint64_t g_points[BUDYK_FS_MAX_LINES];
+static struct {
+    unsigned      id, parent;
+    uint64_t      point;    /* 0: the line did not read */
+    int32_t       up;       /* the parent's index here, -1 if it is not listed */
+    unsigned char hidden;
+} g_mounts[BUDYK_FS_MAX_LINES];
+static uint32_t g_by_id[BUDYK_FS_MAX_LINES];   /* g_mounts indices, by id */
+static size_t   g_nmounts;
+
+static int by_id_cmp(const void* a, const void* b) {
+    const unsigned x = g_mounts[*(const uint32_t*)a].id, y = g_mounts[*(const uint32_t*)b].id;
+    return x < y ? -1 : x > y;
+}
+
+/* The g_mounts index of mount `id`, -1 if the first pass did not list it. */
+static int32_t find_mount(unsigned id) {
+    size_t lo = 0, hi = g_nmounts;
+    while (lo < hi) {
+        const size_t mid = lo + (hi - lo) / 2;
+        const unsigned m = g_mounts[g_by_id[mid]].id;
+        if (m == id) return (int32_t)g_by_id[mid];
+        if (m < id) lo = mid + 1; else hi = mid;
+    }
+    return -1;
+}
+
+/* By the mount tree, not by the lines' order or number: hidden is a
+ * mount whose child is mounted at the same point, and every mount under
+ * a hidden one (its point is reached through the top one). The order of
+ * the lines said it before: after `mount --move` an older mount can be
+ * listed before the newer one it was moved onto, and the moved one, on
+ * top, was the one left out. And the second read took line k's verdict
+ * from the first read's line k: a mount removed between them gave every
+ * later line its neighbour's (a filesystem missing from a tick, or one
+ * covered counted, its statvfs() reaching the server covering it). */
+static void mark_hidden(void) {
+    for (size_t i = 0; i < g_nmounts; ++i) g_by_id[i] = (uint32_t)i;
+    qsort(g_by_id, g_nmounts, sizeof(g_by_id[0]), by_id_cmp);
+    for (size_t i = 0; i < g_nmounts; ++i) {
+        g_mounts[i].hidden = 0;
+        const int32_t up = find_mount(g_mounts[i].parent);
+        g_mounts[i].up = up >= 0 && (size_t)up != i ? up : -1;
+    }
+    for (size_t i = 0; i < g_nmounts; ++i) {
+        const int32_t up = g_mounts[i].up;
+        if (up >= 0 && g_mounts[i].point != 0 && g_mounts[up].point == g_mounts[i].point) {
+            g_mounts[up].hidden = 1;
+        }
+    }
+    /* Down the tree, a level a round (mounts nest a few deep), to the
+     * mounts under a hidden one; not to the one on it at its own point,
+     * which is what hides it. */
+    for (int round = 0; round < 64; ++round) {
+        int changed = 0;
+        for (size_t i = 0; i < g_nmounts; ++i) {
+            const int32_t up = g_mounts[i].up;
+            if (!g_mounts[i].hidden && up >= 0 && g_mounts[up].hidden &&
+                g_mounts[up].point != g_mounts[i].point) {
+                g_mounts[i].hidden = 1;
+                changed = 1;
+            }
+        }
+        if (!changed) break;
+    }
+}
 
 /* The autofs mounts of the first pass (their mount id and point): a
  * filesystem mounted on one is an automount, left out. Each stat() and
@@ -82,13 +148,6 @@ static struct { unsigned id; uint64_t point; } g_autofs[BUDYK_FS_MAX_AUTOFS];
 static int on_autofs(unsigned parent, uint64_t point, size_t nautofs) {
     for (size_t i = 0; i < nautofs; ++i) {
         if (g_autofs[i].id == parent && g_autofs[i].point == point) return 1;
-    }
-    return 0;
-}
-
-static int mounted_over(size_t index, size_t nlines) {
-    for (size_t j = index + 1; j < nlines; ++j) {
-        if (g_points[j] == g_points[index]) return 1;
     }
     return 0;
 }
@@ -128,22 +187,27 @@ int budyk_collect_fs_linux_ex(budyk_sample_c* s, budyk_detail_c* d) {
     FILE* f = fopen(path, "re");
     if (f == NULL) return -errno;
 
-    /* First pass: every line's mount point, for mounted_over(), and the
-     * autofs mounts, for on_autofs(). */
-    size_t nlines = 0, nautofs = 0;
+    /* First pass: every mount's id, parent and point, for mark_hidden(),
+     * and the autofs mounts, for on_autofs(). */
+    size_t nautofs = 0;
     char   line[4096];
-    while (nlines < BUDYK_FS_MAX_LINES && fgets(line, sizeof(line), f) != NULL) {
+    g_nmounts = 0;
+    while (g_nmounts < BUDYK_FS_MAX_LINES && fgets(line, sizeof(line), f) != NULL) {
         char dev[1024], mnt[1024], type[64], opts[1024];
         unsigned id = 0, parent = 0;
-        const int ids = sscanf(line, "%u %u", &id, &parent);
-        const int ok  = parse_mountinfo(line, mnt, type, dev, opts);
-        g_points[nlines++] = ok ? hash_str(mnt) : 0;
-        if (ok && ids == 2 && strcmp(type, "autofs") == 0 && nautofs < BUDYK_FS_MAX_AUTOFS) {
+        if (sscanf(line, "%u %u", &id, &parent) != 2) continue;
+        const int ok = parse_mountinfo(line, mnt, type, dev, opts);
+        g_mounts[g_nmounts].id     = id;
+        g_mounts[g_nmounts].parent = parent;
+        g_mounts[g_nmounts].point  = ok ? hash_str(mnt) : 0;
+        ++g_nmounts;
+        if (ok && strcmp(type, "autofs") == 0 && nautofs < BUDYK_FS_MAX_AUTOFS) {
             g_autofs[nautofs].id    = id;
             g_autofs[nautofs].point = hash_str(mnt);
             ++nautofs;
         }
     }
+    mark_hidden();
     if (fseek(f, 0, SEEK_SET) != 0) {
         const int e = errno;
         fclose(f);
@@ -152,14 +216,14 @@ int budyk_collect_fs_linux_ex(budyk_sample_c* s, budyk_detail_c* d) {
 
     dev_t    seen[256];
     size_t   nseen = 0;
-    size_t   index = 0;
     while (fgets(line, sizeof(line), f) != NULL) {
-        const size_t at = index++;
         char dev[1024], mnt[1024], type[64], opts[1024];
         unsigned id = 0, parent = 0;
         const int ids = sscanf(line, "%u %u", &id, &parent);
         if (!parse_mountinfo(line, mnt, type, dev, opts)) continue;
-        if (at < nlines && mounted_over(at, nlines)) continue;
+        /* The verdict by mount id: one listed since the first read is taken. */
+        const int32_t at = ids == 2 ? find_mount(id) : -1;
+        if (at >= 0 && g_mounts[at].hidden) continue;
         if (ids == 2 && nautofs > 0 && on_autofs(parent, hash_str(mnt), nautofs)) continue;
         if (skipped_type(type) || read_only(opts)) continue;
         budyk_linux_unescape_mount(mnt);

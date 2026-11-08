@@ -262,7 +262,10 @@ FreeBSD 15.1.
   `docker compose -f addons/docker/docker-compose.yml up -d`. The
   filesystem readings are the container's mounts, not the host's: mount
   what should be watched (`/home:/host/home:ro`), or run the binary on
-  the host for them.
+  the host for them. For `security.file_watch`, mount the directory of a
+  watched file, not the file: a file mounted on its own keeps the one it
+  was given, and a save by rename on the host (vipw, sed -i, a package
+  upgrade) is never seen inside (budyk logs it once).
 
 ## Quick start
 

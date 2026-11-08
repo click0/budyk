@@ -191,8 +191,10 @@ int budyk_collect_proc_linux_ex(budyk_sample_c* s, budyk_detail_c* d) {
 
 /* Clock sync: the kernel's NTP discipline, read with adjtimex(2) and no
  * mode bits (no privilege needed). Synchronised unless the kernel says
- * TIME_ERROR or STA_UNSYNC; the offset is in microseconds, or in
- * nanoseconds under STA_NANO; maxerror in microseconds.
+ * TIME_ERROR or STA_UNSYNC, or the maximum error is 16 s or more
+ * (budyk_ntp_synced()); the offset is in microseconds, or in
+ * nanoseconds under STA_NANO; maxerror in microseconds. chrony leaves
+ * STA_UNSYNC set unless it runs with rtcsync, as timedatectl shows.
  */
 int budyk_collect_clock_linux(budyk_sample_c* s) {
     if (s == NULL) return -EINVAL;
@@ -202,10 +204,12 @@ int budyk_collect_clock_linux(budyk_sample_c* s) {
     const int state = adjtimex(&tx);
     if (state < 0) return 0;          /* soft-fail: present stays 0 */
     s->clock.present      = 1;
-    s->clock.synced       = (uint8_t)(state != TIME_ERROR && (tx.status & STA_UNSYNC) == 0);
     s->clock.offset_ms    = (tx.status & STA_NANO) != 0 ? (double)tx.offset / 1.0e6
                                                         : (double)tx.offset / 1.0e3;
     s->clock.max_error_ms = (double)tx.maxerror / 1.0e3;
+    s->clock.synced       = (uint8_t)budyk_ntp_synced(state == TIME_ERROR,
+                                                      (tx.status & STA_UNSYNC) != 0,
+                                                      s->clock.max_error_ms);
     return 0;
 }
 
@@ -268,7 +272,7 @@ static void thermal_read(const char* path, double* hottest, uint32_t* count) {
     fclose(f);
     if (ok != 1) return;
     const double celsius = (double)milli / 1000.0;
-    if (celsius >= 127.0 || celsius <= -60.0) return;
+    if (!budyk_celsius_plausible(celsius)) return;
     if (celsius > *hottest) *hottest = celsius;
     ++*count;
 }
