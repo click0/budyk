@@ -27,13 +27,19 @@ public:
     /// 0 means attempt now. Also sweeps expired entries.
     int    retry_after(const std::string& peer, uint64_t now_sec);
     /// Returns true when this failure is the one that blocks the peer,
-    /// so the caller can log it once.
-    bool   record_failure(const std::string& peer, uint64_t now_sec);
+    /// so the caller can log it once; `*filled_global`, when given, true
+    /// when it is the one that fills the window of every address (every
+    /// login refused, which went unsaid).
+    bool   record_failure(const std::string& peer, uint64_t now_sec,
+                          bool* filled_global = nullptr);
     void   record_success(const std::string& peer);
 
     size_t tracked() const;             ///< addresses with a live window
     int    max_failures() const;
     int    window_sec()   const;
+    /// The window of every address: global_max, and never below
+    /// max_failures (one address under its own limit was refused).
+    int    global_max()   const;
 
 private:
     struct Entry {

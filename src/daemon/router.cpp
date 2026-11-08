@@ -101,26 +101,12 @@ std::string host_name(std::string h) {
     return h;
 }
 
-// Whether a request was sent to one of budyk's own names. Listening on
-// loopback without a password, budyk is open to the local user only; but
-// a page on another site can point a name of its own at 127.0.0.1 once
-// it has loaded (DNS rebinding), and the browser then takes budyk for
-// that site: the page reads the API and the WebSocket as its own origin,
-// so the Origin check passes too. Such a request carries that name in
-// Host. budyk's names are an IP address, localhost and *.localhost
-// (which browsers keep to loopback), this host's name and the names in
-// web.allowed_hosts (a reverse proxy's). X-Forwarded-Host does not count:
-// the page sets it as it likes. No Host (not a browser) is let in. On a
-// network address (open to the network anyway) any name is; with a
-// password on, any name but for the login (`login`): a page under
-// another name has no session, but it could post guesses at the
-// password and read the answer (401 or 200), five a minute.
-bool own_host(const HttpRequest& req, const Config& cfg, const std::string& hostname,
-              bool login) {
-    if (std::strncmp(cfg.listen_addr, "127.", 4) != 0) return true;
-    if (cfg.auth_enabled && !login) return true;
-    const std::string raw = req.header("Host");
-    if (raw.empty()) return true;
+// Whether `raw` (a Host header, or one entry of X-Forwarded-Host) names
+// budyk: an IP address, localhost and *.localhost (which browsers keep
+// to loopback), this host's name, or a name in web.allowed_hosts.
+bool own_name(std::string raw, const Config& cfg, const std::string& hostname) {
+    while (!raw.empty() && (raw.front() == ' ' || raw.front() == '\t')) raw.erase(0, 1);
+    while (!raw.empty() && (raw.back() == ' ' || raw.back() == '\t')) raw.pop_back();
     const std::string h = host_name(raw);
     if (h.empty()) return false;
     unsigned char addr[16];
@@ -134,6 +120,71 @@ bool own_host(const HttpRequest& req, const Config& cfg, const std::string& host
         if (ascii_ieq(h, allowed.c_str())) return true;
     }
     return false;
+}
+
+// Whether a request was sent to one of budyk's own names (own_name()).
+// Listening on loopback without a password, budyk is open to the local
+// user only; but a page on another site can point a name of its own at
+// 127.0.0.1 once it has loaded (DNS rebinding), and the browser then
+// takes budyk for that site: the page reads the API and the WebSocket as
+// its own origin, so the Origin check passes too. Such a request carries
+// that name in Host. No Host (not a browser) is let in. With a password
+// on, any name but for the login (`login`): a page under another name
+// has no session, but it could post guesses at the password and read the
+// answer (401 or 200), five a minute.
+//
+// Behind a reverse proxy that rewrites Host to 127.0.0.1 (nginx's and
+// Apache's defaults), Host passed for every request: the browser's name
+// is in X-Forwarded-Host, which Apache adds and nginx can be told to
+// set. Each of its entries must be budyk's too, where it was not read
+// (the page can set it, but only to fail its own request). A proxy that
+// rewrites Host and passes no name leaves budyk unable to tell: the
+// README says to pass one.
+//
+// On a network address any name is let in (budyk is open to the network
+// anyway), unless web.allowed_hosts lists some: then the names are
+// checked there as on loopback. A page on a LAN host's browser could
+// rebind to the LAN address, and the list did nothing there.
+bool own_host(const HttpRequest& req, const Config& cfg, const std::string& hostname,
+              bool login) {
+    if (std::strncmp(cfg.listen_addr, "127.", 4) != 0 && cfg.web_allowed_hosts.empty()) return true;
+    if (cfg.auth_enabled && !login) return true;
+    const std::string raw = req.header("Host");
+    if (raw.empty()) return true;
+    if (!own_name(raw, cfg, hostname)) return false;
+    const std::string fwd = req.header("X-Forwarded-Host");
+    for (size_t at = 0; at <= fwd.size(); ) {
+        size_t comma = fwd.find(',', at);
+        if (comma == std::string::npos) comma = fwd.size();
+        const std::string entry = fwd.substr(at, comma - at);
+        if (entry.find_first_not_of(" \t") != std::string::npos && !own_name(entry, cfg, hostname)) {
+            return false;
+        }
+        at = comma + 1;
+    }
+    return true;
+}
+
+// The client's address for the login throttle and its log line: the TCP
+// peer, or, when the peer is one of web.trusted_proxies, the last entry of
+// its X-Forwarded-For (the address that proxy took the connection from;
+// an entry before it is whatever the client sent). Behind the recommended
+// proxy every client was its 127.0.0.1: five wrong logins a minute from
+// anyone kept everyone out, and the log named the proxy.
+std::string client_address(const HttpRequest& req, const Config& cfg) {
+    bool trusted = false;
+    for (const std::string& p : cfg.web_trusted_proxies) trusted = trusted || p == req.peer;
+    if (!trusted) return req.peer;
+    const std::string xff = req.header("X-Forwarded-For");
+    const size_t comma = xff.rfind(',');
+    std::string last = comma == std::string::npos ? xff : xff.substr(comma + 1);
+    while (!last.empty() && (last.front() == ' ' || last.front() == '\t')) last.erase(0, 1);
+    while (!last.empty() && (last.back() == ' ' || last.back() == '\t')) last.pop_back();
+    unsigned char a[16];
+    if (::inet_pton(AF_INET, last.c_str(), a) == 1 || ::inet_pton(AF_INET6, last.c_str(), a) == 1) {
+        return last;
+    }
+    return req.peer;   // none, or not an address: the proxy's own
 }
 
 // The path the session cookie is for: the proxy's X-Forwarded-Prefix
@@ -266,7 +317,8 @@ HttpHandler make_router(const RouterDeps& d) {
             // every blocked address blocked an hour longer (Retry-After
             // said so), and one stepped forward unblocked them all.
             const uint64_t now_s = now_monotonic_ns() / 1000000000ULL;
-            if (const int wait = login_limiter.retry_after(req.peer, now_s); wait > 0) {
+            const std::string client = client_address(req, cfg);
+            if (const int wait = login_limiter.retry_after(client, now_s); wait > 0) {
                 budyk::HttpResponse r;
                 r.status       = 429;
                 r.content_type = "application/json";
@@ -282,17 +334,24 @@ HttpHandler make_router(const RouterDeps& d) {
                     "{\"error\":\"missing password\"}\n"};
             }
             if (budyk::argon2_verify(pw, cfg.password_hash) != 0) {
-                if (login_limiter.record_failure(req.peer, now_s)) {
+                bool all = false;
+                if (login_limiter.record_failure(client, now_s, &all)) {
                     std::fprintf(stderr,
                         "budyk serve: %d failed logins from %s; refusing attempts for %d s\n",
-                        login_limiter.max_failures(), req.peer.c_str(),
+                        login_limiter.max_failures(), client.c_str(),
                         login_limiter.window_sec());
+                }
+                if (all) {
+                    std::fprintf(stderr,
+                        "budyk serve: %d failed logins from all addresses within %d s (the "
+                        "last from %s); refusing every login until the window ends\n",
+                        login_limiter.global_max(), login_limiter.window_sec(), client.c_str());
                 }
                 return budyk::HttpResponse{
                     401, "application/json",
                     "{\"error\":\"invalid credentials\"}\n"};
             }
-            login_limiter.record_success(req.peer);
+            login_limiter.record_success(client);
             const std::string tok = sessions.create();
             if (tok.empty()) {
                 return budyk::HttpResponse{

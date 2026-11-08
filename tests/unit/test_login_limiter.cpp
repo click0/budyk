@@ -87,6 +87,23 @@ int main() {
         assert(l.retry_after("a", 11) == 0);
     }
 
+    // 6. The failure that fills the window of every address says so (it
+    //    went unsaid: every login refused, the log naming no one), and
+    //    the window is never below one address's limit (100 per address
+    //    were refused at the global 50).
+    {
+        LoginLimiter l(2, 60, 3);
+        bool all = true;
+        assert(!l.record_failure("a", 10, &all) && !all);
+        assert(!l.record_failure("b", 10, &all) && !all);
+        assert(!l.record_failure("c", 10, &all) && all);
+        assert(l.retry_after("d", 11) > 0);
+        LoginLimiter wide(100, 60, 50);
+        assert(wide.global_max() == 100);
+        for (int i = 0; i < 99; ++i) assert(!wide.record_failure("one", 10));
+        assert(wide.retry_after("one", 11) == 0);
+    }
+
     std::printf("test_login_limiter: PASS\n");
     return 0;
 }

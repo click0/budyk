@@ -97,6 +97,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **32-bit builds:** a ring's size is computed in 64 bits, and glibc's
   `off_t` is 64 bits (`_FILE_OFFSET_BITS=64`): a ring over 4 GiB was cut
   and refused at the next start, one over 2 GiB failed its `ftruncate`.
+- **Behind a proxy that rewrites `Host` (nginx's and Apache's
+  defaults), the DNS-rebinding check let every name in**: `Host` was the
+  proxy's `127.0.0.1`, and the browser's name, in `X-Forwarded-Host`,
+  was not read. A rebinding page read the API, through Apache the
+  WebSocket too, and with a password on could post guesses. Each entry
+  of `X-Forwarded-Host` is held to budyk's names as `Host` is, and the
+  README says the proxy must pass the browser's name.
+- **Behind the recommended reverse proxy, five wrong logins a minute
+  kept everyone out**: every client was the proxy's address to the
+  throttle. `web.trusted_proxies` names the proxies whose
+  `X-Forwarded-For` (its last entry) is the client.
+- **One byte per connection held the HTTP thread for the whole 5 s
+  bound**, 64 queued ones for minutes: the head must be in within 1 s
+  of its first byte; the body has the rest.
+- **`web.allowed_hosts` did nothing on a network address**, without a
+  word: the names are checked there once it lists some, and a network
+  listen without a password is warned about at start-up.
+- **The cap on failed logins from all addresses engaged silently**: the
+  failure that fills it is logged, and a `max_login_failures` above 50
+  raises it (one address was refused below its own limit).
+- **README:** two hosts of the same name on the same port share a
+  session cookie.
 
 ## [0.8.7] — 2026-11-05
 

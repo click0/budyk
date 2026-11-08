@@ -267,6 +267,17 @@ int cmd_serve(int argc, char* argv[], const char* version) {
             "unencrypted. Bind to 127.0.0.1 and put a TLS reverse proxy in front.\n",
             cfg.listen_addr);
     }
+    // Open to the network without a password: said, and so is what
+    // web.allowed_hosts adds (a page in a browser on that network could
+    // rebind a name of its own to this address and read the API).
+    if (!cfg.auth_enabled && std::strncmp(cfg.listen_addr, "127.", 4) != 0) {
+        std::fprintf(stderr,
+            "budyk serve: WARNING: listen=%s is not loopback and web.auth is off: anyone who "
+            "reaches the port reads the API and the stream%s\n", cfg.listen_addr,
+            cfg.web_allowed_hosts.empty()
+                ? ", and so can a page in their browser under a name of its own (DNS "
+                  "rebinding; web.allowed_hosts limits the names)" : "");
+    }
 
     if (::pipe2(g_wake_pipe, O_NONBLOCK | O_CLOEXEC) != 0) {
         // Not fatal: without it a new client waits for the current sleep
