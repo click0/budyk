@@ -55,7 +55,15 @@ int budyk_collect_netstat_freebsd(budyk_netstat_ctx_c* ctx, budyk_sample_c* s) {
     struct icmpstat icmps;
     len = sizeof(icmps);
     memset(&icmps, 0, sizeof(icmps));
+#if defined(__LP64__)
     const int icmp_ok = sysctlbyname("net.inet.icmp.stats", &icmps, &len, NULL, 0) == 0;
+#else
+    /* struct icmpstat's fields are u_long, 4 bytes here, where the kernel
+     * keeps (and copies out) a uint64_t for each: the sysctl fails on a
+     * 64-bit kernel and folds two fields into one on a 32-bit one (the
+     * echo replies counted as other types). The group is left out. */
+    const int icmp_ok = 0;
+#endif
     /* Errors in: what icmp_input() dropped as malformed; messages in:
      * those it took, by type, and the errors, as Linux counts InMsgs. */
     const uint64_t ierr = (uint64_t)icmps.icps_badcode + (uint64_t)icmps.icps_tooshort +

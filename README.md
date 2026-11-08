@@ -560,7 +560,7 @@ Metrics are refreshed every tick as globals:
 | `net` | `rx_bytes_per_sec`, `tx_bytes_per_sec` (the devices' interfaces: a NIC, Wi-Fi, a VM's virtio, but not an SR-IOV VF under another device, which has its traffic; not a veth, bridge, bond, VLAN, tun/tap, epair or WireGuard interface, whose traffic a device carries too; every interface's when there is no device, as in a container), `interface_count` (every one but loopback) |
 | `proc` | `total`, `running`, `sleeping`, `blocked`, `stopped`, `zombie`, `threads` |
 | `entropy` | `available_bits`, `present` |
-| `thermal` | `max_celsius`, `sensor_count`, `present` |
+| `thermal` | `max_celsius`, `sensor_count`, `present` (the ACPI zones and the hwmon chips; not drivetemp, whose read is a command to the drive; a reading of +127 or -128 °C, an input with nothing wired to it, or a sensor that says it is faulty is none) |
 | `tcp` | `established`, `time_wait`, `active_opens_per_sec`, `passive_opens_per_sec`, `retransmits_per_sec`, `in_segments_per_sec`, `out_segments_per_sec`, `in_errors_per_sec`, `present` |
 | `udp` | `in_datagrams_per_sec`, `out_datagrams_per_sec`, `no_port_per_sec`, `in_errors_per_sec`, `present` |
 | `icmp` | `in_msgs_per_sec`, `out_msgs_per_sec`, `in_errors_per_sec`, `in_dest_unreachs_per_sec`, `present` (ICMP over IPv4) |
@@ -576,7 +576,8 @@ collections: `cpu.cores` (an array: `#cpu.cores`, `cpu.cores[1].iowait_percent`;
 `disk.devices["sda"]` (`read_bytes_per_sec`, `write_bytes_per_sec`,
 `reads_per_sec`, `writes_per_sec`, `busy_percent`),
 `net.interfaces["eth0"]` (`rx/tx_bytes_per_sec`, `rx/tx_packets_per_sec`,
-`rx/tx_errors_per_sec`, `rx_drops_per_sec`, `up`), `fs.mounts["/var"]`
+`rx/tx_errors_per_sec`, `rx_drops_per_sec`, `up`: the interface set up,
+not its link; a pulled cable leaves it true), `fs.mounts["/var"]`
 (`type`, `device`, `total_bytes`, `used_bytes`, `avail_bytes`,
 `used_percent`, `inodes_total`, `inodes_used`, `inodes_used_percent`)
 and `proc.top`, an array of the top 10 processes by CPU and the top 10

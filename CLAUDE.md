@@ -59,7 +59,13 @@ the code still differ, the code wins and this file says how.
   same point is left out (FreeBSD too: `budyk_freebsd_mount_hidden()`,
   or `statfs()` of the point asked the covering NFS server every tick).
   `/proc` mounted `hidepid` leaves the process group out (pid 1
-  unreadable means the rest are hidden). FreeBSD's kernel processes
+  unreadable means the rest are hidden), and so do FreeBSD's
+  `security.bsd.see_other_uids` / `see_other_gids` at 0 and
+  mac_seeotheruids for a budyk not root. A disk the kernel hides (an
+  NVMe multipath path, `nvme0c0n1`), a DSA switch port (its `iflink`
+  another interface's), a filesystem automounted on autofs and the
+  network-like types (virtiofs, ocfs2, gfs2, ...) are left out of the
+  totals; drivetemp's sensors are not read. FreeBSD's kernel processes
   (P_SYSTEM) count as sleeping whatever their state, as Linux's kernel
   threads do (`budyk_freebsd_proc_counted_state()`). The rates are
   changes over the wall-clock interval between reads: a tick across a
@@ -397,6 +403,12 @@ The gates a local build does not show:
 - The per-entity detail (cores, disks, interfaces, filesystems, top
   processes) is live only: not in the rings, so not in the history.
 - FreeBSD 13 not in CI.
+- A 32-bit kernel's device counters (`/proc/net/dev`, diskstats sectors)
+  wrap at 2^32: the interval of a wrap reads 0. A wrap cannot be told
+  from a counter reset there (a device made again), and counting one as
+  a wrap gave a 64-bit host a spike of up to 4 GiB.
+- FreeBSD on ILP32 (i386, armv7) leaves the ICMP group out: its
+  `struct icmpstat` fields are `u_long`, the kernel's `uint64_t`.
 - cgroup limits are not read: budyk in a container limited with `-m` or
   `--cpus` reports the host's memory and CPU count (`/proc/meminfo`,
   `/proc/stat`), so `mem.available_percent` cannot show the container's

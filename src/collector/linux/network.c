@@ -44,8 +44,27 @@ static int iface_is_device(const char* name) {
  * carries crosses one as well: a container's packet went through its
  * veth, docker0 and eth0, three times in the total. A bond's or a
  * bridge's ports are devices under a master that is not: they count. */
+/* An interface number from /sys/class/net/<if>/<file>; -1 unreadable. */
+static long iface_number(const char* name, const char* file) {
+    char path[512];
+    snprintf(path, sizeof(path), "%s/class/net/%.64s/%s", budyk_linux_sys_root(), name, file);
+    FILE* f = fopen(path, "re");
+    if (f == NULL) return -1;
+    long v = -1;
+    if (fscanf(f, "%ld", &v) != 1) v = -1;
+    fclose(f);
+    return v;
+}
+
 static int iface_physical(const char* name) {
     if (!iface_is_device(name)) return 0;
+    /* A port of a switch chip (DSA: lan1..lan4 on a router board) is a
+     * device whose link is another interface, its conduit (eth0): iflink
+     * is the conduit's ifindex. The traffic crosses both, and counted
+     * twice. */
+    const long iflink = iface_number(name, "iflink");
+    const long ifindex = iface_number(name, "ifindex");
+    if (iflink > 0 && ifindex > 0 && iflink != ifindex) return 0;
     char path[512], target[512];
     snprintf(path, sizeof(path), "%s/class/net/%.64s/master", budyk_linux_sys_root(), name);
     const ssize_t n = readlink(path, target, sizeof(target) - 1);

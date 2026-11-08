@@ -17,7 +17,8 @@
 #   filesystems   df -P -k for each mount budyk lists
 #   interfaces    /sys/class/net (Linux); ifconfig -l (FreeBSD); no loopback
 #   disks         /sys/block (Linux, less loop / ram / zram / dm / md / fd /
-#                 sr / nbd); kern.disks (FreeBSD, less cd)
+#                 sr / nbd, and a hidden one: an NVMe multipath path);
+#                 kern.disks (FreeBSD, less cd)
 #   a busy loop   one process spinning for 4 s: about 100 % of one CPU in
 #                 budyk's top processes, its share in the CPU total
 #   a write       64 MB of random bytes, fsync'ed, in the current
@@ -235,7 +236,13 @@ else:
     # As the collector's is_noise_name(): stacked devices (zd, bcache,
     # drbd) are counted on the disks under them.
     deny = ("loop", "ram", "zram", "dm-", "md", "fd", "sr", "nbd", "zd", "bcache", "drbd")
-    sys_disks = {n for n in os.listdir("/sys/block") if not n.startswith(deny)}
+    def hidden(n):   # as is_hidden_disk(): a path of an NVMe multipath namespace
+        try:
+            with open("/sys/block/%s/hidden" % n) as f:
+                return f.read().strip() == "1"
+        except OSError:
+            return False
+    sys_disks = {n for n in os.listdir("/sys/block") if not n.startswith(deny) and not hidden(n)}
     disks_cmp = disks
 if disks_cmp == sys_disks:
     ok("disks: %s" % " ".join(sorted(disks)))

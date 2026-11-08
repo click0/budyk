@@ -79,6 +79,38 @@ static int is_partition_name(const char* name) {
         || sd_family_partition(name, "xvd");
 }
 
+/* A disk the kernel hides (/sys/class/block/<name>/hidden is 1): with
+ * NVMe native multipath, each path of a namespace (nvme0c0n1) is a hidden
+ * disk of its own next to the head (nvme0n1), and both count every I/O
+ * in /proc/diskstats: the totals read twice what moved. Without sysfs, a
+ * name of the paths' form, nvme<N>c<N>n<N>. */
+static int is_hidden_disk(const char* name) {
+    char path[512];
+    snprintf(path, sizeof(path), "%s/class/block/%.64s/hidden", budyk_linux_sys_root(), name);
+    FILE* f = fopen(path, "re");
+    if (f != NULL) {
+        int hidden = 0;
+        if (fscanf(f, "%d", &hidden) != 1) hidden = 0;
+        fclose(f);
+        return hidden == 1;
+    }
+    snprintf(path, sizeof(path), "%s/class/block/%.64s", budyk_linux_sys_root(), name);
+    if (access(path, F_OK) == 0) return 0;      /* sysfs is there, without the file */
+    if (strncmp(name, "nvme", 4) != 0) return 0;
+    const char* p = name + 4;
+    int parts = 0;
+    for (const char* sep = "cn"; *sep != '\0'; ++sep) {
+        if (!isdigit((unsigned char)*p)) return 0;
+        while (isdigit((unsigned char)*p)) ++p;
+        if (*p != *sep) return 0;
+        ++p;
+        ++parts;
+    }
+    if (!isdigit((unsigned char)*p)) return 0;
+    while (isdigit((unsigned char)*p)) ++p;
+    return parts == 2 && *p == '\0';
+}
+
 int budyk_collect_disk_linux(budyk_disk_ctx_c* ctx, budyk_sample_c* s) {
     return budyk_collect_disk_linux_ex(ctx, s, NULL);
 }
@@ -117,6 +149,7 @@ int budyk_collect_disk_linux_ex(budyk_disk_ctx_c* ctx, budyk_sample_c* s, budyk_
         if (parsed < 11) continue;
         if (is_noise_name(name))     continue;
         if (is_partition_name(name)) continue;
+        if (is_hidden_disk(name))    continue;
 
         /* Sectors of 512 bytes. */
         budyk_counted_add(ctx->dev, ctx->ndev, &counted_pos, counted, &ncounted, name,
