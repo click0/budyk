@@ -43,4 +43,10 @@ bool write_private_tmp(const char* prefix, const std::string& body,
     return true;
 }
 
+int open_fresh_private(const std::string& path) {
+    if (::unlink(path.c_str()) != 0 && errno != ENOENT) return -errno;
+    const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+    return fd >= 0 ? fd : -errno;
+}
+
 } // namespace budyk

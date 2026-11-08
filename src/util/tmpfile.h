@@ -17,4 +17,12 @@ namespace budyk {
 bool write_private_tmp(const char* prefix, const std::string& body,
                        char* path_out, size_t cap);
 
+/// A descriptor for writing `path` anew, mode 0600 and close-on-exec, the
+/// temp file of a write-then-rename (rule_state.tsv.tmp, sessions.tsv.tmp)
+/// in data_dir: what was at `path` is unlinked first (a link is removed,
+/// not followed), and the file is made O_EXCL | O_NOFOLLOW. Root running
+/// serve on the service's data_dir wrote through a link budyk's user had
+/// put there. -errno on failure.
+int open_fresh_private(const std::string& path);
+
 } // namespace budyk

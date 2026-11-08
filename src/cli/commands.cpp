@@ -88,7 +88,9 @@ int load_samples_for_suggest(const char* ring_path,
     const uint64_t future   = now + uint64_t{60} * 1000000000ULL;
 
     std::vector<uint8_t> buf(record_size);
-    out->reserve(static_cast<size_t>(valid));
+    // No reserve for the whole ring: what is in the window is pushed as it
+    // is read. A full 20 GB tier2 asked for 20 GB at once, whatever
+    // --window, and a bad_alloc ended the command (exit 134).
     if (in_ring != nullptr) *in_ring += valid;
 
     // Walk every valid slot. The ring file's slots are ring-rotated when

@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <cstring>
+#include <limits>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -56,7 +57,11 @@ int RingFile::open_impl(const char* path, uint8_t tier, uint32_t record_size,
     if (fd_ >= 0)                    return -1;  // already open
     if (record_size == 0 || capacity == 0) return -2;
 
-    const size_t file_bytes = kHeaderSize + static_cast<size_t>(record_size) * capacity;
+    // In 64 bits: a size_t of 32 bits (i386, armv7) cut a ring over 4 GiB
+    // and the next start refused the file it had grown into.
+    if (capacity > (UINT64_MAX - kHeaderSize) / record_size) return -6;
+    const uint64_t file_bytes = kHeaderSize + static_cast<uint64_t>(record_size) * capacity;
+    if (file_bytes > static_cast<uint64_t>(std::numeric_limits<off_t>::max())) return -6;
 
     // CLOEXEC: a child forked by rule exec() or an alert channel must
     // not hold the ring open — it could outlive the daemon and write
@@ -64,12 +69,24 @@ int RingFile::open_impl(const char* path, uint8_t tier, uint32_t record_size,
     // 0600: the history (load, memory, process counts, file-watch events)
     // is the daemon's, like sessions.tsv; readers go through the API.
     // An existing file keeps its mode.
-    int fd = read_only ? ::open(path, O_RDONLY | O_CLOEXEC)
-                       : ::open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
-    if (fd < 0)                      { last_errno_ = errno; return -3; }
+    // No symbolic link (O_NOFOLLOW), and below a regular file of one name:
+    // root running serve or fsck --repair on the service's data_dir opened
+    // whatever budyk's user had put there under a ring's name (a link to
+    // a root-owned file, sized and given a header), as the lock already
+    // refuses. O_NONBLOCK: a FIFO there held the open (fsck, suggest-rules).
+    int fd = read_only ? ::open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK)
+                       : ::open(path, O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK, 0600);
+    if (fd < 0) {
+        last_errno_ = errno;
+        struct stat lst{};
+        if (::lstat(path, &lst) == 0 && S_ISLNK(lst.st_mode)) { last_errno_ = 0; return -17; }
+        return -3;
+    }
 
     struct stat st{};
     if (::fstat(fd, &st) != 0)       { last_errno_ = errno; ::close(fd); return -4; }
+    if (!S_ISREG(st.st_mode))        { ::close(fd); return -18; }
+    if (st.st_nlink > 1)             { ::close(fd); return -19; }
     bool fresh = (st.st_size == 0);
     if (fresh && read_only)          { ::close(fd); return -6; }
 
@@ -77,7 +94,7 @@ int RingFile::open_impl(const char* path, uint8_t tier, uint32_t record_size,
         if (::ftruncate(fd, static_cast<off_t>(file_bytes)) != 0) {
             last_errno_ = errno; ::close(fd); return -5;
         }
-    } else if (static_cast<size_t>(st.st_size) != file_bytes) {
+    } else if (static_cast<uint64_t>(st.st_size) != file_bytes) {
         ::close(fd); return -6;
     } else if (!read_only && header_is_blank(fd)) {
         // Sized but never given its header: a start that died between
@@ -136,14 +153,22 @@ int RingFile::open_impl(const char* path, uint8_t tier, uint32_t record_size,
 int RingFile::read_header(const char* path, Header* out, int* err) {
     if (err != nullptr) *err = 0;
     if (path == nullptr || out == nullptr) return -2;
-    const int fd = ::open(path, O_RDONLY | O_CLOEXEC);
-    if (fd < 0) { if (err != nullptr) *err = errno; return -3; }
+    const int fd = ::open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
+    if (fd < 0) {
+        const int e = errno;
+        struct stat lst{};
+        if (::lstat(path, &lst) == 0 && S_ISLNK(lst.st_mode)) return -17;
+        if (err != nullptr) *err = e;
+        return -3;
+    }
     struct stat st{};
     if (::fstat(fd, &st) != 0) {
         if (err != nullptr) *err = errno;
         ::close(fd);
         return -4;
     }
+    if (!S_ISREG(st.st_mode)) { ::close(fd); return -18; }   // a FIFO held fsck; a directory
+    if (st.st_nlink > 1)      { ::close(fd); return -19; }
     if (st.st_size == 0) { ::close(fd); return -15; }   // what a failed header write leaves
     uint8_t h[kHeaderSize];
     const ssize_t n = st.st_size >= static_cast<off_t>(kHeaderSize)
@@ -279,6 +304,9 @@ const char* RingFile::describe(int rc) {
         case -14: return "writing the header failed";
         case -15: return "empty file";
         case -16: return "blank header (all zero bytes)";
+        case -17: return "a symbolic link (refused: put data_dir itself where the rings should be)";
+        case -18: return "not a regular file";
+        case -19: return "has another name (a hard link: refused)";
         default:  return "unknown error";
     }
 }

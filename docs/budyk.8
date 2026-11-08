@@ -83,7 +83,13 @@ Check every ring file in the data directory (the one in the config if
 none is given): the header, then each record (CRC, level, time order).
 Damaged records are reported (readers skip them; they cannot be
 repaired), and so are records of another level and a clock that stepped
-back.
+back, and a ring
+.B budyk serve
+would refuse: one under another tier's name, or, with the config, of
+another size than its
+.IR storage
+settings give. A symbolic link, a hard link or anything but a regular
+file under a ring's name is refused, by both.
 .B \-\-repair
 counts in the records written past the index and never counted, which
 a crash between a record's write and the index update leaves; it needs

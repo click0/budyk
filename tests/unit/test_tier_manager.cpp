@@ -119,6 +119,37 @@ int main() {
         assert(tm.store_error() == std::string("tier1.ring: writing a record failed: ") +
                                    std::strerror(EFBIG));
         assert(tm.store(mk(Level::L3, 1001ULL)) == 0);
+        assert(tm.store_error().empty());                     // tier1 stores again
+        tm.close();
+        rmrf(d);
+    }
+
+    // 4b'. A ring is failing until a write to it succeeds: tier2 (an L2
+    //      record, once an L2 interval) failed, the next ticks' tier1
+    //      writes succeeded, and the log said "storing samples again"
+    //      while tier2 still failed at each of its writes.
+    {
+        const std::string d = mkdtmp();
+        TierManager tm;
+        assert(tm.init(d.c_str(), 1, 1, 1) == 0);
+        struct sigaction ign{}, old{};
+        ign.sa_handler = SIG_IGN;
+        sigemptyset(&ign.sa_mask);
+        assert(::sigaction(SIGXFSZ, &ign, &old) == 0);
+        struct rlimit lim{}, old_lim{};
+        assert(::getrlimit(RLIMIT_FSIZE, &old_lim) == 0);
+        lim = old_lim;
+        lim.rlim_cur = 64;
+        assert(::setrlimit(RLIMIT_FSIZE, &lim) == 0);
+        const int rc = tm.store(mk(Level::L2, 2000ULL));
+        assert(::setrlimit(RLIMIT_FSIZE, &old_lim) == 0);
+        ::sigaction(SIGXFSZ, &old, nullptr);
+        assert(rc == -4);
+        assert(tm.store_error().compare(0, 10, "tier2.ring") == 0);
+        assert(tm.store(mk(Level::L3, 2001ULL)) == 0);        // tier1 writes: tier2 still failing
+        assert(tm.store_error().compare(0, 10, "tier2.ring") == 0);
+        assert(tm.store(mk(Level::L2, 2002ULL)) == 0);        // tier2 writes
+        assert(tm.store_error().empty());
         tm.close();
         rmrf(d);
     }

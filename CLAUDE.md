@@ -75,18 +75,26 @@ the code still differ, the code wins and this file says how.
   new ring's header goes in with `pwrite` before it is mapped (a store
   through the mapping into the sparse file's hole is SIGBUS on a full
   disk); a ring of the right size with an all-zero header is made anew; a
-  store that fails is logged once with its reason
-  (`TierManager::store_error()`). The folds of spec §3.4.1 are
-  `TierAggregator`, called from `TierManager::store()` while a level
-  faster than the ring's collects (L3 or a custom level into the L2 and
-  L1 rings, L2 into the L1 ring): one L2 record per L2 interval, one L1
-  record per L1 interval, flagged `folded`; `query_all()` (`/api/range?level=all`) shows
+  store that fails is logged once with its reason, per ring until that
+  ring stores again (`TierManager::store_error()`). A ring is opened as a
+  regular file of one name, no symbolic link (`RingFile`: root running
+  serve or `fsck --repair` on the service's data_dir wrote through
+  whatever budyk's user had put there), and the temp files of a
+  write-then-rename are made anew (`open_fresh_private()`). The folds of
+  spec §3.4.1 are `TierAggregator`, called from `TierManager::store()`
+  while a level faster than the ring's collects (L3 or a custom level
+  into the L2 and L1 rings, L2 into the L1 ring): one L2 record per L2
+  interval, one L1 record per L1 interval, flagged `folded`;
+  `query_all()` (`/api/range?level=all`) shows
   each stretch once, at the finest level still on disk. A ring is in
   write order, which a clock step back or a power loss (a previous lap's
   records under the write index) can leave out of time order: a `query()`
   walks newest-first from the record `until` names (a binary search) and
   looks past a stretch of older records (`kDisorderLookback`, 1024)
-  before it stops; `query_all()`'s binary searches do not. A conversion
+  before it stops; `query_all()`'s binary searches do not, and neither
+  does the search for `until`: a run written since a clock step back,
+  above where it lands, is not read (nothing in the tree sends `until`).
+  A conversion
   of an older ring copies the record a crash left unindexed too.
 - **Web:** hand-written HTTP/1.1 + WebSocket (RFC 6455) server in `src/web`;
   the SPA is a string literal in `src/web/spa.cpp`.

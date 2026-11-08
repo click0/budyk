@@ -75,6 +75,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for a custom level; README.uk.md says what README.md says (the
   session cookie's name, the login's checks, the global cap, a password
   change, `service budyk reload`, the alert and `print()` limits).
+- **Root running `budyk serve` or `fsck --repair` on the service's
+  data_dir wrote through links budyk's user could plant**: a ring or a
+  temp file (`rule_state.tsv.tmp`, `sessions.tsv.tmp`) that was a link
+  to a root-owned file was opened, sized and written. A ring must be a
+  regular file of one name, not a symbolic link (put data_dir itself
+  where the rings should be), as the lock already had to be; the temp
+  files are made anew, not opened through what was there.
+- **A FIFO under a ring's name hung `fsck` and `suggest-rules`** in
+  `open()`; a directory was "shorter than a ring header". Anything but
+  a regular file is refused, with that reason.
+- **`fsck` said "ok" for rings `budyk serve` refuses**: two rings
+  swapped (another tier's name), or a ring of another size than the
+  config's `storage` settings. Both are problems now (exit 4).
+- **On a full disk the store error log flapped**: tier2, written once an
+  L2 interval, failed at each, and the ticks between, whose tier1 writes
+  succeeded, logged "storing samples again" (some 5760 lines a day). A
+  ring is failing until a write to it succeeds.
+- **`suggest-rules` reserved memory for the whole ring**, whatever
+  `--window`: a full 20 GB tier2 ended it with `bad_alloc`.
+- **32-bit builds:** a ring's size is computed in 64 bits, and glibc's
+  `off_t` is 64 bits (`_FILE_OFFSET_BITS=64`): a ring over 4 GiB was cut
+  and refused at the next start, one over 2 GiB failed its `ftruncate`.
 
 ## [0.8.7] — 2026-11-05
 

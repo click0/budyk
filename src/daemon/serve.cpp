@@ -959,14 +959,15 @@ int cmd_serve(int argc, char* argv[], const char* version) {
         // on-demand: the hot buffer only. A store that fails (a full
         // disk) is logged when it starts and when it stops: the history
         // used to stop without a word.
+        // Per ring: one written once an L2 interval failed at each and read
+        // as storing again on the ticks between, while another succeeded.
         if (!on_demand) {
-            if (tm.store(s) != 0) {
-                if (store_error != tm.store_error()) {
-                    store_error = tm.store_error();
-                    std::fprintf(stderr, "budyk serve: storing a sample failed: %s\n",
-                                 store_error.c_str());
-                }
-            } else if (!store_error.empty()) {
+            tm.store(s);
+            if (!tm.store_error().empty() && tm.store_error() != store_error) {
+                store_error = tm.store_error();
+                std::fprintf(stderr, "budyk serve: storing a sample failed: %s\n",
+                             store_error.c_str());
+            } else if (tm.store_error().empty() && !store_error.empty()) {
                 std::fprintf(stderr, "budyk serve: storing samples again\n");
                 store_error.clear();
             }

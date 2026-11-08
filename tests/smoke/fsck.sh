@@ -10,7 +10,10 @@
 #     by moving write_idx back one: fsck finds the record (exit 4),
 #     --repair counts it in (exit 1), and a later check is clean; done
 #     again, the next `budyk serve` counts it in on start and logs it;
-#   - a damaged record: reported, cannot be repaired (exit 4).
+#   - a damaged record: reported, cannot be repaired (exit 4);
+#   - a ring budyk serve would refuse (another tier's name, another size
+#     than the config's) is a problem, and a FIFO or a symbolic link under
+#     a ring's name is refused, not opened (a FIFO hung fsck).
 #
 #   tests/smoke/fsck.sh path/to/budyk [port]
 
@@ -200,6 +203,44 @@ elif [ "$st" -ne 0 ] && grep -q "File too large" "$DIR/small.log"; then
     echo "ok   a file size limit under the rings' sizes is reported (exit $st)"
 else
     echo "FAIL: under ulimit -f: exit $st: $(cat "$DIR/small.log")"; fail=1
+fi
+
+# fsck holds a ring to what budyk serve opens: the tier its name says,
+# and with the config the capacity its size gives (it said "ok" for rings
+# serve refused: tier2 and tier3 swapped, tier1_max_mb changed). A FIFO
+# under a ring's name is refused, not waited on (fsck hung in open()),
+# and so is a symbolic link (root's fsck --repair sized and wrote what
+# budyk's user had linked there).
+cp -r "$DIR/data" "$DIR/agree"
+mv "$DIR/agree/tier2.ring" "$DIR/agree/swap"
+mv "$DIR/agree/tier3.ring" "$DIR/agree/tier2.ring"
+mv "$DIR/agree/swap" "$DIR/agree/tier3.ring"
+st=0
+"$BIN" fsck "$DIR/agree" > "$DIR/agree.out" 2>&1 || st=$?
+if [ "$st" = 4 ] && grep -q "tier2.ring: written for tier 3, opened as tier 2" "$DIR/agree.out"; then
+    echo "ok   fsck: a ring under another tier's name is a problem (exit 4)"
+else
+    echo "FAIL: fsck on swapped rings: exit $st: $(cat "$DIR/agree.out")"; fail=1
+fi
+cp "$DIR/config.yaml" "$DIR/size.yaml"
+printf 'storage: { tier1_max_mb: 7 }\n' >> "$DIR/size.yaml"
+st=0
+"$BIN" fsck --config "$DIR/size.yaml" > "$DIR/size.out" 2>&1 || st=$?
+if [ "$st" = 4 ] && grep -q "tier1.ring: holds .* records, budyk serve opens it for .* (this config)" "$DIR/size.out"; then
+    echo "ok   fsck --config: a ring of another size than the config's is a problem (exit 4)"
+else
+    echo "FAIL: fsck with tier1_max_mb changed: exit $st: $(cat "$DIR/size.out")"; fail=1
+fi
+mkdir "$DIR/fifo"
+mkfifo "$DIR/fifo/tier1.ring"
+ln -s "$DIR/data/tier2.ring" "$DIR/fifo/tier2.ring"
+st=0
+timeout 10 "$BIN" fsck "$DIR/fifo" > "$DIR/fifo.out" 2>&1 || st=$?
+if [ "$st" = 4 ] && grep -q "tier1.ring: .*not a regular file" "$DIR/fifo.out" &&
+   grep -q "tier2.ring: .*symbolic link" "$DIR/fifo.out"; then
+    echo "ok   fsck: a FIFO and a symbolic link under a ring's name are refused, not opened"
+else
+    echo "FAIL: fsck on a FIFO and a link: exit $st: $(cat "$DIR/fifo.out")"; fail=1
 fi
 
 if grep -qE 'ERROR: (Address|Leak)Sanitizer|ThreadSanitizer|runtime error:' "$DIR/log" "$DIR/fsck.out"; then

@@ -73,6 +73,10 @@ endif()
 # Platform detection
 include(cmake/platform.cmake)
 
+# A 64-bit off_t on a 32-bit glibc too: a ring over 2 GiB (tier1_max_mb)
+# failed its ftruncate there. FreeBSD's off_t is 64 bits always.
+add_compile_definitions(_FILE_OFFSET_BITS=64)
+
 # Options
 option(ENABLE_LLM "Build the LLM client of suggest-rules --ai (Tier B); OFF leaves it out of the binary" ON)
 # Reserved for a binary with exec() compiled out (CLAUDE.md): nothing

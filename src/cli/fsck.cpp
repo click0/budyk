@@ -16,6 +16,7 @@
 #include "core/clock.h"
 #include "storage/codec.h"
 #include "storage/ring_check.h"
+#include "storage/tier_manager.h"
 #include "util/dir_lock.h"
 
 #include <algorithm>
@@ -213,6 +214,7 @@ int cmd_fsck(int argc, char* argv[]) {
     }
 
     Config cfg;
+    const bool have_cfg = dir == nullptr;     // the capacities are the config's
     if (dir == nullptr) {
         std::string err;
         if (config_load(config_path, &cfg, &err) != 0) {
@@ -291,6 +293,40 @@ int cmd_fsck(int argc, char* argv[]) {
         }
         if (report(name, c, repair, writer)) ++left;
         if (c.recovered > 0) ++repaired;
+        // What budyk serve opens the ring as: the tier its name says, and
+        // with the config the capacity its size gives. fsck said "ok" for
+        // a ring serve refuses (tier2 and tier3 swapped, tier1_max_mb
+        // changed), and the start failed after a clean check.
+        if (c.header_rc == 0) {
+            uint8_t  tier = 0;
+            uint64_t cap  = 0;
+            if (name == "tier1.ring" || name == "tier2.ring" || name == "tier3.ring") {
+                tier = static_cast<uint8_t>(name[4] - '0');
+                const int mb = tier == 1 ? cfg.tier1_max_mb : tier == 2 ? cfg.tier2_max_mb
+                                                            : cfg.tier3_max_mb;
+                if (have_cfg) cap = TierManager::capacity_for_mb(mb);
+            } else {
+                tier = kCustomRingTier;
+                const std::string level = name.substr(6, name.size() - 11);   // level-<name>.ring
+                for (const auto& lv : cfg.scheduler.custom_levels) {
+                    if (have_cfg && lv.name == level) cap = TierManager::capacity_for_mb(lv.storage_mb);
+                }
+            }
+            if (c.header.tier != tier) {
+                std::printf("%s: written for tier %u, opened as tier %u by budyk serve: it "
+                            "refuses to start (a ring renamed? give it back its name)\n",
+                            name.c_str(), static_cast<unsigned>(c.header.tier),
+                            static_cast<unsigned>(tier));
+                ++left;
+            } else if (cap != 0 && c.header.capacity != cap) {
+                std::printf("%s: holds %llu records, budyk serve opens it for %llu (this "
+                            "config): it refuses to start (storage_mb / tierN_max_mb changed? "
+                            "move the file aside or restore the old size)\n", name.c_str(),
+                            static_cast<unsigned long long>(c.header.capacity),
+                            static_cast<unsigned long long>(cap));
+                ++left;
+            }
+        }
     }
     if (lock_fd >= 0) ::close(lock_fd);
 

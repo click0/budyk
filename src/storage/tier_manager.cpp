@@ -322,22 +322,39 @@ int TierManager::append(RingFile* ring, const Sample& s) {
     uint8_t buf[1024];
     size_t  len = 0;
     if (record_encode(s, buf, sizeof(buf), &len) != 0) return -3;
-    if (ring->append(buf, len) != 0) {
-        // Kept for the daemon's log: a full disk used to stop the
-        // history without a word.
+    const bool failed = ring->append(buf, len) != 0;
+    // Kept for the daemon's log, per ring: a full disk used to stop the
+    // history without a word.
+    auto it = failing_.begin();
+    while (it != failing_.end() && it->first != ring) ++it;
+    if (failed) {
         const char* leaf = ring == &tier1_ ? "tier1.ring" : ring == &tier2_ ? "tier2.ring"
                          : ring == &tier3_ ? "tier3.ring" : nullptr;
         for (const auto& c : custom_) {
             if (c.ring.get() == ring) leaf = c.leaf.c_str();
         }
-        store_error_ = std::string(leaf != nullptr ? leaf : "ring") + ": writing a record failed: " +
-                       std::strerror(ring->last_errno() != 0 ? ring->last_errno() : EIO);
-        return -4;
+        std::string why = std::string(leaf != nullptr ? leaf : "ring") + ": writing a record failed: " +
+                          std::strerror(ring->last_errno() != 0 ? ring->last_errno() : EIO);
+        if (it == failing_.end()) failing_.emplace_back(ring, std::move(why));
+        else                      it->second = std::move(why);
+    } else if (it != failing_.end()) {
+        failing_.erase(it);
+    } else {
+        return 0;                                    // nothing failing changed
     }
-    return 0;
+    store_error_.clear();
+    for (const auto& f : failing_) {
+        if (!store_error_.empty()) store_error_ += "; ";
+        store_error_ += f.second;
+    }
+    return failed ? -4 : 0;
 }
 
 const std::string& TierManager::store_error() const { return store_error_; }
+
+uint64_t TierManager::capacity_for_mb(int mb) {
+    return records_from_mb(mb, record_size_for_sample());
+}
 
 int TierManager::feed(TierAggregator* agg, RingFile* ring, uint64_t window_ns,
                       const Sample& s) {
