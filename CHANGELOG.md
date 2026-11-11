@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.8] — 2026-11-11
+
+The ninth round of module reviews, and the delivery fix for 0.8.7, which
+went out with no files: the Linux packages are built next to the
+tarballs now, and the release dry run checks the publish job's patterns
+match all 20 assets. The Linux collectors no longer double-count an NVMe
+multipath disk, read an unwired Super I/O input or an ACPI zone never
+set as a temperature, read drivetemp every tick (a command to the drive
+that kept it spinning and a hung one held the tick), count a DSA switch
+port twice, keep an autofs automount mounted by stat'ing it, or report a
+`see_other_uids`/`hidepid` process table of one; a CPU taken offline or
+back makes a baseline, not a sample of garbage, and hidden mounts are
+found by the mount tree, not the order of the lines. In storage, a ring
+is a regular file of one name (not a link or a FIFO root could be made
+to follow or hang on), `fsck` fails a swapped or mis-sized ring, a full
+disk's store error is logged once per ring, `suggest-rules` no longer
+reserves the whole ring, sizes are 64-bit, a query with `until` after a
+clock step back reads the run written since, `level=all` keeps the fold
+where a finer ring's history begins, and a conversion whose directory
+sync fails is a warning, not a failed start. In the web server, the
+DNS-rebinding check reads `X-Forwarded-Host` (a proxy that rewrites
+`Host` let every name in), `web.trusted_proxies` keys the login throttle
+on the real client, a one-byte head is cut at 1 s, `allowed_hosts`
+applies on a network listen, and a tick of many long alerts is held to
+a 256 KiB WebSocket frame instead of dropping every dashboard. The file
+watcher no longer stores a sample for a watched file's change (a busy
+log put L1 at 4 Hz and ran every cooldown out in seconds since 0.8.6),
+watches a path not there yet through its parent directory, refuses a
+FIFO, reports a directory's entries on both platforms, prints each
+change from `watch-files`, and logs a file bind-mounted on its own that
+was replaced on the host. In the rules, work the instruction count
+cannot see (a comparison or a `table.sort` of long strings) is held to
+the thread's CPU time, `alert()` is charged by its bytes, `escalate()`
+takes a level's name in any case, the configured escalation thresholds
+decide, `smtp://` with a password requires STARTTLS, and the rule state
+is written only when it changed. The record format does not change: the
+rings of 0.8.6 and 0.8.7 are used as they are (the ring header's step
+field was reserved before).
+
 ### Fixed
 
 - **The v0.8.7 release went out with no files.** 0.8.7 built the Linux
@@ -2577,6 +2616,7 @@ it turned up two untested storage paths, which are now covered.
   opened, and init with the original size works again. tier_manager.cpp
   coverage went from 84.3% to 94.4%.
 
+[0.8.8]: https://github.com/click0/budyk/releases/tag/v0.8.8
 [0.8.7]: https://github.com/click0/budyk/releases/tag/v0.8.7
 [0.8.6]: https://github.com/click0/budyk/releases/tag/v0.8.6
 [0.8.5]: https://github.com/click0/budyk/releases/tag/v0.8.5
