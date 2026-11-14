@@ -548,6 +548,18 @@ void clamp_int(int* v, int lo, int hi, int fallback, const char* key) {
     *v = fallback;
 }
 
+// The floating-point counterpart, for the escalation thresholds. apply_double
+// already rejects NaN, infinities and unparsable text; this catches a finite
+// value outside the sane range (a cpu_percent of 950 for a meant 95 that
+// would never fire, a -1 that always would), as every integer field is.
+void clamp_double(double* v, double lo, double hi, double fallback, const char* key) {
+    if (*v >= lo && *v <= hi) return;
+    std::fprintf(stderr,
+        "budyk config: %s = %g is out of range (%g..%g); using %g\n",
+        key, *v, lo, hi, fallback);
+    *v = fallback;
+}
+
 void clamp_numbers(Config* c) {
     const Config d;   // defaults
     clamp_int(&c->listen_port, 1, 65535, d.listen_port, "port");
@@ -557,6 +569,14 @@ void clamp_numbers(Config* c) {
     clamp_int(&c->scheduler.hysteresis_sec,   0, 86400, d.scheduler.hysteresis_sec,   "collection.l2.hysteresis");
     clamp_int(&c->scheduler.grace_period_sec, 0, 86400, d.scheduler.grace_period_sec, "collection.l3.grace_period");
     clamp_int(&c->scheduler.escalate_after_sec, 0, 86400, d.scheduler.escalate_after_sec, "collection.l2.escalate_after");
+    // The escalation thresholds (doubles): a load average has no fixed
+    // ceiling, cpu and swap are percentages.
+    clamp_double(&c->scheduler.escalation_load_1m,      0.0, 100000.0, d.scheduler.escalation_load_1m,
+                 "collection.l2.escalation_thresholds.load_1m");
+    clamp_double(&c->scheduler.escalation_cpu_percent,  0.0, 100.0,    d.scheduler.escalation_cpu_percent,
+                 "collection.l2.escalation_thresholds.cpu_percent");
+    clamp_double(&c->scheduler.escalation_swap_percent, 0.0, 100.0,    d.scheduler.escalation_swap_percent,
+                 "collection.l2.escalation_thresholds.swap_used_percent");
     // A custom level below L1's priority (0) is never selected, and one
     // at it only on a shorter interval than L1's: dead config, which was
     // accepted without a word.

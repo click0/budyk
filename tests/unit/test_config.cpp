@@ -569,6 +569,35 @@ int main(int argc, char** argv) {
         assert(c.auth_login_window_sec == def.auth_login_window_sec);     // not whole
     }
 
+    // N. The escalation thresholds are range-checked like every other
+    //    numeric field: a finite value out of range is reported and the
+    //    default kept (a cpu_percent of 950 for a meant 95 would never
+    //    fire; a -1 would fire every tick, defeating adaptive collection).
+    {
+        Config c;
+        const Config def;
+        int rc = 0;
+        const std::string err = stderr_of(
+            "collection:\n"
+            "  l2:\n"
+            "    escalation_thresholds: { cpu_percent: 950, swap_used_percent: -1, load_1m: -5 }\n",
+            &c, &rc);
+        assert(rc == 0);
+        assert(c.scheduler.escalation_cpu_percent  == def.scheduler.escalation_cpu_percent);
+        assert(c.scheduler.escalation_swap_percent == def.scheduler.escalation_swap_percent);
+        assert(c.scheduler.escalation_load_1m      == def.scheduler.escalation_load_1m);
+        assert(has(err, "collection.l2.escalation_thresholds.cpu_percent = 950 is out of range"));
+        assert(has(err, "collection.l2.escalation_thresholds.swap_used_percent = -1 is out of range"));
+        assert(has(err, "collection.l2.escalation_thresholds.load_1m = -5 is out of range"));
+        // An in-range value is still taken as given.
+        Config c2;
+        assert(config_load_string(
+            "collection:\n  l2:\n    escalation_thresholds: { cpu_percent: 0, swap_used_percent: 100 }\n",
+            &c2) == 0);
+        assert(c2.scheduler.escalation_cpu_percent == 0.0);
+        assert(c2.scheduler.escalation_swap_percent == 100.0);
+    }
+
     // N+1. At most kMaxCustomLevels levels are accepted.
     {
         std::string y = "collection:\n  levels:\n";
