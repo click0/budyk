@@ -295,6 +295,52 @@ else
 fi
 stop odwake
 
+# 3d. on-demand: a file-watch escalate() counts each cooldown once -----------
+# An escalate() off the watched files makes the idle tick collect at once.
+# That collecting tick counts the rules' cooldowns down; the idle tick used
+# to count them a second time (its own count_down before it escalated), so a
+# rule in cooldown aged two of its for_ticks for the one escalation. A rule R
+# with cooldown 2 fires about every third collecting tick when the count is
+# right; the double-count fired it every other one. Six changes, each its own
+# escalation back from idle, and R must not have fired more than the collects
+# allow. The default metric sets (a full L3 sample), so the tick is as long as
+# the bug needed to leave a change waiting at the idle tick's read.
+cat > "$DIR/rules_cd.lua" <<EOF
+watch("tick", { when = function() return true end, action = "log", message = "tick", cooldown = 0 })
+watch("R",    { when = function() return true end, action = "log", message = "RFIRE", cooldown = 2 })
+watch("esc",  { when = function() return files["$DIR/watched_cd"].tampered end,
+                action = function() escalate("L3", 1) end })
+EOF
+cat > "$DIR/cd.yaml" <<EOF
+data_dir: $DIR/cd
+listen: 127.0.0.1
+port: $PORT
+rules: { path: $DIR/rules_cd.lua }
+security: { file_watch: { enabled: true, paths: [$DIR/watched_cd] } }
+collection:
+  mode: on-demand
+  l1: { interval: 2 }
+  l3: { interval: 1, grace_period: 1 }
+EOF
+: > "$DIR/watched_cd"
+start cd
+sleep 1
+n=0
+while [ "$n" -lt 6 ]; do printf 'x%s' "$n" >> "$DIR/watched_cd"; n=$((n + 1)); sleep 4; done
+sleep 1
+cd_collects=$(grep -c '^\[budyk\] tick$' "$DIR/cd.log" || true)
+cd_rfires=$(grep -c '^\[budyk\] RFIRE$' "$DIR/cd.log" || true)
+# Counted once per tick, R fires about every third collect (cooldown 2), so
+# 2*fires stays below the collects; the double-count ages the cooldown twice
+# as fast and fires reach collects/2 (2*fires == collects). The fix can only
+# count once per tick, so it never reaches that ratio whatever the timing.
+if [ "$cd_collects" -ge 6 ] && [ "$((2 * cd_rfires))" -lt "$cd_collects" ]; then
+    echo "ok   on-demand: a file-watch escalate() counts each cooldown once ($cd_rfires fire(s), $cd_collects collect(s))"
+else
+    echo "FAIL: on-demand: cooldown double-counted on a file-watch escalate() ($cd_rfires fire(s), $cd_collects collect(s))"; fail=1
+fi
+stop cd
+
 # 3c. adaptive: a watched file's change between ticks -------------------------
 # L1 every 300 s: the first tick, then a write every 0.3 s for 3.6 s. The
 # rules on the files see the writes (`seen`), `tick` (return true) and
