@@ -187,6 +187,21 @@ int main() {
         assert(budyk_ntp_synced(0, 0, 15999.0));
         assert(!budyk_ntp_synced(0, 0, 16000.0));
         assert(!budyk_ntp_synced(1, 0, 1.0) && !budyk_ntp_synced(0, 1, 1.0));
+        // Inodes in use and the percent: a filesystem that reports more
+        // free inodes than it has in total (a FUSE or network mount, or
+        // FreeBSD's signed f_ffree cast here from a negative value) gives no
+        // usable count, so 0 / 0.0 — not the near 2^64 that files - ffree
+        // underflows to, which drove max_inodes_used_percent off the scale.
+        assert(budyk_inodes_used(1000, 100) == 900);
+        assert(budyk_inodes_used_percent(1000, 100) == 90.0);
+        assert(budyk_inodes_used(8, 2) == 6 && budyk_inodes_used_percent(8, 2) == 75.0);
+        assert(budyk_inodes_used(1000, 1000) == 0 && budyk_inodes_used_percent(1000, 1000) == 0.0);
+        assert(budyk_inodes_used(1000, 5000) == 0 && budyk_inodes_used_percent(1000, 5000) == 0.0);
+        assert(budyk_inodes_used(0, 0) == 0 && budyk_inodes_used_percent(0, 50) == 0.0);
+        // FreeBSD's f_ffree is int64_t; a negative value cast to uint64_t is
+        // huge (> files), so it clamps to 0 rather than underflowing.
+        assert(budyk_inodes_used(1000, (uint64_t)(int64_t)-1) == 0);
+        assert(budyk_inodes_used_percent(1000, (uint64_t)(int64_t)-1) == 0.0);
     }
 
     // 7b. More devices than a list holds or the totals follow: 300 disks

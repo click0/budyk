@@ -363,6 +363,13 @@ int budyk_celsius_plausible(double celsius);
  * never sets STA_UNSYNC itself, so a clock whose ntpd or chronyd died
  * read synchronised for ever; Linux's sets it at the same 16 s. */
 int budyk_ntp_synced(int time_error, int sta_unsync, double max_error_ms);
+/** Inodes in use (files - ffree) and the percent of the total, guarding an
+ * implausible free count above the total: a FUSE or network filesystem can
+ * report it, and FreeBSD's signed f_ffree cast here from a negative value
+ * lands there too. Such a reading is 0 / 0.0, not a near 2^64 unsigned
+ * underflow of files - ffree. */
+uint64_t budyk_inodes_used(uint64_t files, uint64_t ffree);
+double   budyk_inodes_used_percent(uint64_t files, uint64_t ffree);
 /** Add what device `name`'s two counters (a, b) moved since the previous
  * call to *moved_a and *moved_b: its own counters against its own last
  * values in `prev` (nprev entries). A device not there last time, or
