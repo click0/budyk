@@ -69,8 +69,7 @@ int budyk_collect_fs_freebsd_ex(budyk_sample_c* s, budyk_detail_c* d) {
         const double used  = (double)(v.f_blocks - v.f_bfree);
         const double avail = v.f_bavail > 0 ? (double)v.f_bavail : 0.0;
         const double pct   = used + avail > 0.0 ? used * 100.0 / (used + avail) : 0.0;
-        const double ipct  = v.f_files > 0 && v.f_ffree >= 0
-            ? (double)(v.f_files - (uint64_t)v.f_ffree) * 100.0 / (double)v.f_files : 0.0;
+        const double ipct  = budyk_inodes_used_percent((uint64_t)v.f_files, (uint64_t)v.f_ffree);
         ++s->fs.count;
         if (pct  > s->fs.max_used_percent)        s->fs.max_used_percent        = pct;
         if (ipct > s->fs.max_inodes_used_percent) s->fs.max_inodes_used_percent = ipct;
@@ -87,8 +86,7 @@ int budyk_collect_fs_freebsd_ex(budyk_sample_c* s, budyk_detail_c* d) {
             m->avail_bytes         = v.f_bavail > 0 ? (uint64_t)v.f_bavail * bsize : 0;
             m->used_percent        = pct;
             m->inodes_total        = (uint64_t)v.f_files;
-            m->inodes_used         = v.f_ffree >= 0 && (uint64_t)v.f_ffree <= v.f_files
-                                   ? v.f_files - (uint64_t)v.f_ffree : 0;
+            m->inodes_used         = budyk_inodes_used((uint64_t)v.f_files, (uint64_t)v.f_ffree);
             m->inodes_used_percent = ipct;
         }
     }

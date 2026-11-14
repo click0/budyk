@@ -33,6 +33,19 @@ int budyk_ntp_synced(int time_error, int sta_unsync, double max_error_ms) {
     return !time_error && !sta_unsync && max_error_ms < 16000.0;
 }
 
+uint64_t budyk_inodes_used(uint64_t files, uint64_t ffree) {
+    /* A filesystem reporting more free inodes than it has in total (a FUSE
+     * or network mount can, and FreeBSD's signed f_ffree cast from a
+     * negative value lands here) gives no usable count: 0, not the near
+     * 2^64 that files - ffree underflows to. */
+    return ffree > files ? 0 : files - ffree;
+}
+
+double budyk_inodes_used_percent(uint64_t files, uint64_t ffree) {
+    if (files == 0 || ffree > files) return 0.0;
+    return (double)(files - ffree) * 100.0 / (double)files;
+}
+
 void budyk_counted_add(const budyk_counted_c* prev, uint32_t nprev, uint32_t* pos,
                        budyk_counted_c* next, uint32_t* nnext, const char* name,
                        uint64_t a, uint64_t b, uint64_t* moved_a, uint64_t* moved_b) {
