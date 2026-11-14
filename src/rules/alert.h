@@ -130,5 +130,13 @@ std::string smtp_message    (AlertSeverity sev, const std::string& from,
 std::string twilio_form     (const std::string& from, const std::string& to,
                              const std::string& rule_name,
                              const std::string& message);
+/// Whether curl must be told to require a TLS upgrade (`--ssl-reqd`)
+/// before it sends SMTP AUTH: true whenever a password is sent, unless the
+/// URL is `smtps://` (implicit TLS from the start). curl otherwise connects
+/// in cleartext and sends AUTH, the password in it, in clear — and it does
+/// so for a scheme-less host it guesses as SMTP (`smtp.example.com`) too,
+/// which a check for the literal `smtp://` prefix misses. A relay with no
+/// password has nothing to protect and is left as it was.
+bool smtp_requires_starttls (const char* url, bool have_password);
 
 } // namespace budyk
