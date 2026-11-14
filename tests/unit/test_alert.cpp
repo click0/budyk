@@ -241,6 +241,23 @@ int main() {
         assert(contains(plain, "\r\n\r\none\r\ntwo\r\n"));
     }
 
+    // 9d. smtp_requires_starttls — force a TLS upgrade whenever a password
+    //     is sent, unless the URL is smtps:// (implicit TLS). curl guesses
+    //     SMTP from a scheme-less "smtp.host", which a check for the literal
+    //     "smtp://" prefix missed, so AUTH (the password in it) went out in
+    //     clear on a submission port that offered STARTTLS.
+    {
+        assert(smtp_requires_starttls("smtp://mail:587", true));
+        assert(smtp_requires_starttls("SMTP://mail:587", true));       // any case
+        assert(smtp_requires_starttls("smtp.gmail.com:587", true));    // scheme-less: curl guesses SMTP
+        assert(smtp_requires_starttls("mail.example.com:587", true));  // scheme-less: require anyway
+        assert(smtp_requires_starttls(nullptr, true));                 // no url: require
+        assert(!smtp_requires_starttls("smtps://mail:465", true));     // implicit TLS: no STARTTLS
+        assert(!smtp_requires_starttls("SMTPS://mail:465", true));     // any case
+        assert(!smtp_requires_starttls("smtp://localhost:25", false)); // no password: left as it was
+        assert(!smtp_requires_starttls("smtp.gmail.com:587", false));  // no password
+    }
+
     // 10. twilio_form — URL-encoded From/To/Body. '+' in E.164 phone
     //     numbers must be encoded as %2B, '%' in the body as %25,
     //     spaces in the body as '+', ':' as %3A.
@@ -431,19 +448,26 @@ int main() {
         add("twilio",   "https://api.twilio.example/Accounts/AC1/Messages.json",
                         "+1", "+2", "AC1:TWILIO_SECRET");
         add("smtp",     "smtps://mail.example:465", "a@x", "b@x", "mailuser:MAIL_SECRET");
-        // smtp:// with a password requires STARTTLS (curl sent AUTH in
-        // clear); without one, and smtps://, as they were.
+        // A password requires STARTTLS (curl sent AUTH in clear); without
+        // one, and smtps://, as they were. The submission channel's URL has
+        // the smtp:// scheme; the "guess" channel has none, so curl guesses
+        // SMTP from the smtp.* host — a check for the literal smtp:// prefix
+        // missed it and left the password to go out in clear.
         AlertChannel sub;
         sub.name = "submission"; sub.type = "smtp"; sub.url = "SMTP://mail.example:587";
         sub.from = "a@x"; sub.topic = "b@x"; sub.token = "u:p";
         d.add_channel(std::move(sub));
+        AlertChannel guess;
+        guess.name = "guess"; guess.type = "smtp"; guess.url = "smtp.mail.example:587";
+        guess.from = "a@x"; guess.topic = "b@x"; guess.token = "u:p";
+        d.add_channel(std::move(guess));
         AlertChannel relay;
         relay.name = "relay"; relay.type = "smtp"; relay.url = "smtp://localhost:25";
         relay.from = "a@x"; relay.topic = "b@x";
         d.add_channel(std::move(relay));
-        assert(d.dispatch(AlertSeverity::Info, "r", "m") == 6);
+        assert(d.dispatch(AlertSeverity::Info, "r", "m") == 7);
         assert(d.flush(30000));
-        assert(d.delivered() == 6);                   // the stand-in exits 0
+        assert(d.delivered() == 7);                   // the stand-in exits 0
 
         std::string record;
         {
@@ -485,7 +509,7 @@ int main() {
                  at = argv_lines.find("[--ssl-reqd]", at + 1)) {
                 ++ssl;
             }
-            assert(ssl == 1);                         // the submission channel's alone
+            assert(ssl == 2);                         // the submission + scheme-less "guess" channels
         }
         assert(file_lines.find("mode=600") != std::string::npos);
         assert(file_lines.find("mode=644") == std::string::npos);

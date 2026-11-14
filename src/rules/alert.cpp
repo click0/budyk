@@ -277,12 +277,12 @@ bool curl_smtp(const char* url,
     }
     std::vector<std::string> args = {"-sS", "--mail-from", from, "--mail-rcpt", to,
                                      "-T", body_path, "--max-time", "15", "-K", cfg_path};
-    // smtp:// with a password: STARTTLS required. curl does not upgrade
-    // an smtp:// connection unless told to, and sent AUTH, the password
-    // in it, in clear to a submission port that offered STARTTLS. A relay
-    // without TLS fails ("STARTTLS not supported"); smtps:// is TLS from
-    // the start, and a relay with no password is left as it was.
-    if (!user_pass.empty() && ::strncasecmp(url, "smtp://", 7) == 0) args.emplace_back("--ssl-reqd");
+    // A password: STARTTLS required. curl does not upgrade the connection
+    // unless told to, and sent AUTH, the password in it, in clear to a
+    // submission port that offered STARTTLS. A relay without TLS fails
+    // ("STARTTLS not supported"); smtps:// is TLS from the start, and a
+    // relay with no password is left as it was.
+    if (smtp_requires_starttls(url, !user_pass.empty())) args.emplace_back("--ssl-reqd");
     const bool ok = run_curl(args, 20, cancel, why);
     ::unlink(body_path);
     ::unlink(cfg_path);
@@ -290,6 +290,14 @@ bool curl_smtp(const char* url,
 }
 
 } // namespace
+
+bool smtp_requires_starttls(const char* url, bool have_password) {
+    if (!have_password) return false;             // nothing to protect
+    if (url == nullptr) return true;              // no scheme: require TLS
+    // smtps:// is TLS from the start; anything else curl may speak in
+    // cleartext (smtp://, or a scheme-less smtp.host it guesses as SMTP).
+    return ::strncasecmp(url, "smtps://", 8) != 0;
+}
 
 const char* severity_name(AlertSeverity s) {
     switch (s) {
