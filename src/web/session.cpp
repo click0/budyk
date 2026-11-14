@@ -86,15 +86,13 @@ std::string SessionStore::create() {
 bool SessionStore::verify(const std::string& token) {
     if (token.empty()) return false;
     const uint64_t now = now_realtime_ns();
-    bool evicted = false;
-    bool ok      = false;
+    bool ok = false;
     {
         std::lock_guard<std::mutex> g(mtx_);
         auto it = deadline_.find(token);
         if (it == deadline_.end()) return false;
         if (it->second <= now) {
-            deadline_.erase(it);
-            evicted = true;
+            deadline_.erase(it);   // expired: drop it from the table
         } else {
             ok = true;
             // A deadline past now + TTL: the clock stepped back since it
@@ -102,7 +100,12 @@ bool SessionStore::verify(const std::string& token) {
             if (it->second > now + ttl_ns_) it->second = now + ttl_ns_;
         }
     }
-    if (evicted) autosave();   // the file should reflect the eviction
+    // The eviction is not written here. verify() runs on the collector tick
+    // (drop_sessions closes a WebSocket whose session ended), and save()
+    // fsync()s: no blocking I/O belongs on that thread. Leaving the expired
+    // entry in the file is harmless — load() drops expired entries at the
+    // next start, and the next create()/touch()/revoke() rewrites it without
+    // this one. (touch(), on the HTTP thread, still persists its evictions.)
     return ok;
 }
 

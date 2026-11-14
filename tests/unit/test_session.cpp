@@ -165,6 +165,24 @@ int main() {
         ::unlink(path.c_str());
     }
 
+    // 9b. verify() does not rewrite the file when it evicts an expired
+    //     session. verify() runs on the collector tick (drop_sessions), and
+    //     save() fsync()s — no blocking I/O belongs there. The stale entry
+    //     is left for load() to drop and the next change to rewrite. (It
+    //     used to autosave on every expiry, an fsync on the tick.)
+    {
+        const std::string path = mktmp();
+        SessionStore a(/*ttl_s*/ 0);            // every token is immediately stale
+        a.set_persist_path(path);
+        const std::string t = a.create();       // autosaved: the file holds it
+        const std::string before = slurp(path);
+        assert(before.find(t) != std::string::npos);
+        assert(!a.verify(t));                    // expired: evicted from memory
+        assert(a.size() == 0);
+        assert(slurp(path) == before);           // ...but the file was not touched
+        ::unlink(path.c_str());
+    }
+
     // 10. load() on a missing file is a no-op success (fresh install).
     {
         SessionStore a;
