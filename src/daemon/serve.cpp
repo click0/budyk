@@ -942,9 +942,6 @@ int cmd_serve(int argc, char* argv[], const char* version) {
             // minutes before a client came back).
             collect_ctx.last_groups = 0;
             collect_ctx.last_detail = 0;
-            // The tick counts for the cooldowns as a collecting one does
-            // (the passes on the files between ticks do not).
-            engine.count_down_cooldowns();
             const int idle_ms = warm.cap_sleep_ms(sched.interval_ms(collect_at), now_realtime_ns(),
                                                   kMinWakeGapMs);
             // The watched files are read on this tick too, and on each
@@ -952,13 +949,23 @@ int cmd_serve(int argc, char* argv[], const char* version) {
             // request the sleep knew nothing of: the loop slept the L1
             // interval and found it expired (a `{ alert, escalate }` on a
             // tampered file collected nothing); it collects at once.
-            if (fw_active && files_pass(collect_at)) continue;
-            while (!g_stop) {
+            //
+            // Cooldowns count a tick as a collecting one does (the passes on
+            // the files between ticks do not). An escalate() off the files
+            // leads straight to a collecting tick, which counts them itself;
+            // this idle tick counts only when its interval passes with no
+            // escalation, so the two no longer spend a tick of every rule's
+            // cooldown together.
+            bool idled = true;
+            if (fw_active && files_pass(collect_at)) idled = false;
+            while (idled && !g_stop) {
                 const Wake w = interruptible_sleep(
                     budyk::sleep_left_ms(idle_ms, now_monotonic_ns() - tick_mono_ns),
                     reload_rules, watch_fd);
-                if (w != Wake::Files || files_pass(collect_at)) break;
+                if (w != Wake::Files) break;                          // timed out or a reload
+                if (files_pass(collect_at)) { idled = false; break; }  // escalated: collecting tick counts
             }
+            if (idled) engine.count_down_cooldowns();
             continue;
         }
         collect_ctx.mono_now_ns = now_monotonic_ns();
