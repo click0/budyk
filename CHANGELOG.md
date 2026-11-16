@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.9] — 2026-11-16
+
+The tenth round of module reviews: four fixes, nothing on disk changes.
+An SMTP channel whose URL has no scheme (`smtp.mail.example:587`, which
+curl reads as SMTP from the host) now forces STARTTLS the way a
+`smtp://` one does, so a password is never sent in the clear; only an
+explicit `smtps://` opts out. In on-demand mode an `escalate()` from a
+watched file's change counted each rule's cooldown down twice — once on
+the idle tick that ran the rules, once on the collecting tick it
+triggers a few milliseconds later — so cooldowns expired about twice as
+fast and a rule fired roughly twice as often as its `cooldown` allows;
+each cooldown counts down once per collection now. A filesystem that
+reports more free inodes than it has (some FUSE and network mounts, and
+FreeBSD's `f_ffree` read unsigned when the kernel returns -1) underflowed
+to an inodes-used figure near 1.8e19 % and a false alert; free inodes
+above the total are no reading now, as a zero total already was. And a
+WebSocket session that expired on the collector tick no longer fsyncs the
+session file from that tick — the eviction is written on the next
+autosave — so slow storage cannot stall a tick. The record format does
+not change: the rings of 0.8.6, 0.8.7 and 0.8.8 are used as they are.
+
+### Fixed
+
+- **A scheme-less SMTP URL sent the password in the clear.** curl guesses
+  the protocol from the host when the URL has no scheme, so
+  `smtp.mail.example:587` is SMTP — but the STARTTLS guard matched only a
+  literal `smtp://`, so `--ssl-reqd` was left off and `AUTH` went over a
+  plaintext connection. STARTTLS is now forced whenever a password is set
+  and the URL is not explicitly `smtps://`.
+- **On-demand escalation double-counted rule cooldowns.** A watched
+  file's change runs the rules on an idle (L1/L2) tick; an `escalate()`
+  there collects at once on a second tick a few milliseconds later. Both
+  ticks counted the cooldowns down, so cooldowns expired about twice as
+  fast and a rule fired roughly twice as often as its configured
+  `cooldown`. Cooldowns now count down once per collection.
+- **A filesystem with more free inodes than total inodes underflowed.**
+  On some FUSE and network mounts (and FreeBSD's `f_ffree`, read
+  unsigned, when the kernel returns -1), `f_ffree > f_files`: the used
+  count wrapped to a huge unsigned value and `fs.inodes_used_percent`
+  reached about 1.8e19 %, enough to trip any threshold. Free inodes above
+  the total are treated as no reading, like a zero total.
+- **A session expiring on the collector tick fsynced from that tick.**
+  When a WebSocket session's TTL lapsed, `verify()` evicted it and called
+  `autosave()`, which fsyncs the session file — blocking I/O on the main
+  thread, against the never-block-the-tick rule. The eviction is dropped
+  from the in-memory map on the tick and persisted on the next scheduled
+  autosave instead.
+
 ## [0.8.8] — 2026-11-11
 
 The ninth round of module reviews, and the delivery fix for 0.8.7, which
@@ -2616,6 +2664,7 @@ it turned up two untested storage paths, which are now covered.
   opened, and init with the original size works again. tier_manager.cpp
   coverage went from 84.3% to 94.4%.
 
+[0.8.9]: https://github.com/click0/budyk/releases/tag/v0.8.9
 [0.8.8]: https://github.com/click0/budyk/releases/tag/v0.8.8
 [0.8.7]: https://github.com/click0/budyk/releases/tag/v0.8.7
 [0.8.6]: https://github.com/click0/budyk/releases/tag/v0.8.6
